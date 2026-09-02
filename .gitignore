@@ -15,6 +15,7 @@
 /backend/*.tsbuildinfo
 /frontend/node_modules/
 /frontend/dist/
+/frontend/*.tsbuildinfo
 /backend/storage/logs/
 *.log
 .DS_Store

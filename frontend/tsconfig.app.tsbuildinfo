@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/vite-env.d.ts","./src/i18n/index.ts","./src/i18n/locales/en.ts","./src/i18n/locales/es.ts","./src/operational-requirements/operationalrequirementspanel.tsx","./src/operational-requirements/operational-requirements.api.ts","./src/operational-requirements/operational-requirements.types.ts"],"version":"5.9.3"}
