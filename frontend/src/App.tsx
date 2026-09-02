@@ -1444,6 +1444,38 @@ function FieldHelp({ children }: { children: string }) {
     </small>
   );
 }
+function ConfirmModal({
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  message: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  return createPortal(
+    <div className="modal-backdrop" onClick={onCancel}>
+      <section
+        className="modal confirm-modal"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <p>{message}</p>
+        <div className="modal-actions">
+          <button type="button" className="text-button" onClick={onCancel}>
+            {t("common.cancel")}
+          </button>
+          <button type="button" className="danger-soft" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
 
 function BusinessHoursEditor({
   value,
@@ -1547,6 +1579,8 @@ function KnowledgeSettings({
   const [editingOffering, setEditingOffering] = useState<
     Offering | null | "new"
   >(null);
+  const [confirmingArchiveOffering, setConfirmingArchiveOffering] =
+    useState<Offering | null>(null);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [modifierGroupsCanManage, setModifierGroupsCanManage] = useState(false);
   const loadModifierGroups = async () => {
@@ -1583,7 +1617,6 @@ function KnowledgeSettings({
     [value.responseVariants],
   );
   async function archiveOffering(offering: Offering) {
-    if (!window.confirm(t("knowledge.offeringArchiveConfirm"))) return;
     try {
       await api(
         `/v1/admin/tenants/${tenant}/knowledge/offerings/${offering.id}`,
@@ -1894,7 +1927,7 @@ function KnowledgeSettings({
                         <button
                           className="icon-button danger-soft"
                           title={t("knowledge.offeringArchive")}
-                          onClick={() => void archiveOffering(p)}
+                          onClick={() => setConfirmingArchiveOffering(p)}
                         >
                           ×
                         </button>
@@ -2068,6 +2101,17 @@ function KnowledgeSettings({
             void loadModifierGroups();
             onNotice(t("knowledge.offeringSaved"));
             setEditingOffering(null);
+          }}
+        />
+      )}
+      {confirmingArchiveOffering && (
+        <ConfirmModal
+          message={t("knowledge.offeringArchiveConfirm")}
+          confirmLabel={t("knowledge.offeringArchive")}
+          onCancel={() => setConfirmingArchiveOffering(null)}
+          onConfirm={() => {
+            void archiveOffering(confirmingArchiveOffering);
+            setConfirmingArchiveOffering(null);
           }}
         />
       )}
@@ -2354,6 +2398,9 @@ function ExtrasPanel({
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupType, setNewGroupType] = useState<"single" | "multiple">("multiple");
   const [busy, setBusy] = useState(false);
+  const [confirmingArchiveGroupId, setConfirmingArchiveGroupId] = useState<
+    string | null
+  >(null);
   const [optionDrafts, setOptionDrafts] = useState<
     Record<string, { name: string; price: string }>
   >({});
@@ -2380,7 +2427,6 @@ function ExtrasPanel({
     }
   }
   async function archiveGroup(groupId: string) {
-    if (!window.confirm(t("knowledge.extrasGroupArchiveConfirm"))) return;
     try {
       await api(`/v1/admin/tenants/${tenant}/modifier-groups/${groupId}`, {
         method: "DELETE",
@@ -2473,7 +2519,7 @@ function ExtrasPanel({
                   type="button"
                   className="icon-button danger-soft"
                   title={t("knowledge.extrasGroupArchive")}
-                  onClick={() => void archiveGroup(group.id)}
+                  onClick={() => setConfirmingArchiveGroupId(group.id)}
                 >
                   ×
                 </button>
@@ -2547,6 +2593,17 @@ function ExtrasPanel({
         ))}
         {!groups.length && <small>{t("knowledge.extrasGroupsEmpty")}</small>}
       </div>
+      {confirmingArchiveGroupId && (
+        <ConfirmModal
+          message={t("knowledge.extrasGroupArchiveConfirm")}
+          confirmLabel={t("knowledge.extrasGroupArchive")}
+          onCancel={() => setConfirmingArchiveGroupId(null)}
+          onConfirm={() => {
+            void archiveGroup(confirmingArchiveGroupId);
+            setConfirmingArchiveGroupId(null);
+          }}
+        />
+      )}
     </>
   );
 }
@@ -2864,6 +2921,7 @@ function PublishedAnswer({
   const [contentEn, setContentEn] = useState(entry.translations?.en.content ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
   async function save() {
     setBusy(true);
     setError("");
@@ -2892,7 +2950,6 @@ function PublishedAnswer({
     }
   }
   async function archive() {
-    if (!window.confirm(t("knowledge.archiveConfirm"))) return;
     setBusy(true);
     setError("");
     try {
@@ -2907,9 +2964,10 @@ function PublishedAnswer({
     }
   }
   return (
-    <details open={editing}>
-      <summary>{entry.title}</summary>
-      {editing ? (
+    <>
+      <details open={editing}>
+        <summary>{entry.title}</summary>
+        {editing ? (
         <div className="faq-editor">
           <input
             value={title}
@@ -2970,7 +3028,7 @@ function PublishedAnswer({
               <button
                 className="danger-soft"
                 disabled={busy}
-                onClick={() => void archive()}
+                onClick={() => setConfirmingArchive(true)}
               >
                 {t("knowledge.archiveAnswer")}
               </button>
@@ -2978,7 +3036,19 @@ function PublishedAnswer({
           )}
         </>
       )}
-    </details>
+      </details>
+      {confirmingArchive && (
+        <ConfirmModal
+          message={t("knowledge.archiveConfirm")}
+          confirmLabel={t("knowledge.archiveAnswer")}
+          onCancel={() => setConfirmingArchive(false)}
+          onConfirm={() => {
+            setConfirmingArchive(false);
+            void archive();
+          }}
+        />
+      )}
+    </>
   );
 }
 function LearningQuestion({

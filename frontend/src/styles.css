@@ -1363,7 +1363,7 @@ header h1 {
 .extras-new-group {
   display: flex;
   gap: 10px;
-  padding: 0 24px 20px;
+  padding: 20px 24px;
 }
 .extras-new-group input {
   flex: 1;
@@ -1427,7 +1427,7 @@ header h1 {
   flex: 1;
 }
 .extras-new-option input[type="number"] {
-  max-width: 140px;
+  max-width: 170px;
 }
 .extras-new-option button {
   width: auto;
@@ -1689,6 +1689,23 @@ header h1 {
 }
 .modal h2 {
   font: 800 26px Manrope;
+}
+.confirm-modal {
+  width: min(380px, 100%);
+  padding: 28px;
+}
+.confirm-modal p {
+  margin: 0;
+  line-height: 1.5;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+.modal-actions button {
+  width: auto;
 }
 .offering-modal {
   width: min(700px, 100%);
