@@ -7,6 +7,9 @@
 .env.*
 !.env.example
 
+# Respaldos locales de base de datos (ver database/scripts/backup.sh)
+/database/backups/
+
 # Dependencias y artefactos futuros
 /backend/vendor/
 /backend/node_modules/

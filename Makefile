@@ -1,4 +1,4 @@
-.PHONY: infra-up infra-stop infra-down infra-restart db-up db-stop db-down db-restart db-reset db-migrate db-seed db-test db-psql backend-build backend-test backend-test-integration backend-eval backend-start backend-lint backend-format frontend-build frontend-start frontend-lint frontend-format lint format
+.PHONY: infra-up infra-stop infra-down infra-restart db-up db-stop db-down db-restart db-reset db-migrate db-seed db-test db-psql db-backup db-restore backend-build backend-test backend-test-integration backend-eval backend-start backend-lint backend-format frontend-build frontend-start frontend-lint frontend-format lint format
 
 infra-up:
 	docker compose up -d --wait postgres redis
@@ -43,6 +43,12 @@ db-test:
 
 db-psql:
 	docker compose exec postgres psql -U postgres -d whatsapp_commerce
+
+db-backup:
+	./database/scripts/backup.sh
+
+db-restore:
+	./database/scripts/restore.sh "$(FILE)"
 
 backend-test:
 	cd backend && npm test

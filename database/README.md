@@ -47,6 +47,27 @@ make db-psql       # abrir una consola psql
 `make db-reset` elimina el volumen local, crea una base limpia, migra y carga
 semillas. Es destructivo únicamente para los datos locales de este Compose.
 
+## Respaldos
+
+```bash
+make db-backup                          # crea database/backups/whatsapp_commerce_<fecha>.dump
+make db-restore FILE=database/backups/whatsapp_commerce_20260902_143000.dump
+```
+
+`db-backup` usa `pg_dump` en formato comprimido (`-Fc`) y conserva los 10
+respaldos más recientes (los más viejos se eliminan solos). `database/backups/`
+está en `.gitignore` — nunca se versiona un respaldo con datos reales.
+
+`db-restore` **reemplaza por completo** el contenido de la base con lo que
+haya en el archivo indicado; pide confirmación escrita salvo que se agregue
+`-y`/`--yes` al final del comando de `restore.sh` directamente.
+
+**Corre `make db-backup` antes de cualquier operación destructiva que vayas a
+probar** (una purga masiva, una migración riesgosa, un `db-reset` con datos
+que quieras conservar). Esta disciplina nace de un incidente real: una purga
+de mensajes se probó una vez directo contra datos compartidos sin respaldo
+previo y borró para siempre 46 mensajes reales (ver `docs/decisions.md`, D-060).
+
 ## Organización
 
 - `sql/000_roles.template.sql`: contrato de roles para infraestructura; no se
