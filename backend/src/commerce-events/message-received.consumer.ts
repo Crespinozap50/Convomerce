@@ -85,7 +85,7 @@ export class MessageReceivedConsumer {
          values ($1, $2, 'message-received-v1', $3)
          on conflict (tenant_id, consumer_name, event_id) do nothing
          returning id`,
-          [uuidv7(), event.tenantId, event.messageId],
+          [uuidv7(), event.tenantId, event.eventId],
         );
 
         if (claimed.rowCount === 0) return { duplicate: true, pending: null };

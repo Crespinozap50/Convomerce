@@ -11,7 +11,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "jest --runInBand",
-    "test:integration": "jest --config test/jest-integration.json --runInBand",
+    "test:integration": "jest --config test/jest-integration.json --runInBand --forceExit",
     "eval:conversations": "ts-node evals/run-conversation-understanding.ts",
     "eval:prepare-review": "ts-node evals/prepare-blind-review.ts",
     "eval:score-review": "ts-node evals/score-blind-review.ts",

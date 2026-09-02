@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (build, lint, unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - working-directory: backend
+        run: npm ci
+      - working-directory: backend
+        run: npm run build
+      - working-directory: backend
+        run: npm run lint
+      - working-directory: backend
+        run: npm test
+
+  database-and-integration:
+    name: Database (migrate, seed, security tests) + backend integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      # Reuses the exact same Docker Compose services and scripts a developer
+      # runs locally (see README.md) instead of GitHub Actions' native
+      # "services:" containers, so CI and local dev never drift apart.
+      - name: Start Postgres and Redis
+        run: docker compose up -d --wait postgres redis
+      - name: Apply migrations
+        run: ./database/scripts/migrate.sh
+      - name: Load seed data
+        run: ./database/scripts/seed.sh
+      - name: RLS/security/integrity tests
+        run: ./database/scripts/test.sh
+      - name: Configure backend environment
+        run: cp backend/.env.example backend/.env
+      - working-directory: backend
+        run: npm ci
+      - working-directory: backend
+        run: npm run test:integration
+
+  frontend:
+    name: Frontend (build, lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: npm ci
+      - working-directory: frontend
+        run: npm run build
+      - working-directory: frontend
+        run: npm run lint
