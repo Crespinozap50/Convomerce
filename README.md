@@ -89,6 +89,7 @@ incluye ejemplos listos para usar.
 
 Consulta [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) para contexto, supuestos y preguntas abiertas.
 El historial completo de decisiones de diseño está en [docs/decisions.md](docs/decisions.md).
+La matriz de aceptación multiempresa de Fase 2 está en [docs/acceptance-matrix.md](docs/acceptance-matrix.md).
 La diferenciación del producto se resume en [docs/value-proposition.md](docs/value-proposition.md).
 La preparación de una cuenta de prueba de Meta está en [docs/meta-test-setup.md](docs/meta-test-setup.md).
 El primer recorrido funcional se define en [docs/pilot-santos-tacos.md](docs/pilot-santos-tacos.md).
