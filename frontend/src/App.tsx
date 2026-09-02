@@ -7,6 +7,7 @@ import {
   CalendarDays,
   ChevronDown,
   ChevronUp,
+  Info,
   Link2,
   Languages,
   LogOut,
@@ -1435,6 +1436,15 @@ function Team({
     </>
   );
 }
+function FieldHelp({ children }: { children: string }) {
+  return (
+    <small className="field-help">
+      <Info size={14} />
+      <span>{children}</span>
+    </small>
+  );
+}
+
 function BusinessHoursEditor({
   value,
   onChange,
@@ -1455,7 +1465,7 @@ function BusinessHoursEditor({
   return (
     <fieldset className="business-hours-editor">
       <legend>{t("knowledge.hours")}</legend>
-      <small className="field-help">{t("knowledge.hoursHelp")}</small>
+      <FieldHelp>{t("knowledge.hoursHelp")}</FieldHelp>
       <div className="business-hours-list">
         {lines.map((line, index) => (
           <div className="business-hours-row" key={index}>
@@ -1804,7 +1814,7 @@ function KnowledgeSettings({
                   }
                 />
               </label>
-              <small>{t("knowledge.translationHelp")}</small>
+              <FieldHelp>{t("knowledge.translationHelp")}</FieldHelp>
             </details>
             {error && <div className="form-alert">{error}</div>}
             <div className="knowledge-save">
@@ -2672,7 +2682,7 @@ function OfferingModal({
               onChange={(e) => setTranslation({ ...translation, variantName: e.target.value })}
               placeholder={t("knowledge.variantName")}
             />
-            <small>{t("knowledge.translationHelp")}</small>
+            <FieldHelp>{t("knowledge.translationHelp")}</FieldHelp>
           </details>
           <div className="modal-two">
             <label>
@@ -2914,7 +2924,7 @@ function PublishedAnswer({
             onChange={(event) => setKeywords(event.target.value)}
             placeholder={t("knowledge.keywordsPlaceholder")}
           />
-          <small>{t("knowledge.keywordsHelp")}</small>
+          <FieldHelp>{t("knowledge.keywordsHelp")}</FieldHelp>
           <details className="translation-fields">
             <summary>{t("knowledge.englishTranslation")}</summary>
             <input
@@ -2927,7 +2937,7 @@ function PublishedAnswer({
               onChange={(event) => setContentEn(event.target.value)}
               placeholder={t("knowledge.answerContent")}
             />
-            <small>{t("knowledge.translationHelp")}</small>
+            <FieldHelp>{t("knowledge.translationHelp")}</FieldHelp>
           </details>
           {error && <small className="error-text">{error}</small>}
           <div className="faq-actions">
@@ -3059,7 +3069,7 @@ function LearningQuestion({
               onChange={(e) => setKeywords(e.target.value)}
               placeholder={t("knowledge.keywordsPlaceholder")}
             />
-            <small>{t("knowledge.keywordsHelp")}</small>
+            <FieldHelp>{t("knowledge.keywordsHelp")}</FieldHelp>
             {error && <small className="error-text">{error}</small>}
           </>
         )}

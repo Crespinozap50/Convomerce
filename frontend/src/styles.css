@@ -1220,10 +1220,24 @@ header h1 {
   font-weight: 800;
 }
 .field-help {
-  display: block;
-  margin: -2px 0 13px;
-  color: #718078;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #eef6f2;
+  color: #47635a;
+  font-size: 12px;
   line-height: 1.45;
+}
+.field-help svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: #39916e;
+}
+.business-hours-editor .field-help {
+  margin: 4px 0 12px;
 }
 .business-hours-list {
   display: grid;
@@ -1604,6 +1618,11 @@ header h1 {
 }
 .faq-editor textarea {
   min-height: 110px;
+}
+.faq-keywords {
+  display: block;
+  color: #718078;
+  line-height: 1.45;
 }
 .faq-actions {
   display: flex;
