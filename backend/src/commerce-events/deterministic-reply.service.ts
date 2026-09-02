@@ -89,20 +89,26 @@ export class DeterministicReplyService {
         : interpolate(localeCatalog.bot.personalizedGreeting,{name:firstName,welcome:stripLeadingGreeting(bot.welcomeMessage,bot.locale)});
       return { intent, handoff: false, sources: ['bot_configuration'], body: personalized };
     }
-    if (intent === 'menu' || intent === 'price') {
-      // "productos" is a menu keyword, but it also shows up in unrelated
-      // questions ("¿Los productos vienen con garantía?") that a tenant has
-      // a specific, published FAQ for. A specific title match wins over the
-      // generic catalog/price listing; a genuine "qué productos tienen" with
-      // no matching FAQ falls through to offeringReply exactly as before.
+    if (
+      intent === 'menu' || intent === 'price' ||
+      intent === 'hours' || intent === 'location' || intent === 'delivery' || intent === 'payments'
+    ) {
+      // Every one of these fixed intents has a keyword that can also appear
+      // in an unrelated, tenant-specific FAQ — "productos" for menu/price
+      // (D-077), and just as easily "atienden" for hours ("¿Atienden
+      // niños?" is a barbershop FAQ about kids' haircuts, not a question
+      // about opening hours — found live running the Fase 2 acceptance
+      // matrix). A specific title/keyword match always wins over the
+      // generic catalog/price/profile dispatch; with no match, each intent
+      // falls through to its normal handling exactly as before.
       const rows = await this.publishedKnowledgeEntries(client);
       const specific = this.findSpecificKnowledgeEntry(rows, message);
       if (specific) {
         return { intent, handoff: false, sources: [`knowledge_entry:${specific.id}`], body: specific.content };
       }
-      return this.offeringReply(client, message, intent, copy, bot.locale);
-    }
-    if (intent === 'hours' || intent === 'location' || intent === 'delivery' || intent === 'payments') {
+      if (intent === 'menu' || intent === 'price') {
+        return this.offeringReply(client, message, intent, copy, bot.locale);
+      }
       return this.profileReply(client, intent, bot.fallbackMessage, bot.locale);
     }
     // Every other message — anything that isn't one of the small, genuinely

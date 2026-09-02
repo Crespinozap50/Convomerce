@@ -172,7 +172,9 @@ describe('DeterministicReplyService', () => {
   });
 
   it('returns the verified business address as the source of a location answer', async () => {
-    const client = { query: jest.fn().mockResolvedValue({ rows: [{ address: 'Calle 65 # 88-20, Robledo, Medellín' }] }) };
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValue({ rows: [{ address: 'Calle 65 # 88-20, Robledo, Medellín' }] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Dónde quedan?', {
       locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
     });
@@ -181,9 +183,11 @@ describe('DeterministicReplyService', () => {
 
   it('reads the business profile localization for the conversation language', async () => {
     const client = {
-      query: jest.fn().mockResolvedValue({
-        rows: [{ business_hours: 'Tuesday through Thursday from 5:00 p.m. to 10:00 p.m.' }],
-      }),
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValue({
+          rows: [{ business_hours: 'Tuesday through Thursday from 5:00 p.m. to 10:00 p.m.' }],
+        }),
     };
     const reply = await new DeterministicReplyService().resolve(
       client as never,
@@ -272,6 +276,38 @@ describe('DeterministicReplyService', () => {
     // Only the knowledge_entries pre-check should run — the catalog query
     // never happens once a specific match is found.
     expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefers a specific FAQ over the business profile when the question collides with an hours keyword (regression)', async () => {
+    // Found live running the Fase 2 acceptance matrix: "atienden" is one of
+    // the keywords that classifies a message as the 'hours' intent, so
+    // "¿Atienden niños?" (a barbershop FAQ about kids' haircuts) showed the
+    // opening-hours answer instead. Same fix as the menu/price case (D-077),
+    // generalized to every fixed intent that can dispatch to something other
+    // than knowledge_entries (menu, price, hours, location, delivery,
+    // payments).
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [
+        { id: 'kids-1', title: '¿Atienden niños?', content: 'Sí, ofrecemos corte infantil para niños de 4 a 12 años acompañados de un adulto.' },
+      ] }) };
+    const reply = await new DeterministicReplyService().resolve(client as never, '¿Atienden niños?', {
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+    });
+    expect(reply.body).toBe('Sí, ofrecemos corte infantil para niños de 4 a 12 años acompañados de un adulto.');
+    expect(reply.sources).toEqual(['knowledge_entry:kids-1']);
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('still answers a genuine hours question with no matching FAQ from the business profile (regression)', async () => {
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValue({ rows: [{ business_hours: 'Lunes a viernes de 9:00 a. m. a 7:00 p. m.' }] }) };
+    const reply = await new DeterministicReplyService().resolve(client as never, '¿A qué hora abren?', {
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+    });
+    expect(reply).toEqual(expect.objectContaining({
+      intent: 'hours', body: 'Lunes a viernes de 9:00 a. m. a 7:00 p. m.', sources: ['business_profile'],
+    }));
   });
 
   it('still shows the catalog for a genuine menu question with no matching FAQ (Santos Tacos regression)', async () => {
