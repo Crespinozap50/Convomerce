@@ -28,9 +28,13 @@ if [ "$confirm" != "-y" ] && [ "$confirm" != "--yes" ]; then
   fi
 fi
 
+# Requires database/local/000_local_roles.sql to have already run (any
+# `make db-migrate` does this) — --no-owner is deliberately not used here,
+# so restored objects keep the commerce_owner ownership the dump recorded
+# instead of ending up owned by whichever role runs this restore.
 echo "Restoring $backup_file ..."
 docker compose exec -T postgres \
-  pg_restore -U postgres -d whatsapp_commerce --clean --if-exists --no-owner \
+  pg_restore -U postgres -d whatsapp_commerce --clean --if-exists \
   < "$backup_file"
 
 echo "Done."

@@ -18,9 +18,15 @@ mkdir -p "$backup_dir"
 timestamp=$(date +%Y%m%d_%H%M%S)
 backup_file="$backup_dir/whatsapp_commerce_${timestamp}.dump"
 
+# --no-owner is deliberately NOT used: this schema's tables are owned by
+# commerce_owner (see database/local/000_local_roles.sql), not the postgres
+# superuser, and RLS/grants are wired to that ownership. Restoring with
+# --no-owner reassigns every object to whichever role ran the restore,
+# silently breaking INSERT/UPDATE for commerce_owner afterward — found live
+# testing restore.sh against a freshly wiped database.
 echo "Backing up to $backup_file ..."
 docker compose exec -T postgres \
-  pg_dump -U postgres -d whatsapp_commerce -Fc --no-owner \
+  pg_dump -U postgres -d whatsapp_commerce -Fc \
   > "$backup_file"
 
 echo "Done: $backup_file ($(du -h "$backup_file" | cut -f1))"
