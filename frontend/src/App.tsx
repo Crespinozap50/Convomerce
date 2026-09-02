@@ -2956,12 +2956,10 @@ function PublishedAnswer({
         <>
           <p>{entry.content}</p>
           {entry.keywords?.length > 0 && (
-            <small className="faq-keywords">
-              {t("knowledge.keywordsLabel")}: {entry.keywords.join(", ")}
-            </small>
+            <FieldHelp>{`${t("knowledge.keywordsLabel")}: ${entry.keywords.join(", ")}`}</FieldHelp>
           )}
           {entry.translations?.en.title && (
-            <small className="faq-keywords">EN: {entry.translations.en.title}</small>
+            <FieldHelp>{`EN: ${entry.translations.en.title}`}</FieldHelp>
           )}
           {error && <small className="error-text">{error}</small>}
           {canManage && (
