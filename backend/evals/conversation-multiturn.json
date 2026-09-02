@@ -1,0 +1,66 @@
+{
+  "suite": "conversation-multiturn-v1",
+  "minimumScore": 1,
+  "conversations": [
+    {
+      "id": "es-order-delivery",
+      "locale": "es",
+      "turns": [
+        {"id":"start","message":"Quiero pedir dos tacos de birria","expected":{"intent":"order","requestedAction":"start_order","entities":{"quantity":2},"requiresHuman":false}},
+        {"id":"finish","message":"Nada más, gracias","expected":{"intent":"order","requestedAction":"finish_items","requiresHuman":false}},
+        {"id":"delivery","message":"Envíamelo a domicilio","expected":{"intent":"order","requestedAction":"fulfillment.delivery","requiresHuman":false}},
+        {"id":"confirm","message":"Sí, confirmo","expected":{"intent":"fallback","requestedAction":null,"entities":{"response":"affirmative"},"requiresHuman":false}}
+      ]
+    },
+    {
+      "id": "es-appointment",
+      "locale": "es",
+      "turns": [
+        {"id":"start","message":"Quiero agendar una cita para corte y barba","expected":{"intent":"appointment","requestedAction":"book_appointment","requiresHuman":false}},
+        {"id":"date","message":"Mañana","expected":{"intent":"fallback","requestedAction":null,"requiredEntities":["requestedDate"],"requiresHuman":false}},
+        {"id":"slot","message":"2","expected":{"intent":"fallback","requestedAction":null,"entities":{"selectionIndex":2},"requiresHuman":false}},
+        {"id":"confirm","message":"Sí, esa hora está perfecta","expected":{"intent":"fallback","requestedAction":null,"entities":{"response":"affirmative"},"requiresHuman":false}}
+      ]
+    },
+    {
+      "id": "es-cart-correction",
+      "locale": "es",
+      "turns": [
+        {"id":"start","message":"Quiero comprar una bebida","expected":{"intent":"order","requestedAction":"start_order","entities":{"quantity":1},"requiresHuman":false}},
+        {"id":"change","message":"Quiero cambiar la cantidad a tres unidades","expected":{"intent":"order","requestedAction":"change_quantity","entities":{"quantity":3},"requiresHuman":false}},
+        {"id":"view","message":"Muéstrame el carrito","expected":{"intent":"order","requestedAction":"view_order","requiresHuman":false}},
+        {"id":"human","message":"Mejor quiero hablar con una persona","expected":{"intent":"order","requestedAction":"handoff","requiresHuman":true}}
+      ]
+    },
+    {
+      "id": "en-order-pickup",
+      "locale": "en",
+      "turns": [
+        {"id":"start","message":"I want to order two chicken tacos","expected":{"intent":"order","requestedAction":"start_order","entities":{"quantity":2},"requiresHuman":false}},
+        {"id":"finish","message":"That is all, thanks","expected":{"intent":"order","requestedAction":"finish_items","requiresHuman":false}},
+        {"id":"pickup","message":"I will pick it up","expected":{"intent":"order","requestedAction":"fulfillment.pickup","requiresHuman":false}},
+        {"id":"confirm","message":"Yes, that works","expected":{"intent":"fallback","requestedAction":null,"entities":{"response":"affirmative"},"requiresHuman":false}}
+      ]
+    },
+    {
+      "id": "en-appointment-change",
+      "locale": "en",
+      "turns": [
+        {"id":"view","message":"Can I view my appointment?","expected":{"intent":"appointment","requestedAction":"view_appointment","requiresHuman":false}},
+        {"id":"move","message":"Please reschedule my appointment","expected":{"intent":"appointment","requestedAction":"reschedule","requiresHuman":false}},
+        {"id":"date","message":"Tomorrow","expected":{"intent":"fallback","requestedAction":null,"requiredEntities":["requestedDate"],"requiresHuman":false}},
+        {"id":"cancel","message":"Cancel my appointment instead","expected":{"intent":"appointment","requestedAction":"cancel_appointment","requiresHuman":false}}
+      ]
+    },
+    {
+      "id": "en-recommendation",
+      "locale": "en",
+      "turns": [
+        {"id":"start","message":"I want to buy a laptop","expected":{"intent":"order","requestedAction":"start_order","requiresHuman":false}},
+        {"id":"accept","message":"Add it","interactiveSelectionId":"rec:add:0194f100-0000-7000-8000-000000000001","expected":{"intent":"order","requestedAction":"recommendation.add","entities":{"recommendationAction":"add"},"requiresHuman":false}},
+        {"id":"view","message":"Show my order summary","expected":{"intent":"order","requestedAction":"view_order","requiresHuman":false}},
+        {"id":"help","message":"I need an agent","expected":{"intent":"order","requestedAction":"handoff","requiresHuman":true}}
+      ]
+    }
+  ]
+}

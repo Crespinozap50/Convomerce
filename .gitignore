@@ -1,0 +1,21 @@
+# Archivos locales de Codex
+/work/
+/outputs/
+
+# Entorno y secretos
+.env
+.env.*
+!.env.example
+
+# Dependencias y artefactos futuros
+/backend/vendor/
+/backend/node_modules/
+/backend/dist/
+/backend/coverage/
+/backend/*.tsbuildinfo
+/frontend/node_modules/
+/frontend/dist/
+/backend/storage/logs/
+*.log
+.DS_Store
+.idea/

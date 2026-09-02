@@ -1,0 +1,46 @@
+groups:
+  - name: whatsapp-commerce-operational
+    rules:
+      - alert: CommerceOutboxBacklog
+        expr: commerce_outbox_pending >= 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El outbox mantiene 100 o más eventos pendientes"
+
+      - alert: CommerceOutboxExpiredLease
+        expr: commerce_outbox_expired_leases >= 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Existe al menos un lease outbox vencido"
+
+      - alert: CommerceBullMQFailedJobs
+        expr: commerce_bullmq_failed_jobs >= 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BullMQ conserva trabajos fallidos"
+
+      - alert: CommerceHttpLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(commerce_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "La latencia HTTP p95 supera un segundo"
+
+      - alert: CommerceWebhookRejectedBurst
+        expr: increase(commerce_webhook_requests_total{result=~"rejected_.*"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Más de diez webhooks fueron rechazados en cinco minutos"

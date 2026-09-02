@@ -1,0 +1,302 @@
+{
+  "info": {
+    "_postman_id": "019fca60-0000-7000-8000-000000000002",
+    "name": "WhatsApp Commerce AI",
+    "description": "Colección local completa. No usa Meta, teléfonos, credenciales ni datos reales. Ejecuta primero Health > Readiness para confirmar PostgreSQL y Redis.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Autenticación local",
+      "item": [
+        {
+          "name": "Login administrador demo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{local_admin_email}}\",\n  \"password\": \"{{local_admin_password}}\"\n}" },
+            "url": { "raw": "{{base_url}}/v1/auth/login", "host": ["{{base_url}}"], "path": ["v1", "auth", "login"] },
+            "description": "Postman conserva automáticamente la cookie HttpOnly recibida."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Requiere cambio inicial', () => pm.expect(pm.response.json().mustChangePassword).to.eql(true));"] } }]
+        },
+        {
+          "name": "Mi sesión y roles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/auth/me", "host": ["{{base_url}}"], "path": ["v1", "auth", "me"] },
+            "description": "Devuelve perfil, rol de plataforma, membresías y estado de contraseña."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('No expone credenciales', () => pm.expect(pm.response.text()).not.to.include('password')); "] } }]
+        },
+        {
+          "name": "Cambiar contraseña temporal",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"currentPassword\": \"{{local_admin_password}}\",\n  \"newPassword\": \"{{local_admin_new_password}}\"\n}" },
+            "url": { "raw": "{{base_url}}/v1/auth/change-password", "host": ["{{base_url}}"], "path": ["v1", "auth", "change-password"] },
+            "description": "Antes de ejecutarlo define local_admin_new_password. Revoca las demás sesiones."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 204', () => pm.response.to.have.status(204));"] } }]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/auth/logout", "host": ["{{base_url}}"], "path": ["v1", "auth", "logout"] }
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 204', () => pm.response.to.have.status(204));"] } }]
+        }
+      ]
+    },
+    {
+      "name": "1. Operabilidad",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/health/live", "host": ["{{base_url}}"], "path": ["health", "live"] },
+            "description": "Comprueba solamente que el proceso HTTP está vivo."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Está vivo', () => pm.expect(pm.response.json().status).to.eql('alive'));", "pm.test('Incluye correlación', () => pm.expect(pm.response.headers.get('x-correlation-id')).to.exist);"] } }]
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/health/ready", "host": ["{{base_url}}"], "path": ["health", "ready"] },
+            "description": "Comprueba PostgreSQL, Redis, publicador outbox y worker."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Backend listo', () => pm.expect(pm.response.json().status).to.eql('ready'));"] } }]
+        },
+        {
+          "name": "Métricas Prometheus",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{metrics_bearer_token}}", "type": "text" }],
+            "url": { "raw": "{{base_url}}/internal/metrics", "host": ["{{base_url}}"], "path": ["internal", "metrics"] },
+            "description": "Scrape protegido en formato Prometheus."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Contiene métricas commerce', () => pm.expect(pm.response.text()).to.include('commerce_outbox_pending'));"] } }]
+        },
+        {
+          "name": "Estado de métricas y umbrales",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{metrics_bearer_token}}", "type": "text" }],
+            "url": { "raw": "{{base_url}}/internal/metrics/status", "host": ["{{base_url}}"], "path": ["internal", "metrics", "status"] },
+            "description": "Valores operativos actuales comparados con los umbrales locales."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Estado conocido', () => pm.expect(['ok', 'warning']).to.include(pm.response.json().status));"] } }]
+        }
+      ]
+    },
+    {
+      "name": "2. Arneses locales",
+      "item": [
+        {
+          "name": "Mensaje entrante ficticio - restaurante",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"tenantId\": \"{{restaurant_tenant_id}}\",\n  \"channelId\": \"{{restaurant_channel_id}}\",\n  \"contactId\": \"{{restaurant_contact_id}}\",\n  \"externalEventId\": \"postman-event-{{$guid}}\",\n  \"externalMessageId\": \"postman-message-{{$guid}}\",\n  \"text\": \"Quiero conocer el producto de demostración\"\n}" },
+            "url": { "raw": "{{base_url}}/v1/dev/inbound-messages", "host": ["{{base_url}}"], "path": ["v1", "dev", "inbound-messages"] },
+            "description": "Entrada directa de desarrollo. No representa el webhook de Meta."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "const body = pm.response.json();", "pm.environment.set('last_message_id', body.messageId);", "pm.environment.set('last_outbox_event_id', body.outboxEventId);"] } }]
+        },
+        {
+          "name": "Mensaje saliente ficticio ya enviado",
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["pm.environment.set('fixture_wamid', `wamid.postman.${Date.now()}`);"] } },
+            { "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "pm.environment.set('last_message_id', pm.response.json().messageId);"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"tenantId\": \"{{restaurant_tenant_id}}\",\n  \"channelId\": \"{{restaurant_channel_id}}\",\n  \"conversationId\": \"{{restaurant_conversation_id}}\",\n  \"externalMessageId\": \"{{fixture_wamid}}\",\n  \"text\": \"Mensaje saliente ficticio para probar estados\"\n}" },
+            "url": { "raw": "{{base_url}}/v1/dev/outbound-messages", "host": ["{{base_url}}"], "path": ["v1", "dev", "outbound-messages"] },
+            "description": "Crea un mensaje sent con wamid ficticio. Ejecútalo antes del webhook de estado."
+          }
+        },
+        {
+          "name": "Solicitar envío asíncrono ficticio",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"tenantId\": \"{{restaurant_tenant_id}}\",\n  \"channelId\": \"{{restaurant_channel_id}}\",\n  \"conversationId\": \"{{restaurant_conversation_id}}\",\n  \"text\": \"Respuesta asíncrona ficticia\"\n}" },
+            "url": { "raw": "{{base_url}}/v1/dev/outbound-messages/send-requests", "host": ["{{base_url}}"], "path": ["v1", "dev", "outbound-messages", "send-requests"] },
+            "description": "Crea queued + outbox. El publicador, BullMQ y el worker lo llevan a sent."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "const body = pm.response.json();", "pm.environment.set('last_message_id', body.messageId);", "pm.environment.set('last_outbox_event_id', body.outboxEventId);", "pm.test('Queda queued inicialmente', () => pm.expect(body.deliveryStatus).to.eql('queued'));"] } }]
+        }
+      ]
+    },
+    {
+      "name": "3. Webhook WhatsApp",
+      "item": [
+        {
+          "name": "Challenge de verificación",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token={{webhook_verify_token}}&hub.challenge=postman-challenge",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "webhooks", "whatsapp"],
+              "query": [
+                { "key": "hub.mode", "value": "subscribe" },
+                { "key": "hub.verify_token", "value": "{{webhook_verify_token}}" },
+                { "key": "hub.challenge", "value": "postman-challenge" }
+              ]
+            },
+            "description": "Simula la validación inicial que realiza Meta."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Devuelve challenge exacto', () => pm.expect(pm.response.text()).to.eql('postman-challenge'));"] } }]
+        },
+        {
+          "name": "Webhook firmado - mensaje de texto",
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["pm.variables.set('webhook_message_id', `postman-webhook-message-${pm.variables.replaceIn('{{$guid}}')}`);", "const raw = pm.variables.replaceIn(pm.request.body.raw);", "const signature = CryptoJS.HmacSHA256(raw, pm.environment.get('whatsapp_app_secret')).toString(CryptoJS.enc.Hex);", "pm.request.headers.upsert({ key: 'x-hub-signature-256', value: `sha256=${signature}` });"] } },
+            { "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Procesa un mensaje', () => pm.expect(pm.response.json().messages).to.eql(1));"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": [{\n    \"id\": \"postman-waba-fixture\",\n    \"changes\": [{\n      \"field\": \"messages\",\n      \"value\": {\n        \"messaging_product\": \"whatsapp\",\n        \"metadata\": {\n          \"display_phone_number\": \"000000000001\",\n          \"phone_number_id\": \"demo-account-restaurant\"\n        },\n        \"contacts\": [{\n          \"profile\": { \"name\": \"Contacto Postman\" },\n          \"wa_id\": \"postman-contact-fixture\"\n        }],\n        \"messages\": [{\n          \"from\": \"postman-contact-fixture\",\n          \"id\": \"{{webhook_message_id}}\",\n          \"timestamp\": \"1700000000\",\n          \"type\": \"text\",\n          \"text\": { \"body\": \"Mensaje firmado desde Postman\" }\n        }]\n      }\n    }]\n  }]\n}" },
+            "url": { "raw": "{{base_url}}/v1/webhooks/whatsapp", "host": ["{{base_url}}"], "path": ["v1", "webhooks", "whatsapp"] },
+            "description": "Calcula automáticamente la firma HMAC-SHA256 sobre el cuerpo resuelto."
+          }
+        },
+        {
+          "name": "Webhook firmado - estado delivered",
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["if (!pm.environment.get('fixture_wamid')) { throw new Error('Ejecuta primero Mensaje saliente ficticio ya enviado'); }", "const raw = pm.variables.replaceIn(pm.request.body.raw);", "const signature = CryptoJS.HmacSHA256(raw, pm.environment.get('whatsapp_app_secret')).toString(CryptoJS.enc.Hex);", "pm.request.headers.upsert({ key: 'x-hub-signature-256', value: `sha256=${signature}` });"] } },
+            { "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Procesa un estado', () => pm.expect(pm.response.json().statuses).to.eql(1));"] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": [{\n    \"id\": \"postman-waba-fixture\",\n    \"changes\": [{\n      \"field\": \"messages\",\n      \"value\": {\n        \"messaging_product\": \"whatsapp\",\n        \"metadata\": {\n          \"display_phone_number\": \"000000000001\",\n          \"phone_number_id\": \"demo-account-restaurant\"\n        },\n        \"statuses\": [{\n          \"id\": \"{{fixture_wamid}}\",\n          \"status\": \"delivered\",\n          \"timestamp\": \"1700000100\",\n          \"recipient_id\": \"postman-contact-fixture\"\n        }]\n      }\n    }]\n  }]\n}" },
+            "url": { "raw": "{{base_url}}/v1/webhooks/whatsapp", "host": ["{{base_url}}"], "path": ["v1", "webhooks", "whatsapp"] },
+            "description": "Ejecuta primero el request que crea un mensaje saliente ficticio."
+          }
+        },
+        {
+          "name": "Webhook con firma incorrecta (debe fallar)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "x-hub-signature-256", "value": "sha256=incorrecta", "type": "text" }
+            ],
+            "body": { "mode": "raw", "raw": "{\"object\":\"whatsapp_business_account\",\"entry\":[]}" },
+            "url": { "raw": "{{base_url}}/v1/webhooks/whatsapp", "host": ["{{base_url}}"], "path": ["v1", "webhooks", "whatsapp"] },
+            "description": "Prueba negativa: debe responder 401 sin escribir en PostgreSQL."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 401 esperado', () => pm.response.to.have.status(401));", "pm.test('Error estable', () => pm.expect(pm.response.json().code).to.eql('request_rejected'));"] } }]
+        }
+      ]
+    },
+    {
+      "name": "4. Administración",
+      "item": [
+        {
+          "name": "Listar conexiones del restaurante",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/admin/tenants/{{restaurant_tenant_id}}/channel-connections", "host": ["{{base_url}}"], "path": ["v1", "admin", "tenants", "{{restaurant_tenant_id}}", "channel-connections"] },
+            "description": "Requiere login y haber cambiado la contraseña temporal. Un owner/admin solo puede consultar su tenant."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Devuelve una lista', () => pm.expect(pm.response.json()).to.be.an('array'));"] } }]
+        },
+        {
+          "name": "Listar usuarios del restaurante",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/admin/tenants/{{restaurant_tenant_id}}/users", "host": ["{{base_url}}"], "path": ["v1", "admin", "tenants", "{{restaurant_tenant_id}}", "users"] },
+            "description": "Lista membresías y roles. Requiere owner/admin o administrador de plataforma."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "const users = pm.response.json();", "pm.test('Devuelve usuarios', () => pm.expect(users).to.be.an('array'));", "const invited = users.find((user) => user.email === pm.environment.get('invited_user_email'));", "if (invited) pm.environment.set('membership_id', invited.membershipId);"] } }]
+        },
+        {
+          "name": "Invitar usuario ficticio",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{invited_user_email}}\",\n  \"role\": \"{{invited_user_role}}\"\n}" },
+            "url": { "raw": "{{base_url}}/v1/admin/tenants/{{restaurant_tenant_id}}/invitations", "host": ["{{base_url}}"], "path": ["v1", "admin", "tenants", "{{restaurant_tenant_id}}", "invitations"] },
+            "description": "En desarrollo devuelve el token para poder probar sin un proveedor de correo."
+          },
+          "event": [
+            { "listen": "prerequest", "script": { "exec": ["pm.environment.set('invited_user_email', `postman-invitado-${Date.now()}@commerce.test`);"] } },
+            { "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "const body = pm.response.json();", "pm.environment.set('invitation_token', body.invitationToken);", "pm.environment.set('invitation_id', body.invitationId);"] } }
+          ]
+        },
+        {
+          "name": "Aceptar invitación ficticia",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{invitation_token}}\",\n  \"displayName\": \"Usuario invitado Postman\",\n  \"password\": \"{{invited_user_password}}\"\n}" },
+            "url": { "raw": "{{base_url}}/v1/auth/invitations/accept", "host": ["{{base_url}}"], "path": ["v1", "auth", "invitations", "accept"] },
+            "description": "Crea la cuenta y la membresía. El token solo puede utilizarse una vez."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 201', () => pm.response.to.have.status(201));", "pm.test('Invitación aceptada', () => pm.expect(pm.response.json().accepted).to.eql(true));"] } }]
+        },
+        {
+          "name": "Cambiar rol o estado del miembro",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json", "type": "text" }],
+            "body": { "mode": "raw", "raw": "{\n  \"role\": \"viewer\",\n  \"status\": \"active\"\n}" },
+            "url": { "raw": "{{base_url}}/v1/admin/tenants/{{restaurant_tenant_id}}/users/{{membership_id}}", "host": ["{{base_url}}"], "path": ["v1", "admin", "tenants", "{{restaurant_tenant_id}}", "users", "{{membership_id}}"] },
+            "description": "Ejecuta antes Listar usuarios para resolver membership_id. status=disabled revoca sus sesiones."
+          }
+        },
+        {
+          "name": "Revocar invitación pendiente",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/admin/tenants/{{restaurant_tenant_id}}/invitations/{{invitation_id}}", "host": ["{{base_url}}"], "path": ["v1", "admin", "tenants", "{{restaurant_tenant_id}}", "invitations", "{{invitation_id}}"] },
+            "description": "Solo funciona antes de aceptar. Después devuelve revoked=false."
+          }
+        },
+        {
+          "name": "Desconectar conexión (acción manual)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": { "raw": "{{base_url}}/v1/admin/tenants/{{restaurant_tenant_id}}/channel-connections/{{channel_connection_id}}", "host": ["{{base_url}}"], "path": ["v1", "admin", "tenants", "{{restaurant_tenant_id}}", "channel-connections", "{{channel_connection_id}}"] },
+            "description": "Acción destructiva. Déjala sin ejecutar hasta definir channel_connection_id conscientemente."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Información pública",
+      "item": [
+        {
+          "name": "Política de privacidad temporal",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base_url}}/privacy", "host": ["{{base_url}}"], "path": ["privacy"] },
+            "description": "Página HTML temporal utilizada para la configuración de la app de Meta."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('HTTP 200', () => pm.response.to.have.status(200));", "pm.test('Devuelve HTML', () => pm.expect(pm.response.headers.get('content-type')).to.include('text/html'));"] } }]
+        }
+      ]
+    }
+  ],
+  "variable": []
+}

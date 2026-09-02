@@ -1,0 +1,29 @@
+{
+  "meta": { "locale": "es", "currencyLocale": "es-CO" },
+  "bot": {
+    "defaultWelcome": "¡Hola! ¿En qué puedo ayudarte?",
+    "defaultFallback": "No entendí tu solicitud. Puedo comunicarte con una persona.",
+    "defaultHandoffKeywords": ["asesor", "humano", "persona"],
+    "handoff": "Entendido. Una persona continuará esta conversación.",
+    "menuUnavailable": "La oferta comercial todavía no está disponible. Puedo comunicarte con una persona.",
+    "productQuestion": "¿De cuál producto o servicio quieres conocer el precio? También puedes escribir \"ver catálogo\".",
+    "menuHeading": "Esta es nuestra oferta disponible:",
+    "menuButtonLabel": "Ver opciones",
+    "priceHeading": "Precio encontrado:",
+    "recommendation": "¿Te agrego {{item}} por {{price}} para acompañar tu compra?",
+    "recommendationAccept": "Sí, agregar",
+    "recommendationReject": "No, gracias",
+    "personalizedGreeting": "¡Hola, {{name}}! {{welcome}}"
+  },
+  "labels": { "unit": "Unidad", "orderPrefix": "Orden de" },
+  "intents": {
+    "delivery": ["domicilio", "domicilios", "envio", "cobertura", "entregan"],
+    "hours": ["horario", "abren", "abierto", "cierran", "atienden"],
+    "location": ["ubicacion", "direccion", "donde quedan", "donde estan", "como llego"],
+    "payments": ["pagar", "pago", "efectivo", "transferencia", "tarjeta", "datafono"],
+    "price": ["precio", "cuanto cuesta", "cuando cuesta", "cuanto cuestan", "cuando cuestan", "cuanto vale", "valor"],
+    "menu": ["menu", "carta", "catalogo", "productos", "producto", "servicios", "servicio", "que tienen", "que venden", "que ofrecen", "que manejan", "tacos tienen"],
+    "greeting": ["hola", "buenos dias", "buenas tardes", "buenas noches", "buenas"]
+  },
+  "stopWords": ["al", "cual", "cuales", "cuanto", "de", "el", "en", "es", "la", "las", "lo", "los", "me", "mostrar", "no", "que", "quiero", "saber", "se", "sin", "tiene", "tienen", "un", "una", "ver"]
+}

@@ -1,0 +1,30 @@
+{
+  "suite": "conversation-understanding-v1",
+  "minimumScore": 1,
+  "cases": [
+    {"id":"es-order-natural","locale":"es","message":"Hola, quiero pedir dos tacos de birria por favor","expected":{"intent":"order","requestedAction":"start_order","entities":{"quantity":2},"searchTerms":["tacos","birria"],"requiresHuman":false}},
+    {"id":"es-price-question","locale":"es","message":"¿Cuánto cuestan los tacos de camarón?","expected":{"intent":"price","requestedAction":"price","searchTerms":["tacos","camaron"],"requiresHuman":false}},
+    {"id":"es-menu","locale":"es","message":"¿Me muestras el menú?","expected":{"intent":"order","requestedAction":"catalog","requiresHuman":false}},
+    {"id":"es-view-cart","locale":"es","message":"Muéstrame el resumen de mi pedido","expected":{"intent":"order","requestedAction":"view_order","requiresHuman":false}},
+    {"id":"es-remove","locale":"es","message":"Quiero quitar los tacos de birria","expected":{"intent":"order","requestedAction":"remove_item","requiresHuman":false}},
+    {"id":"es-delivery","locale":"es","message":"Lo quiero a domicilio","expected":{"intent":"order","requestedAction":"fulfillment.delivery","requiresHuman":false}},
+    {"id":"es-booking","locale":"es","message":"Quiero agendar una cita para corte y barba","expected":{"intent":"appointment","requestedAction":"book_appointment","searchTerms":["corte","barba"],"requiresHuman":false}},
+    {"id":"es-reschedule","locale":"es","message":"Necesito reprogramar mi cita","expected":{"intent":"appointment","requestedAction":"reschedule","requiresHuman":false}},
+    {"id":"es-cancel-booking","locale":"es","message":"Por favor cancela mi cita","expected":{"intent":"appointment","requestedAction":"cancel_appointment","requiresHuman":false}},
+    {"id":"es-human","locale":"es","message":"Necesito hablar con un asesor","expected":{"intent":"order","requestedAction":"handoff","requiresHuman":true}},
+    {"id":"es-affirmative","locale":"es","message":"Sí, está bien","expected":{"intent":"fallback","requestedAction":null,"entities":{"response":"affirmative"},"requiresHuman":false}},
+    {"id":"es-selection","locale":"es","message":"2","expected":{"intent":"fallback","requestedAction":null,"entities":{"selectionIndex":2},"requiresHuman":false}},
+    {"id":"en-order-natural","locale":"en","message":"Hi, I want to order three chicken tacos please","expected":{"intent":"order","requestedAction":"start_order","entities":{"quantity":3},"searchTerms":["chicken","tacos"],"requiresHuman":false}},
+    {"id":"en-price-question","locale":"en","message":"How much is the shrimp taco?","expected":{"intent":"price","requestedAction":"price","searchTerms":["shrimp","taco"],"requiresHuman":false}},
+    {"id":"en-catalog","locale":"en","message":"Can I see the menu?","expected":{"intent":"order","requestedAction":"catalog","requiresHuman":false}},
+    {"id":"en-view-cart","locale":"en","message":"Show me my order summary","expected":{"intent":"order","requestedAction":"view_order","requiresHuman":false}},
+    {"id":"en-change-quantity","locale":"en","message":"Change the quantity to four units","expected":{"intent":"order","requestedAction":"change_quantity","entities":{"quantity":4},"requiresHuman":false}},
+    {"id":"en-pickup","locale":"en","message":"I will pick it up","expected":{"intent":"order","requestedAction":"fulfillment.pickup","requiresHuman":false}},
+    {"id":"en-booking","locale":"en","message":"I want to book an appointment for a haircut","expected":{"intent":"appointment","requestedAction":"book_appointment","searchTerms":["haircut"],"requiresHuman":false}},
+    {"id":"en-reschedule","locale":"en","message":"Please move my appointment","expected":{"intent":"appointment","requestedAction":"reschedule","requiresHuman":false}},
+    {"id":"en-cancel-booking","locale":"en","message":"Cancel my appointment please","expected":{"intent":"appointment","requestedAction":"cancel_appointment","requiresHuman":false}},
+    {"id":"en-human","locale":"en","message":"I need to speak with a human","expected":{"intent":"order","requestedAction":"handoff","requiresHuman":true}},
+    {"id":"en-negative","locale":"en","message":"No, thank you","expected":{"intent":"fallback","requestedAction":null,"entities":{"response":"negative"},"requiresHuman":false}},
+    {"id":"en-any-resource","locale":"en","message":"Anyone available is fine","expected":{"intent":"fallback","requestedAction":null,"entities":{"anyResource":true},"requiresHuman":false}}
+  ]
+}

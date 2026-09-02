@@ -1,0 +1,28 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "fixture-waba-id",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "000000000001",
+              "phone_number_id": "demo-account-restaurant"
+            },
+            "statuses": [
+              {
+                "id": "fixture-outbound-wamid",
+                "status": "fixture-delivery-status",
+                "timestamp": "1700000100",
+                "recipient_id": "fixture-recipient-id"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

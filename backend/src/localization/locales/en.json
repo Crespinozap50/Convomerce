@@ -1,0 +1,29 @@
+{
+  "meta": { "locale": "en", "currencyLocale": "en-US" },
+  "bot": {
+    "defaultWelcome": "Hello! How can I help you?",
+    "defaultFallback": "I did not understand your request. I can connect you with a person.",
+    "defaultHandoffKeywords": ["agent", "human", "person"],
+    "handoff": "Understood. A person will continue this conversation.",
+    "menuUnavailable": "The commercial offering is not available yet. I can connect you with a person.",
+    "productQuestion": "Which product or service would you like a price for? You can also type \"show catalog\".",
+    "menuHeading": "Here is our available offering:",
+    "menuButtonLabel": "View options",
+    "priceHeading": "Price found:",
+    "recommendation": "Would you like to add {{item}} for {{price}}?",
+    "recommendationAccept": "Yes, add it",
+    "recommendationReject": "No, thanks",
+    "personalizedGreeting": "Hello, {{name}}! {{welcome}}"
+  },
+  "labels": { "unit": "Unit", "orderPrefix": "Order of" },
+  "intents": {
+    "delivery": ["delivery", "deliver", "shipping", "coverage"],
+    "hours": ["hours", "open", "close", "closing"],
+    "location": ["location", "address", "where are you", "directions"],
+    "payments": ["pay", "payment", "cash", "transfer", "card"],
+    "price": ["price", "how much", "cost", "value"],
+    "menu": ["menu", "catalog", "products", "product", "services", "service", "what do you offer"],
+    "greeting": ["hello", "hi", "good morning", "good afternoon", "good evening"]
+  },
+  "stopWords": ["a", "an", "and", "are", "do", "for", "how", "i", "is", "me", "of", "show", "the", "to", "what", "which", "you"]
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "id":"es-booking-confirmed",
+    "locale":"es",
+    "context":["Cliente: Sí, esa hora está perfecta"],
+    "protectedFacts":["7 de agosto", "2:00 p. m.", "Valentina", "A1B2C3D4"],
+    "candidates":[
+      {"source":"deterministic","body":"Reserva confirmada para el 7 de agosto a las 2:00 p. m. con Valentina. Referencia A1B2C3D4."},
+      {"source":"challenger","body":"¡Perfecto! Tu reserva quedó confirmada para el 7 de agosto a las 2:00 p. m. con Valentina. Tu referencia es A1B2C3D4."}
+    ]
+  },
+  {
+    "id":"en-order-confirmed",
+    "locale":"en",
+    "context":["Customer: Yes, confirm it"],
+    "protectedFacts":["$24.90", "pickup", "K9L8M7N6"],
+    "candidates":[
+      {"source":"deterministic","body":"Order confirmed. Total: $24.90. Fulfillment: pickup. Reference K9L8M7N6."},
+      {"source":"challenger","body":"You’re all set! Your $24.90 pickup order is confirmed. Keep reference K9L8M7N6 handy."}
+    ]
+  }
+]

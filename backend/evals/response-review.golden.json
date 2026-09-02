@@ -1,0 +1,82 @@
+[
+  {
+    "id": "es-order-confirmed",
+    "locale": "es",
+    "context": ["Cliente: Sí, confirma el pedido"],
+    "protectedFacts": ["$48.000", "domicilio", "ST-2048"],
+    "candidates": [
+      { "source": "deterministic", "body": "Pedido confirmado. Total: $48.000. Entrega: domicilio. Referencia ST-2048." },
+      { "source": "challenger", "body": "¡Listo! Confirmé tu pedido por $48.000 con domicilio. Tu referencia es ST-2048." }
+    ]
+  },
+  {
+    "id": "es-preparation-time",
+    "locale": "es",
+    "context": ["Cliente: ¿Cuánto se demora mi pedido?"],
+    "protectedFacts": ["20 a 35 minutos"],
+    "candidates": [
+      { "source": "deterministic", "body": "El tiempo estimado de preparación es de 20 a 35 minutos." },
+      { "source": "challenger", "body": "Normalmente lo tendremos listo en 20 a 35 minutos." }
+    ]
+  },
+  {
+    "id": "es-no-active-order",
+    "locale": "es",
+    "context": ["Cliente: Quiero cancelar mi pedido"],
+    "protectedFacts": ["tienes un pedido activo"],
+    "candidates": [
+      { "source": "deterministic", "body": "No tienes un pedido activo para cancelar." },
+      { "source": "challenger", "body": "En este momento no tienes un pedido activo para cancelar. Si quieres, puedo ayudarte a comenzar uno." }
+    ]
+  },
+  {
+    "id": "es-human-handoff",
+    "locale": "es",
+    "context": ["Cliente: Prefiero hablar con una persona"],
+    "protectedFacts": ["equipo"],
+    "candidates": [
+      { "source": "deterministic", "body": "La conversación será transferida al equipo." },
+      { "source": "challenger", "body": "Claro, voy a comunicarte con una persona de nuestro equipo." }
+    ]
+  },
+  {
+    "id": "en-order-confirmed",
+    "locale": "en",
+    "context": ["Customer: Yes, confirm the order"],
+    "protectedFacts": ["$24.90", "pickup", "K9L8M7N6"],
+    "candidates": [
+      { "source": "deterministic", "body": "Order confirmed. Total: $24.90. Fulfillment: pickup. Reference K9L8M7N6." },
+      { "source": "challenger", "body": "You’re all set! Your $24.90 pickup order is confirmed. Keep reference K9L8M7N6 handy." }
+    ]
+  },
+  {
+    "id": "en-preparation-time",
+    "locale": "en",
+    "context": ["Customer: How long will my order take?"],
+    "protectedFacts": ["20 to 35 minutes"],
+    "candidates": [
+      { "source": "deterministic", "body": "The estimated preparation time is 20 to 35 minutes." },
+      { "source": "challenger", "body": "We’ll usually have it ready in 20 to 35 minutes." }
+    ]
+  },
+  {
+    "id": "en-no-active-order",
+    "locale": "en",
+    "context": ["Customer: I want to cancel my order"],
+    "protectedFacts": ["do not have an active order"],
+    "candidates": [
+      { "source": "deterministic", "body": "You do not have an active order to cancel." },
+      { "source": "challenger", "body": "You do not have an active order to cancel right now. I can help you start one if you’d like." }
+    ]
+  },
+  {
+    "id": "en-human-handoff",
+    "locale": "en",
+    "context": ["Customer: I would rather speak with a person"],
+    "protectedFacts": ["team"],
+    "candidates": [
+      { "source": "deterministic", "body": "The conversation will be transferred to the team." },
+      { "source": "challenger", "body": "Of course. I’ll connect you with someone from our team." }
+    ]
+  }
+]

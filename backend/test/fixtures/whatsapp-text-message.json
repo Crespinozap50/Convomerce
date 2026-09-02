@@ -1,0 +1,35 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "fixture-waba-id",
+      "changes": [
+        {
+          "field": "messages",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "000000000001",
+              "phone_number_id": "demo-account-restaurant"
+            },
+            "contacts": [
+              {
+                "profile": { "name": "Contacto Fixture" },
+                "wa_id": "fixture-sender-id"
+              }
+            ],
+            "messages": [
+              {
+                "from": "fixture-sender-id",
+                "id": "fixture-message-id",
+                "timestamp": "1700000000",
+                "type": "text",
+                "text": { "body": "Mensaje completamente ficticio" }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

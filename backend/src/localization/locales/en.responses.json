@@ -1,0 +1,4 @@
+{
+  "affirmative": ["yes", "confirm", "correct", "okay", "ok"],
+  "negative": ["no", "cancel", "nope", "none"]
+}
