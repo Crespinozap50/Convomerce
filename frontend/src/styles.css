@@ -1368,6 +1368,9 @@ header h1 {
 .extras-new-group input {
   flex: 1;
 }
+.extras-new-group .app-select {
+  flex: 0 0 200px;
+}
 .extras-new-group button {
   width: auto;
   padding: 9px 16px;
@@ -1424,7 +1427,7 @@ header h1 {
   flex: 1;
 }
 .extras-new-option input[type="number"] {
-  max-width: 120px;
+  max-width: 140px;
 }
 .extras-new-option button {
   width: auto;
