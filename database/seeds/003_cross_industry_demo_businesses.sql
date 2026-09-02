@@ -46,6 +46,16 @@ alter table app.customer_data_requirements force row level security;
 -- ---------------------------------------------------------------------------
 select set_config('app.tenant_id','0194f000-0000-7000-8000-000000000003',true);
 
+-- Found running the Fase 2 acceptance matrix against a fresh install: this
+-- tenant never had a WhatsApp channel seeded anywhere, so it could never
+-- receive a message. Whatever channel it answered to in earlier live
+-- testing this session was configured by hand through the dashboard, never
+-- captured in a seed file — lost the moment the local database got reset.
+insert into app.channels(id,tenant_id,provider,external_account_id,external_address,status,secret_reference)
+values('0194f001-0000-7000-8000-000000000003','0194f000-0000-7000-8000-000000000003',
+       'whatsapp_cloud','demo-account-barbershop','+570000000003','active','local/demo/barbershop')
+on conflict(id) do nothing;
+
 insert into app.tenant_users(id,tenant_id,user_id,role,status)
 values('0194f000-0000-7000-8000-000000000113','0194f000-0000-7000-8000-000000000003','0194f000-0000-7000-8000-000000000103','admin','active')
 on conflict(tenant_id,user_id) do update set role='admin',status='active',updated_at=now();
@@ -154,6 +164,11 @@ on conflict(id) do update set title=excluded.title,content=excluded.content,stat
 -- ---------------------------------------------------------------------------
 select set_config('app.tenant_id','0194f000-0000-7000-8000-000000000004',true);
 
+insert into app.channels(id,tenant_id,provider,external_account_id,external_address,status,secret_reference)
+values('0194f001-0000-7000-8000-000000000004','0194f000-0000-7000-8000-000000000004',
+       'whatsapp_cloud','demo-account-spa','+570000000004','active','local/demo/spa')
+on conflict(id) do nothing;
+
 insert into app.business_profiles(tenant_id,description,address,phone,business_hours,payment_methods,fulfillment_options)
 values('0194f000-0000-7000-8000-000000000004',
  'Spa urbano enfocado en relajación y cuidado no médico: masajes, rituales faciales y experiencias de bienestar personalizadas.',
@@ -246,6 +261,11 @@ on conflict(id) do update set title=excluded.title,content=excluded.content,stat
 -- Car wash
 -- ---------------------------------------------------------------------------
 select set_config('app.tenant_id','0194f000-0000-7000-8000-000000000005',true);
+
+insert into app.channels(id,tenant_id,provider,external_account_id,external_address,status,secret_reference)
+values('0194f001-0000-7000-8000-000000000005','0194f000-0000-7000-8000-000000000005',
+       'whatsapp_cloud','demo-account-carwash','+570000000005','active','local/demo/carwash')
+on conflict(id) do nothing;
 
 insert into app.business_profiles(tenant_id,description,address,phone,business_hours,payment_methods,fulfillment_options)
 values('0194f000-0000-7000-8000-000000000005',
