@@ -69,9 +69,10 @@ en [decisions.md](decisions.md).
   lavadero, y comparte el mismo código (`appointment-flow.service.ts`) sin
   ninguna rama por tenant, así que el riesgo de que spa se comporte distinto
   es bajo, pero queda como pendiente formal si se quiere cobertura exhaustiva.
-- **Localizaciones administrables** para catálogo/variantes/conocimiento
-  (ningún tenant las tiene — es un hueco de producto real, no de esta
-  matriz; sigue en la hoja de ruta de Fase 2, sin empezar).
+- ~~Localizaciones administrables para catálogo/variantes/conocimiento~~ —
+  **implementado y verificado en vivo** el mismo día (D-086): traducción al
+  inglés opcional para ofertas, entradas de conocimiento y perfil del
+  negocio, con fallback verificado al español cuando no hay traducción.
 - **Comparación de calidad/conversión/latencia/costo por tenant** — no hay
   métricas desglosadas por tenant hoy; también sigue pendiente en Fase 2.
 - Esta matriz es un snapshot verificado hoy (2026-09-02), no una suite

@@ -237,6 +237,14 @@ type BusinessProfile = {
   businessHours: string;
   paymentMethods: string;
   fulfillmentOptions: string;
+  translations: {
+    en: {
+      address: string;
+      businessHours: string;
+      paymentMethods: string;
+      fulfillmentOptions: string;
+    };
+  };
 };
 type CapabilityName =
   "commercial_offerings" | "inventory" | "orders" | "appointments" | "delivery";
@@ -258,6 +266,7 @@ type Offering = {
   offeringType: string;
   durationMinutes: number | null;
   bookingRequired: boolean;
+  translations: { en: { name: string; description: string } };
   variants: {
     id: string;
     name: string;
@@ -266,6 +275,7 @@ type Offering = {
     priceMinor: number;
     currency: string;
     availabilityStatus: string;
+    translations: { en: { name: string } };
   }[];
 };
 type ModifierGroup = {
@@ -291,6 +301,7 @@ type KnowledgePayload = {
     content: string;
     status: string;
     keywords: string[];
+    translations: { en: { title: string; content: string } };
   }[];
   products: Offering[];
   sources: ExternalSource[];
@@ -1504,6 +1515,12 @@ function KnowledgeSettings({
     ...value.profile,
     businessHours: normalizeHours(value.profile.businessHours),
   });
+  const [translationForm, setTranslationForm] = useState({
+    address: value.profile.translations?.en.address ?? "",
+    businessHours: value.profile.translations?.en.businessHours ?? "",
+    paymentMethods: value.profile.translations?.en.paymentMethods ?? "",
+    fulfillmentOptions: value.profile.translations?.en.fulfillmentOptions ?? "",
+  });
   const [capabilities, setCapabilities] = useState<CapabilityName[]>(
     value.capabilities,
   );
@@ -1576,7 +1593,11 @@ function KnowledgeSettings({
         method: "PUT",
         body: JSON.stringify(form),
       });
-      onSaved(form);
+      await api(`/v1/admin/tenants/${tenant}/knowledge/profile/localizations/en`, {
+        method: "PUT",
+        body: JSON.stringify(translationForm),
+      });
+      onSaved({ ...form, translations: { en: translationForm } });
     } catch (x) {
       setError((x as Error).message);
     } finally {
@@ -1745,6 +1766,46 @@ function KnowledgeSettings({
                 />
               </label>
             </div>
+            <details className="translation-fields">
+              <summary>{t("knowledge.englishTranslation")}</summary>
+              <label>
+                {t("knowledge.address")}
+                <input
+                  value={translationForm.address}
+                  onChange={(e) =>
+                    setTranslationForm({ ...translationForm, address: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                {t("knowledge.hours")}
+                <textarea
+                  value={translationForm.businessHours}
+                  onChange={(e) =>
+                    setTranslationForm({ ...translationForm, businessHours: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                {t("knowledge.payments")}
+                <textarea
+                  value={translationForm.paymentMethods}
+                  onChange={(e) =>
+                    setTranslationForm({ ...translationForm, paymentMethods: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                {t("knowledge.fulfillment")}
+                <textarea
+                  value={translationForm.fulfillmentOptions}
+                  onChange={(e) =>
+                    setTranslationForm({ ...translationForm, fulfillmentOptions: e.target.value })
+                  }
+                />
+              </label>
+              <small>{t("knowledge.translationHelp")}</small>
+            </details>
             {error && <div className="form-alert">{error}</div>}
             <div className="knowledge-save">
               <small>{t("knowledge.aiHelp")}</small>
@@ -2524,6 +2585,11 @@ function OfferingModal({
       ? "unavailable"
       : "available") as "available" | "unavailable",
   });
+  const [translation, setTranslation] = useState({
+    name: offering?.translations?.en.name ?? "",
+    description: offering?.translations?.en.description ?? "",
+    variantName: variant?.translations?.en.name ?? "",
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function submit(event: FormEvent) {
@@ -2548,7 +2614,11 @@ function OfferingModal({
         `/v1/admin/tenants/${tenant}/modifier-groups/items/${result.offering.id}`,
         { method: "PUT", body: JSON.stringify({ groupIds: selectedGroupIds }) },
       );
-      onSaved(result.offering);
+      const localized = await api<{ offering: Offering }>(
+        `/v1/admin/tenants/${tenant}/knowledge/offerings/${result.offering.id}/localizations/en`,
+        { method: "PUT", body: JSON.stringify(translation) },
+      );
+      onSaved(localized.offering);
     } catch (x) {
       const message = (x as Error).message;
       setError(message);
@@ -2585,6 +2655,25 @@ function OfferingModal({
               }
             />
           </label>
+          <details className="translation-fields">
+            <summary>{t("knowledge.englishTranslation")}</summary>
+            <input
+              value={translation.name}
+              onChange={(e) => setTranslation({ ...translation, name: e.target.value })}
+              placeholder={t("knowledge.offeringName")}
+            />
+            <textarea
+              value={translation.description}
+              onChange={(e) => setTranslation({ ...translation, description: e.target.value })}
+              placeholder={t("knowledge.offeringDescription")}
+            />
+            <input
+              value={translation.variantName}
+              onChange={(e) => setTranslation({ ...translation, variantName: e.target.value })}
+              placeholder={t("knowledge.variantName")}
+            />
+            <small>{t("knowledge.translationHelp")}</small>
+          </details>
           <div className="modal-two">
             <label>
               {t("knowledge.offeringCategory")}
@@ -2761,6 +2850,8 @@ function PublishedAnswer({
   const [title, setTitle] = useState(entry.title);
   const [content, setContent] = useState(entry.content);
   const [keywords, setKeywords] = useState((entry.keywords ?? []).join(", "));
+  const [titleEn, setTitleEn] = useState(entry.translations?.en.title ?? "");
+  const [contentEn, setContentEn] = useState(entry.translations?.en.content ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function save() {
@@ -2778,7 +2869,11 @@ function PublishedAnswer({
           }),
         },
       );
-      onUpdated(result.entry);
+      const localized = await api<{ entry: KnowledgePayload["entries"][number] }>(
+        `/v1/admin/tenants/${tenant}/knowledge/entries/${entry.id}/localizations/en`,
+        { method: "PUT", body: JSON.stringify({ title: titleEn, content: contentEn }) },
+      );
+      onUpdated({ ...result.entry, translations: localized.entry.translations });
       setEditing(false);
     } catch (x) {
       setError((x as Error).message);
@@ -2820,6 +2915,20 @@ function PublishedAnswer({
             placeholder={t("knowledge.keywordsPlaceholder")}
           />
           <small>{t("knowledge.keywordsHelp")}</small>
+          <details className="translation-fields">
+            <summary>{t("knowledge.englishTranslation")}</summary>
+            <input
+              value={titleEn}
+              onChange={(event) => setTitleEn(event.target.value)}
+              placeholder={t("knowledge.answerTitle")}
+            />
+            <textarea
+              value={contentEn}
+              onChange={(event) => setContentEn(event.target.value)}
+              placeholder={t("knowledge.answerContent")}
+            />
+            <small>{t("knowledge.translationHelp")}</small>
+          </details>
           {error && <small className="error-text">{error}</small>}
           <div className="faq-actions">
             <button
@@ -2840,6 +2949,9 @@ function PublishedAnswer({
             <small className="faq-keywords">
               {t("knowledge.keywordsLabel")}: {entry.keywords.join(", ")}
             </small>
+          )}
+          {entry.translations?.en.title && (
+            <small className="faq-keywords">EN: {entry.translations.en.title}</small>
           )}
           {error && <small className="error-text">{error}</small>}
           {canManage && (

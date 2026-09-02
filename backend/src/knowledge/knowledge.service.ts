@@ -53,9 +53,13 @@ export class KnowledgeService {
         );
       const [
         profile,
+        profileLoc,
         entries,
+        entryLoc,
         offerings,
         variants,
+        variantLoc,
+        offeringLoc,
         sources,
         capabilities,
         calendars,
@@ -66,13 +70,25 @@ export class KnowledgeService {
           `select description,address,phone,business_hours,payment_methods,fulfillment_options from app.business_profiles`,
         ),
         client.query(
+          `select address,business_hours,payment_methods,fulfillment_options from app.business_profile_localizations where locale='en'`,
+        ),
+        client.query(
           `select id,kind,title,content,status,coalesce(keywords,'{}') as keywords from app.knowledge_entries order by title limit 50`,
+        ),
+        client.query(
+          `select knowledge_entry_id,title,content from app.knowledge_entry_localizations where locale='en'`,
         ),
         client.query(
           `select id,name,description,category,status,source_provider,offering_type,duration_minutes,booking_required from app.catalog_items where status<>'archived' order by name limit 100`,
         ),
         client.query(
           `select id,catalog_item_id,name,sku,status,price_minor::text,currency,availability_status from app.item_variants order by created_at`,
+        ),
+        client.query(
+          `select item_variant_id,name from app.item_variant_localizations where locale='en'`,
+        ),
+        client.query(
+          `select catalog_item_id,name,description from app.catalog_item_localizations where locale='en'`,
         ),
         client.query(
           `select id,provider,display_name,status,last_synced_at,last_error_code from app.catalog_sources order by display_name`,
@@ -91,6 +107,10 @@ export class KnowledgeService {
         ),
       ]);
       const value = profile.rows[0] ?? {};
+      const profileEn = profileLoc.rows[0];
+      const entryLocById = new Map(entryLoc.rows.map((row) => [row.knowledge_entry_id, row]));
+      const variantLocById = new Map(variantLoc.rows.map((row) => [row.item_variant_id, row]));
+      const offeringLocById = new Map(offeringLoc.rows.map((row) => [row.catalog_item_id, row]));
       return {
         profile: {
           description: value.description ?? "",
@@ -99,14 +119,36 @@ export class KnowledgeService {
           businessHours: value.business_hours ?? "",
           paymentMethods: value.payment_methods ?? "",
           fulfillmentOptions: value.fulfillment_options ?? "",
+          translations: {
+            en: {
+              address: profileEn?.address ?? "",
+              businessHours: profileEn?.business_hours ?? "",
+              paymentMethods: profileEn?.payment_methods ?? "",
+              fulfillmentOptions: profileEn?.fulfillment_options ?? "",
+            },
+          },
         },
-        entries: entries.rows,
+        entries: entries.rows.map((row) => ({
+          ...row,
+          translations: {
+            en: {
+              title: entryLocById.get(row.id)?.title ?? "",
+              content: entryLocById.get(row.id)?.content ?? "",
+            },
+          },
+        })),
         products: offerings.rows.map((row) => ({
           ...row,
           sourceProvider: row.source_provider,
           offeringType: row.offering_type,
           durationMinutes: row.duration_minutes,
           bookingRequired: row.booking_required,
+          translations: {
+            en: {
+              name: offeringLocById.get(row.id)?.name ?? "",
+              description: offeringLocById.get(row.id)?.description ?? "",
+            },
+          },
           variants: variants.rows
             .filter((variant) => variant.catalog_item_id === row.id)
             .map((variant) => ({
@@ -117,6 +159,9 @@ export class KnowledgeService {
               priceMinor: Number(variant.price_minor),
               currency: variant.currency,
               availabilityStatus: variant.availability_status,
+              translations: {
+                en: { name: variantLocById.get(variant.id)?.name ?? "" },
+              },
             })),
         })),
         sources: sources.rows.map((row) => ({
@@ -228,6 +273,37 @@ export class KnowledgeService {
           input.businessHours,
           input.paymentMethods,
           input.fulfillmentOptions,
+        ],
+      );
+      return { saved: true };
+    });
+  }
+
+  // Fase 2: administrable localizations. English is the only supported
+  // second language today (SupportedLanguage in localization.ts), so this
+  // always targets 'en' — a blank field clears that translation, falling
+  // back to the tenant's default-language (Spanish) content at read time
+  // (see deterministic-reply.service.ts), never showing nothing.
+  saveProfileLocalization(
+    tenantId: string,
+    userId: string,
+    input: { address: string; businessHours: string; paymentMethods: string; fulfillmentOptions: string },
+  ) {
+    return this.db.withTenantTransaction(tenantId, async (client) => {
+      if (!(await this.canManage(client, userId)))
+        throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage business knowledge");
+      await client.query(
+        `insert into app.business_profile_localizations(tenant_id,locale,address,business_hours,payment_methods,fulfillment_options)
+         values(app.current_tenant_id(),'en',$1,$2,$3,$4)
+         on conflict(tenant_id,locale) do update set
+           address=excluded.address,business_hours=excluded.business_hours,
+           payment_methods=excluded.payment_methods,fulfillment_options=excluded.fulfillment_options,
+           updated_at=now()`,
+        [
+          input.address || null,
+          input.businessHours || null,
+          input.paymentMethods || null,
+          input.fulfillmentOptions || null,
         ],
       );
       return { saved: true };
@@ -366,6 +442,36 @@ export class KnowledgeService {
       return { offering: await this.readOffering(client, offeringId) };
     });
   }
+  saveOfferingLocalization(
+    tenantId: string,
+    userId: string,
+    offeringId: string,
+    input: { name: string; description: string; variantName: string },
+  ) {
+    return this.db.withTenantTransaction(tenantId, async (client) => {
+      if (!(await this.canManage(client, userId)))
+        throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage offerings");
+      await client.query(
+        `insert into app.catalog_item_localizations(tenant_id,catalog_item_id,locale,name,description)
+         values(app.current_tenant_id(),$1,'en',$2,$3)
+         on conflict(tenant_id,catalog_item_id,locale) do update set
+           name=excluded.name,description=excluded.description,updated_at=now()`,
+        [offeringId, input.name || null, input.description || null],
+      );
+      const variant = await client.query<{ id: string }>(
+        `select id from app.item_variants where catalog_item_id=$1 and status<>'archived' order by created_at limit 1`,
+        [offeringId],
+      );
+      if (variant.rows[0])
+        await client.query(
+          `insert into app.item_variant_localizations(tenant_id,item_variant_id,locale,name)
+           values(app.current_tenant_id(),$1,'en',$2)
+           on conflict(tenant_id,item_variant_id,locale) do update set name=excluded.name,updated_at=now()`,
+          [variant.rows[0].id, input.variantName || null],
+        );
+      return { offering: await this.readOffering(client, offeringId) };
+    });
+  }
   archiveOffering(tenantId: string, userId: string, offeringId: string) {
     return this.db.withTenantTransaction(tenantId, async (client) => {
       if (!(await this.canManage(client, userId)))
@@ -427,8 +533,42 @@ export class KnowledgeService {
           "KNOWLEDGE_ENTRY_NOT_FOUND",
           "Published answer was not found",
         );
-      return { entry: result.rows[0] };
+      return { entry: { ...result.rows[0], translations: await this.entryTranslations(client, entryId) } };
     });
+  }
+  saveEntryLocalization(
+    tenantId: string,
+    userId: string,
+    entryId: string,
+    input: { title: string; content: string },
+  ) {
+    return this.db.withTenantTransaction(tenantId, async (client) => {
+      if (!(await this.canManage(client, userId)))
+        throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage business knowledge");
+      await client.query(
+        `insert into app.knowledge_entry_localizations(tenant_id,knowledge_entry_id,locale,title,content)
+         values(app.current_tenant_id(),$1,'en',$2,$3)
+         on conflict(tenant_id,knowledge_entry_id,locale) do update set
+           title=excluded.title,content=excluded.content,updated_at=now()`,
+        [entryId, input.title || null, input.content || null],
+      );
+      const entry = await client.query(
+        `select id,kind,title,content,status,coalesce(keywords,'{}') as keywords from app.knowledge_entries where id=$1`,
+        [entryId],
+      );
+      if (!entry.rows[0])
+        throw notFound("KNOWLEDGE_ENTRY_NOT_FOUND", "Published answer was not found");
+      return { entry: { ...entry.rows[0], translations: await this.entryTranslations(client, entryId) } };
+    });
+  }
+  private async entryTranslations(client: PoolClient, entryId: string) {
+    const row = (
+      await client.query<{ title: string | null; content: string | null }>(
+        `select title,content from app.knowledge_entry_localizations where knowledge_entry_id=$1 and locale='en'`,
+        [entryId],
+      )
+    ).rows[0];
+    return { en: { title: row?.title ?? "", content: row?.content ?? "" } };
   }
 
   archiveEntry(tenantId: string, userId: string, entryId: string) {
@@ -471,12 +611,29 @@ export class KnowledgeService {
         [id],
       )
     ).rows;
+    const itemLoc = (
+      await client.query<{ name: string | null; description: string | null }>(
+        `select name,description from app.catalog_item_localizations where catalog_item_id=$1 and locale='en'`,
+        [id],
+      )
+    ).rows[0];
+    const variantLoc = new Map(
+      (
+        await client.query<{ item_variant_id: string; name: string | null }>(
+          `select item_variant_id,name from app.item_variant_localizations where item_variant_id=any($1) and locale='en'`,
+          [variants.map((variant: { id: string }) => variant.id)],
+        )
+      ).rows.map((row) => [row.item_variant_id, row.name]),
+    );
     return {
       ...item,
       sourceProvider: item.source_provider,
       offeringType: item.offering_type,
       durationMinutes: item.duration_minutes,
       bookingRequired: item.booking_required,
+      translations: {
+        en: { name: itemLoc?.name ?? "", description: itemLoc?.description ?? "" },
+      },
       variants: variants.map((variant: {
         id: string; name: string; sku: string | null; status: string;
         price_minor: string; currency: string; availability_status: string;
@@ -488,6 +645,7 @@ export class KnowledgeService {
         priceMinor: Number(variant.price_minor),
         currency: variant.currency,
         availabilityStatus: variant.availability_status,
+        translations: { en: { name: variantLoc.get(variant.id) ?? "" } },
       })),
     };
   }

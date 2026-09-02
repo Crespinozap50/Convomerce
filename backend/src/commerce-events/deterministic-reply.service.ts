@@ -101,7 +101,7 @@ export class DeterministicReplyService {
       // matrix). A specific title/keyword match always wins over the
       // generic catalog/price/profile dispatch; with no match, each intent
       // falls through to its normal handling exactly as before.
-      const rows = await this.publishedKnowledgeEntries(client);
+      const rows = await this.publishedKnowledgeEntries(client, bot.locale);
       const specific = this.findSpecificKnowledgeEntry(rows, message);
       if (specific) {
         return { intent, handoff: false, sources: [`knowledge_entry:${specific.id}`], body: specific.content };
@@ -115,7 +115,7 @@ export class DeterministicReplyService {
     // universal fixed intents above — is answered purely from this tenant's
     // own published knowledge_entries (title or per-entry keywords), never
     // from a shared vertical-specific vocabulary. See D-078.
-    return this.knowledgeReply(client, message, intent, bot.fallbackMessage);
+    return this.knowledgeReply(client, message, intent, bot.fallbackMessage, bot.locale);
   }
 
   private async offeringReply(
@@ -126,13 +126,20 @@ export class DeterministicReplyService {
     locale: ConversationLocale,
   ): Promise<DeterministicReply> {
     const result = await client.query<OfferingRow>(
-      `select item.id::text as item_id,variant.id::text as variant_id,item.name,item.category,
-              variant.name as variant_name,variant.price_minor::text,variant.currency
+      `select item.id::text as item_id,variant.id::text as variant_id,
+              coalesce(item_loc.name,item.name) as name,item.category,
+              coalesce(variant_loc.name,variant.name) as variant_name,
+              variant.price_minor::text,variant.currency
          from app.catalog_items item
          join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
+         left join app.catalog_item_localizations item_loc
+           on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$1
+         left join app.item_variant_localizations variant_loc
+           on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$1
         where item.status='active' and variant.status='active' and variant.availability_status='available'
           and variant.availability_status in ('available','unknown')
         order by item.category,item.name,variant.price_minor`,
+      [languageFor(locale)],
     );
     if (result.rowCount === 0) {
       return { intent, handoff: false, sources: [], body: copy.menuUnavailable };
@@ -227,9 +234,17 @@ export class DeterministicReplyService {
     return { intent, handoff: false, sources: body ? ['business_profile'] : [], body: body || fallback };
   }
 
-  private async publishedKnowledgeEntries(client: PoolClient) {
+  private async publishedKnowledgeEntries(client: PoolClient, locale: ConversationLocale) {
     const result = await client.query<{ id: string; title: string; content: string; keywords: string[] }>(
-      `select id::text,title,content,coalesce(keywords,'{}') as keywords from app.knowledge_entries where status='published' order by title`,
+      `select entry.id::text,
+              coalesce(loc.title,entry.title) as title,
+              coalesce(loc.content,entry.content) as content,
+              coalesce(entry.keywords,'{}') as keywords
+         from app.knowledge_entries entry
+         left join app.knowledge_entry_localizations loc
+           on loc.tenant_id=entry.tenant_id and loc.knowledge_entry_id=entry.id and loc.locale=$1
+        where entry.status='published' order by entry.title`,
+      [languageFor(locale)],
     );
     return result.rows;
   }
@@ -279,8 +294,8 @@ export class DeterministicReplyService {
       )[0]?.row;
   }
 
-  private async knowledgeReply(client: PoolClient, message: string, intent: ReplyIntent, fallback: string): Promise<DeterministicReply> {
-    const rows = await this.publishedKnowledgeEntries(client);
+  private async knowledgeReply(client: PoolClient, message: string, intent: ReplyIntent, fallback: string, locale: ConversationLocale): Promise<DeterministicReply> {
+    const rows = await this.publishedKnowledgeEntries(client, locale);
     const entry = this.findSpecificKnowledgeEntry(rows, message);
     return { intent, handoff: false, sources: entry ? [`knowledge_entry:${entry.id}`] : [], body: entry?.content ?? fallback };
   }

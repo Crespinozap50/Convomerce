@@ -520,6 +520,9 @@ export default {
     keywordsPlaceholder: "Palabras clave adicionales, separadas por comas (opcional)",
     keywordsHelp:
       "Otras formas en que un cliente podría preguntar esto, además del título. Ej.: garantia, dañado, mal uso.",
+    englishTranslation: "Traducción al inglés (opcional)",
+    translationHelp:
+      "Si un cliente escribe en inglés, se muestra esta versión en su lugar. Déjalo en blanco para responder siempre en español.",
     publishAnswer: "Publicar respuesta",
     faqTitle: "Respuestas publicadas",
     faqHelp: "Preguntas frecuentes y políticas existentes.",

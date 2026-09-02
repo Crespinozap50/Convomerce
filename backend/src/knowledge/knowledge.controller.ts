@@ -42,6 +42,18 @@ export class KnowledgeController {
     valid(id);
     return this.service.save(id, request.actor.userId, parseProfile(body));
   }
+  @Put("profile/localizations/en") saveProfileLocalization(
+    @Param("tenantId") id: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    valid(id);
+    return this.service.saveProfileLocalization(
+      id,
+      request.actor.userId,
+      parseProfileLocalization(body),
+    );
+  }
   @Put("capabilities") saveCapabilities(
     @Param("tenantId") id: string,
     @Body() body: unknown,
@@ -81,6 +93,21 @@ export class KnowledgeController {
       parseOffering(body),
     );
   }
+  @Put("offerings/:offeringId/localizations/en") saveOfferingLocalization(
+    @Param("tenantId") id: string,
+    @Param("offeringId") offeringId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    valid(id);
+    valid(offeringId);
+    return this.service.saveOfferingLocalization(
+      id,
+      request.actor.userId,
+      offeringId,
+      parseOfferingLocalization(body),
+    );
+  }
   @Delete("offerings/:offeringId") archiveOffering(
     @Param("tenantId") id: string,
     @Param("offeringId") offeringId: string,
@@ -118,6 +145,21 @@ export class KnowledgeController {
       request.actor.userId,
       entryId,
       parseEntry(body),
+    );
+  }
+  @Put("entries/:entryId/localizations/en") saveEntryLocalization(
+    @Param("tenantId") id: string,
+    @Param("entryId") entryId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    valid(id);
+    valid(entryId);
+    return this.service.saveEntryLocalization(
+      id,
+      request.actor.userId,
+      entryId,
+      parseEntryLocalization(body),
     );
   }
   @Delete("entries/:entryId") archiveEntry(
@@ -192,6 +234,30 @@ function parseReview(body: unknown) {
   if (value.action === "publish" && (!title || !content))
     throw badRequest("VALIDATION_ERROR", "Title and content are required");
   return { action: value.action as "dismiss" | "publish", title, content, keywords: parseKeywords(value.keywords) };
+}
+function parseProfileLocalization(body: unknown) {
+  const value = body as Record<string, unknown>;
+  const string = (item: unknown) => (typeof item === "string" ? item.trim() : "");
+  return {
+    address: string(value?.address),
+    businessHours: string(value?.businessHours),
+    paymentMethods: string(value?.paymentMethods),
+    fulfillmentOptions: string(value?.fulfillmentOptions),
+  };
+}
+function parseOfferingLocalization(body: unknown) {
+  const value = body as Record<string, unknown>;
+  const string = (item: unknown) => (typeof item === "string" ? item.trim() : "");
+  return {
+    name: string(value?.name),
+    description: string(value?.description),
+    variantName: string(value?.variantName),
+  };
+}
+function parseEntryLocalization(body: unknown) {
+  const value = body as Record<string, unknown>;
+  const string = (item: unknown) => (typeof item === "string" ? item.trim() : "");
+  return { title: string(value?.title), content: string(value?.content) };
 }
 function parseEntry(body: unknown) {
   const value = body as Record<string, unknown>;

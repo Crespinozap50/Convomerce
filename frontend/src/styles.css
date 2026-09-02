@@ -1583,6 +1583,25 @@ header h1 {
   gap: 10px;
   padding-top: 14px;
 }
+.translation-fields {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px dashed var(--control-border);
+  border-radius: 8px;
+}
+.translation-fields[open] {
+  padding-bottom: 14px;
+}
+.translation-fields summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.translation-fields input,
+.translation-fields textarea {
+  margin-top: 6px;
+}
 .faq-editor textarea {
   min-height: 110px;
 }

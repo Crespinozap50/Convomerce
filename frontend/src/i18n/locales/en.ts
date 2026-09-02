@@ -515,6 +515,9 @@ export default {
     keywordsPlaceholder: "Extra keywords, comma-separated (optional)",
     keywordsHelp:
       "Other ways a customer might ask this, beyond the title. E.g.: warranty, damaged, misuse.",
+    englishTranslation: "English translation (optional)",
+    translationHelp:
+      "Shown instead when a customer writes in English. Leave blank to always answer in Spanish.",
     publishAnswer: "Publish answer",
     faqTitle: "Published answers",
     faqHelp: "Existing FAQs and business policies.",
