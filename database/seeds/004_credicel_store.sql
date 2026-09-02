@@ -21,15 +21,30 @@ on conflict(user_id) do nothing;
 
 select set_config('app.tenant_id','0194f000-0000-7000-8000-000000000002',true);
 
--- 001_demo_tenants.sql seeded this tenant with orders disabled, which meant
--- conversation-decision.engine.ts's `if(capabilities.has('orders'))` gate
--- never ran CommercialFlowService.resolve for it: tapping a catalog item
--- fell straight through to the knowledge/fallback path with no
--- acknowledgment of the selection. CrediCel Store is a real product
--- storefront (celulares, portátiles, accesorios), so it should support the
--- same order flow as Santos Tacos.
-update app.tenant_capabilities set enabled=true,updated_at=now()
-where tenant_id='0194f000-0000-7000-8000-000000000002' and capability='orders';
+-- This used to be an UPDATE-only statement, assuming migration
+-- 024_business_capabilities_and_scheduling.sql's own backfill had already
+-- given every tenant a full set of (disabled-by-default) capability rows to
+-- flip 'orders' on. That backfill runs from app.tenants *at migration
+-- time* — but this tenant is only ever created by a seed, which runs after
+-- every migration, so on a freshly migrated + seeded database the UPDATE
+-- matched zero rows and this tenant ended up with NO capability rows at
+-- all (not even the disabled ones), silently breaking its whole order
+-- flow. Found live running the Fase 2 acceptance matrix against a fresh
+-- install. Replaced with the same full INSERT ... ON CONFLICT pattern
+-- seeds/002 already uses for the restaurant tenant, so this tenant is
+-- self-contained and doesn't depend on migration-time backfill timing.
+-- CrediCel Store is a real product storefront (celulares, portátiles,
+-- accesorios), so it supports the same order flow as Santos Tacos; no
+-- delivery capability, matching what the Fase 2 portability test verified
+-- live (D-075): pickup-only fulfillment for this tenant is deliberate.
+insert into app.tenant_capabilities(tenant_id,capability,enabled)
+values
+ ('0194f000-0000-7000-8000-000000000002','commercial_offerings',true),
+ ('0194f000-0000-7000-8000-000000000002','inventory',false),
+ ('0194f000-0000-7000-8000-000000000002','orders',true),
+ ('0194f000-0000-7000-8000-000000000002','appointments',false),
+ ('0194f000-0000-7000-8000-000000000002','delivery',false)
+on conflict(tenant_id,capability) do update set enabled=excluded.enabled,updated_at=now();
 
 insert into app.tenant_users(id,tenant_id,user_id,role,status)
 values('0194f000-0000-7000-8000-000000000114','0194f000-0000-7000-8000-000000000002','0194f000-0000-7000-8000-000000000104','admin','active')
