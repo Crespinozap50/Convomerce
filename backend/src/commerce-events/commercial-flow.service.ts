@@ -351,12 +351,13 @@ export class CommercialFlowService {
         business: input.businessName ?? "Commerce",
       };
       // Shows the actual catalog as a tappable list instead of just telling
-      // the customer to type "ver menú" — falls back to the plain text
-      // prompt only when there's nothing to list or it exceeds WhatsApp's
-      // 10-row limit (see catalogChoiceReply).
+      // the customer to type "ver menú" — falls back to a "Ver menú" button
+      // (never bare text asking them to type a command) only when there's
+      // nothing to list or it exceeds WhatsApp's 10-row limit (see
+      // catalogChoiceReply).
       return (
         this.catalogChoiceReply(input.locale, await this.catalogItems(client), key, values) ??
-        this.localizedReply(input.locale, key, values)
+        this.catalogButtonReply(input.locale, key, values)
       );
     }
     const requestId = uuidv7(),
@@ -1358,6 +1359,33 @@ export class CommercialFlowService {
           description: this.truncate(variantLabel ? `${variantLabel} · ${price}` : price, 72),
         };
       }),
+    };
+    return {
+      ...this.reply(this.copy(locale, bodyKey, values)),
+      responsePlan: {
+        kind: "verified_content",
+        body: this.copy(locale, bodyKey, values),
+        interactive,
+      },
+    };
+  }
+  // Final fallback when catalogChoiceReply() can't show the list itself
+  // (empty catalog, or over WhatsApp's 10-row limit) — a tappable "Ver
+  // menú" button instead of telling the customer to type a command in
+  // quotes. Tapping it reconstructs as its own title text, which already
+  // matches the existing "catalog" pattern rule the same as if the
+  // customer had typed it, so no new dispatch plumbing is needed. Found
+  // live: a customer would never be told to *type* something when every
+  // other prompt in this flow already answers with real buttons.
+  private catalogButtonReply(
+    locale: Locale,
+    bodyKey: CommercialCopyKey,
+    values: Record<string, string | number> = {},
+  ): DeterministicReply {
+    const interactive: InteractiveMessage = {
+      type: "buttons",
+      body: "",
+      options: [{ id: "cart:view_catalog", title: this.copy(locale, "viewMenuButton") }],
     };
     return {
       ...this.reply(this.copy(locale, bodyKey, values)),

@@ -646,10 +646,16 @@ describe("CommercialFlowService", () => {
     expect(reply?.body).toBe(
       "¡Hola! Soy Santos, el asistente virtual de Santos Tacos Robledo. ¿Qué producto deseas pedir?",
     );
+    // Empty catalog (mocked) falls back to a tappable "Ver menú" button —
+    // never bare text asking the customer to type a command.
     expect(reply?.responsePlan).toEqual({
-      kind: "localized_template",
-      template: { namespace: "commercial", key: "greetingItem" },
-      values: { assistant: "Santos", business: "Santos Tacos Robledo" },
+      kind: "verified_content",
+      body: "¡Hola! Soy Santos, el asistente virtual de Santos Tacos Robledo. ¿Qué producto deseas pedir?",
+      interactive: {
+        type: "buttons",
+        body: "",
+        options: [{ id: "cart:view_catalog", title: "Ver menú" }],
+      },
     });
   });
 
@@ -663,11 +669,13 @@ describe("CommercialFlowService", () => {
       understanding: await understand(message),
     });
 
-    expect(reply?.body).toBe(
-      'No encontré ese producto. Puedes escribir "ver menú" para consultar las opciones.',
-    );
-    expect(reply?.responsePlan).toMatchObject({
-      template: { namespace: "commercial", key: "itemUnknown" },
+    expect(reply?.body).toBe("No encontré ese producto. Estas son nuestras opciones:");
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "buttons",
+      body: "",
+      options: [{ id: "cart:view_catalog", title: "Ver menú" }],
     });
   });
 
@@ -693,9 +701,7 @@ describe("CommercialFlowService", () => {
       understanding: await understand(message),
     });
 
-    expect(reply?.body).toBe(
-      'No encontré ese producto. Puedes escribir "ver menú" para consultar las opciones.',
-    );
+    expect(reply?.body).toBe("No encontré ese producto. Estas son nuestras opciones:");
     expect(
       reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
     ).toEqual({
