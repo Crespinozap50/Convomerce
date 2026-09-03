@@ -11,4 +11,5 @@ export interface UnderstoodFlowInput {
   businessName?: string;
   interactiveSelectionId?: string;
   understanding: ConversationUnderstanding;
+  timezone?: string;
 }

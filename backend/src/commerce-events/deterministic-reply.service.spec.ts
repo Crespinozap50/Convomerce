@@ -57,7 +57,7 @@ describe('DeterministicReplyService', () => {
     const service = new DeterministicReplyService();
     const reply = await service.resolve(client as never, 'muéstrame el menú', {
       locale: 'es',
-      welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.intent).toBe('menu');
     expect(reply.interactive).toBeUndefined();
@@ -79,7 +79,7 @@ describe('DeterministicReplyService', () => {
         }),
     };
     const reply = await new DeterministicReplyService().resolve(client as never, 'muéstrame el menú', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.interactive).toEqual({
       type: 'list',
@@ -108,7 +108,7 @@ describe('DeterministicReplyService', () => {
         }),
     };
     const reply = await new DeterministicReplyService().resolve(client as never, 'muéstrame el menú', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toBe('Esta es nuestra oferta disponible:');
     expect(reply.interactive?.options).toHaveLength(2);
@@ -119,7 +119,7 @@ describe('DeterministicReplyService', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValue({ rowCount: 1, rows: [{ item_id: 'item-1', variant_id: 'variant-1', name: 'Tacos de birria', category: 'Tacos', variant_name: 'Orden', price_minor: '2290000', currency: 'COP' }] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿cuánto cuesta la birria?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.intent).toBe('price');
     expect(reply.interactive).toBeUndefined();
@@ -132,7 +132,7 @@ describe('DeterministicReplyService', () => {
     const service = new DeterministicReplyService();
     const reply = await service.resolve(client as never, '¿cuánto cuesta la hamburguesa?', {
       locale: 'es',
-      welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toContain('¿De cuál producto');
     expect(reply.sources).toEqual([]);
@@ -146,7 +146,7 @@ describe('DeterministicReplyService', () => {
         { item_id: 'item-2', name: 'Tacos de birria', category: 'Tacos', variant_name: 'Orden', price_minor: '2290000', currency: 'COP' },
       ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Cuánto cuestan los tacos de birria?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toContain('Tacos de birria');
     expect(reply.body).not.toContain('Tacos al pastor');
@@ -162,7 +162,7 @@ describe('DeterministicReplyService', () => {
         { item_id: 'item-3', name: 'Agua fresca', category: 'Bebidas', variant_name: 'Vaso', price_minor: '700000', currency: 'COP' },
       ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Qué tacos tienen de birria?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     // The filtered match narrows down to a single row, so it's shown via
     // the tappable list (not the body text, which is just the heading).
@@ -176,7 +176,7 @@ describe('DeterministicReplyService', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValue({ rows: [{ address: 'Calle 65 # 88-20, Robledo, Medellín' }] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Dónde quedan?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply).toEqual(expect.objectContaining({ intent: 'location', body: 'Calle 65 # 88-20, Robledo, Medellín', sources: ['business_profile'] }));
   });
@@ -196,7 +196,7 @@ describe('DeterministicReplyService', () => {
         locale: 'en',
         welcomeMessage: 'Hello',
         fallbackMessage: 'Sorry',
-        handoffKeywords: [],
+        handoffKeywords: [], timezone: 'UTC',
       },
     );
     expect(reply.body).toContain('Tuesday through Thursday');
@@ -212,7 +212,7 @@ describe('DeterministicReplyService', () => {
       { id: 'faq-1', title: '¿Cuál taco no tiene gluten?', content: 'El taco de camarón es libre de gluten.' },
     ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Cuál taco no tiene gluten?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toBe('El taco de camarón es libre de gluten.');
     expect(reply.sources).toEqual(['knowledge_entry:faq-1']);
@@ -224,7 +224,7 @@ describe('DeterministicReplyService', () => {
       { id: 'faq-1', title: '¿Cuál taco no tiene gluten?', content: 'El taco de camarón es libre de gluten.' },
     ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, 'Tengo una alergia alimentaria', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toBe('La cocina manipula gluten y otros alérgenos.');
     expect(reply.sources).toEqual(['knowledge_entry:policy-1']);
@@ -236,7 +236,7 @@ describe('DeterministicReplyService', () => {
       { id: 'spa-policy-1', title: 'Llegada a la cita', content: 'Llega 15 minutos antes.' },
     ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Qué debo llevar?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toBe('Te recomendamos ropa cómoda.');
     expect(reply.sources).toEqual(['knowledge_entry:spa-faq-1']);
@@ -252,7 +252,7 @@ describe('DeterministicReplyService', () => {
       { id: 'warranty-1', title: 'Garantía', content: 'Todos los equipos tienen 12 meses de garantía.' },
     ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Cuál es la garantía?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toBe('Todos los equipos tienen 12 meses de garantía.');
     expect(reply.sources).toEqual(['knowledge_entry:warranty-1']);
@@ -269,7 +269,7 @@ describe('DeterministicReplyService', () => {
         { id: 'warranty-1', title: 'Garantía', content: 'Todos los equipos tienen 12 meses de garantía.' },
       ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Los productos vienen con garantía?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toBe('Todos los equipos tienen 12 meses de garantía.');
     expect(reply.sources).toEqual(['knowledge_entry:warranty-1']);
@@ -291,7 +291,7 @@ describe('DeterministicReplyService', () => {
         { id: 'kids-1', title: '¿Atienden niños?', content: 'Sí, ofrecemos corte infantil para niños de 4 a 12 años acompañados de un adulto.' },
       ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Atienden niños?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toBe('Sí, ofrecemos corte infantil para niños de 4 a 12 años acompañados de un adulto.');
     expect(reply.sources).toEqual(['knowledge_entry:kids-1']);
@@ -303,7 +303,7 @@ describe('DeterministicReplyService', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValue({ rows: [{ business_hours: 'Lunes a viernes de 9:00 a. m. a 7:00 p. m.' }] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿A qué hora abren?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply).toEqual(expect.objectContaining({
       intent: 'hours', body: 'Lunes a viernes de 9:00 a. m. a 7:00 p. m.', sources: ['business_profile'],
@@ -322,7 +322,7 @@ describe('DeterministicReplyService', () => {
         { item_id: 'item-1', variant_id: 'variant-1', name: 'Tacos al pastor', category: 'Tacos', variant_name: 'Orden de 3 tacos', price_minor: '1890000', currency: 'COP' },
       ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Qué productos tienen?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.intent).toBe('menu');
     expect(reply.sources).toEqual(['catalog_item:item-1']);
@@ -337,7 +337,7 @@ describe('DeterministicReplyService', () => {
       { id: 'wash-policy-1', title: 'Objetos de valor', content: 'Retira objetos antes de entregar el vehículo.' },
     ] }) };
     const reply = await new DeterministicReplyService().resolve(client as never, '¿Cuánto tarda una camioneta?', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [],
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toContain('60 y 75 minutos');
     expect(reply.sources).toEqual(['knowledge_entry:wash-faq-1']);
@@ -346,7 +346,7 @@ describe('DeterministicReplyService', () => {
   it('uses English system copy when the bot locale is English', async () => {
     const client = { query: jest.fn() };
     const reply = await new DeterministicReplyService().resolve(client as never, 'I need a human', {
-      locale: 'en', welcomeMessage: 'Hello', fallbackMessage: 'Sorry', handoffKeywords: ['human'],
+      locale: 'en', welcomeMessage: 'Hello', fallbackMessage: 'Sorry', handoffKeywords: ['human'], timezone: 'UTC',
     });
     expect(reply.body).toBe('Understood. A person will continue this conversation.');
   });
@@ -354,7 +354,7 @@ describe('DeterministicReplyService', () => {
   it('greets a known customer by first name', async () => {
     const client = { query: jest.fn() };
     const reply = await new DeterministicReplyService().resolve(client as never, 'Hola', {
-      locale: 'es', welcomeMessage: '¡Hola! Soy el asistente del negocio.', fallbackMessage: 'No sé', handoffKeywords: [], customerName: 'Carlos Espinoza',
+      locale: 'es', welcomeMessage: '¡Hola! Soy el asistente del negocio.', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC', customerName: 'Carlos Espinoza',
     });
     expect(reply.body).toBe('¡Hola, Carlos! Soy el asistente del negocio.');
   });

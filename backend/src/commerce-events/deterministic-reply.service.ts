@@ -39,6 +39,7 @@ export interface BotCopy {
   fallbackMessage: string;
   handoffKeywords: string[];
   customerName?: string | null;
+  timezone: string;
 }
 
 interface OfferingRow {
@@ -107,7 +108,7 @@ export class DeterministicReplyService {
         return { intent, handoff: false, sources: [`knowledge_entry:${specific.id}`], body: specific.content };
       }
       if (intent === 'menu' || intent === 'price') {
-        return this.offeringReply(client, message, intent, copy, bot.locale);
+        return this.offeringReply(client, message, intent, copy, bot.locale, bot.timezone);
       }
       return this.profileReply(client, intent, bot.fallbackMessage, bot.locale);
     }
@@ -124,7 +125,14 @@ export class DeterministicReplyService {
     intent: 'menu' | 'price',
     copy: { menuUnavailable: string; productQuestion: string; menuHeading: string; priceHeading: string; menuButtonLabel: string },
     locale: ConversationLocale,
+    timezone: string,
   ): Promise<DeterministicReply> {
+    // Same time-window rule as CommercialFlowService.catalogItems() (D-097)
+    // — an item outside its daily window (e.g. a lunch-only dish asked
+    // about after lunch hours) is excluded from "ver menú" and price
+    // lookups exactly the same as it is from the order flow, so a customer
+    // can never see or get quoted something the kitchen isn't making right
+    // now.
     const result = await client.query<OfferingRow>(
       `select item.id::text as item_id,variant.id::text as variant_id,
               coalesce(item_loc.name,item.name) as name,item.category,
@@ -138,8 +146,10 @@ export class DeterministicReplyService {
            on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$1
         where item.status='active' and variant.status='active' and variant.availability_status='available'
           and variant.availability_status in ('available','unknown')
+          and (item.available_from_time is null or item.available_until_time is null
+               or (now() at time zone $2)::time between item.available_from_time and item.available_until_time)
         order by item.category,item.name,variant.price_minor`,
-      [languageFor(locale)],
+      [languageFor(locale), timezone],
     );
     if (result.rowCount === 0) {
       return { intent, handoff: false, sources: [], body: copy.menuUnavailable };

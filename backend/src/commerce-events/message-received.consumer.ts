@@ -187,6 +187,7 @@ export class MessageReceivedConsumer {
           businessName: bot?.business_name ?? "Commerce",
           interactiveSelectionId:
             message.rows[0].interactive_selection_id ?? undefined,
+          timezone: bot?.timezone ?? "UTC",
           understanding,
         };
         const decision = await this.decisions.decide(client, flowInput, {
@@ -197,6 +198,7 @@ export class MessageReceivedConsumer {
             bot?.fallback_message ?? catalogFor("en").bot.defaultFallback,
           handoffKeywords: bot?.handoff_keywords ?? [],
           customerName: plausibleDisplayName,
+          timezone: bot?.timezone ?? "UTC",
         });
         const deterministicResponse = this.responseComposer.compose(
           decision.responsePlan,

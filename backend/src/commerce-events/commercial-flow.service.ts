@@ -245,7 +245,7 @@ export class CommercialFlowService {
     // resolve to a distinct, unambiguous catalog item — that's a strong
     // enough signal of ordering intent on its own, regardless of what the
     // rest of the message also mentions.
-    const multi = await this.matchItemMentions(client, input.body);
+    const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC");
     if (multi) {
       const requestId = uuidv7(),
         flowId = uuidv7();
@@ -370,7 +370,7 @@ export class CommercialFlowService {
       // nothing to list or it exceeds WhatsApp's 10-row limit (see
       // catalogChoiceReply).
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client), key, values) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC"), key, values) ??
         this.catalogButtonReply(input.locale, key, values)
       );
     }
@@ -430,7 +430,7 @@ export class CommercialFlowService {
         returnToCart: true,
       });
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client)) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC")) ??
         this.localizedReply(input.locale, "item")
       );
     }
@@ -518,7 +518,7 @@ export class CommercialFlowService {
       );
       await this.step(client, flow.id, "selecting_item", { replaceItem: true });
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client)) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC")) ??
         this.localizedReply(input.locale, "item")
       );
     }
@@ -609,7 +609,7 @@ export class CommercialFlowService {
       replaceItemId: match.variant_id,
     });
     return (
-      this.catalogChoiceReply(input.locale, await this.catalogItems(client)) ??
+      this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC")) ??
       this.localizedReply(input.locale, "item")
     );
   }
@@ -664,7 +664,7 @@ export class CommercialFlowService {
     // batch of new ones — multi-item extraction doesn't apply there.
     const multi =
       flow.context.replaceItem !== true
-        ? await this.matchItemMentions(client, input.body)
+        ? await this.matchItemMentions(client, input.body, input.timezone ?? "UTC")
         : null;
     if (multi) {
       for (const { item, quantity } of multi.matches) {
@@ -710,11 +710,11 @@ export class CommercialFlowService {
     if (affirmative) {
       await this.step(client, flow.id, "selecting_item", {});
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client)) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC")) ??
         this.localizedReply(input.locale, "item")
       );
     }
-    const multi = await this.matchItemMentions(client, input.body);
+    const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC");
     if (multi) {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, flow.commercial_request_id, item, quantity);
@@ -1133,7 +1133,7 @@ export class CommercialFlowService {
     client: PoolClient,
     input: UnderstoodFlowInput,
   ): Promise<{ match: Item | null; tied: Item[] }> {
-    const rows = await this.catalogItems(client);
+    const rows = await this.catalogItems(client, input.timezone ?? "UTC");
     // Tapping a row from catalogChoiceReply()/the "Ver menú" list already
     // identifies one exact variant unambiguously (its id IS the
     // variant_id) — but the tap gets reprocessed as a normal inbound
@@ -1151,9 +1151,24 @@ export class CommercialFlowService {
     if (direct) return { match: direct, tied: [] };
     return this.scoreCandidates(rows, input);
   }
-  private async catalogItems(client: PoolClient): Promise<Item[]> {
+  // A null time window means always available (every item before D-097, and
+  // most items still) — an item with both bounds set is only offered while
+  // the tenant's local clock (its own timezone, not server/UTC time) falls
+  // inside them, e.g. a lunch-only dish outside lunch hours. Outside its
+  // window an item is excluded here entirely — the same as it not existing
+  // in the catalog right now — rather than matched-but-refused, so a
+  // customer asking for it gets the same "not found, here's what we do
+  // have" reply as any other nonexistent product, always showing only what
+  // the kitchen can actually make at this moment.
+  private async catalogItems(client: PoolClient, timezone: string): Promise<Item[]> {
     const result = await client.query<Item>(
-      `select item.id item_id,variant.id variant_id,item.name,variant.name variant_name,variant.price_minor::text,variant.currency from app.catalog_items item join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id where item.status='active' and variant.status='active' and variant.availability_status='available' order by item.name`,
+      `select item.id item_id,variant.id variant_id,item.name,variant.name variant_name,variant.price_minor::text,variant.currency
+       from app.catalog_items item join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
+       where item.status='active' and variant.status='active' and variant.availability_status='available'
+         and (item.available_from_time is null or item.available_until_time is null
+              or (now() at time zone $1)::time between item.available_from_time and item.available_until_time)
+       order by item.name`,
+      [timezone],
     );
     return result.rows;
   }
@@ -1265,10 +1280,11 @@ export class CommercialFlowService {
   private async matchItemMentions(
     client: PoolClient,
     message: string,
+    timezone: string,
   ): Promise<{ matches: { item: Item; quantity: number }[]; unmatched: string[] } | null> {
     const segments = this.splitItemMentions(message);
     if (segments.length < 2) return null;
-    const catalog = await this.catalogItems(client);
+    const catalog = await this.catalogItems(client, timezone);
     const ignored = new Set(mergedLanguageTerms("itemStopWords"));
     const matches: { item: Item; quantity: number }[] = [];
     const unmatched: string[] = [];
