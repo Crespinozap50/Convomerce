@@ -443,9 +443,16 @@ export default function App() {
       .catch(() => setSession(null))
       .finally(() => setLoading(false));
   }, []);
+  const appliedSessionLanguage = useRef<string | null>(null);
   useEffect(() => {
-    if (session?.uiLanguage && i18n.language !== session.uiLanguage) {
-      void i18n.changeLanguage(session.uiLanguage);
+    if (
+      session?.uiLanguage &&
+      appliedSessionLanguage.current !== session.uiLanguage
+    ) {
+      appliedSessionLanguage.current = session.uiLanguage;
+      if (i18n.language !== session.uiLanguage) {
+        void i18n.changeLanguage(session.uiLanguage);
+      }
     }
   }, [session?.uiLanguage, i18n]);
   if (loading)
