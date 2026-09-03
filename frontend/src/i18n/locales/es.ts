@@ -797,14 +797,27 @@ export default {
     window7: "Últimos 7 días",
     window30: "Últimos 30 días",
     window90: "Últimos 90 días",
+    windowCustom: "Rango personalizado",
     company: "Empresa",
     resolvedRate: "Resuelto sin fallback",
+    resolvedRateHint:
+      "Porcentaje de respuestas del bot que dieron una respuesta real, en vez del \"todavía no tengo esa información\" genérico.",
     humanHandledRate: "Escalado a una persona",
+    humanHandledRateHint:
+      "Porcentaje de conversaciones que terminaron escaladas a una persona en vez de resolverse solo con el bot. No es en sí bueno ni malo — algunos casos realmente necesitan una persona.",
     conversionRate: "Conversión asistida",
+    conversionRateHint:
+      "Porcentaje de pedidos o citas que el bot inició y el cliente terminó confirmando.",
     latency: "Latencia de respuesta",
+    latencyHint:
+      "Tiempo promedio entre el mensaje del cliente y la primera respuesta del bot en la misma conversación.",
     aiCost: "Costo de IA",
+    aiCostHint:
+      "Costo estimado de las llamadas de IA usadas para redactar respuestas en el período seleccionado.",
     messages: "mensajes",
     empty: "Todavía no hay actividad registrada en este período.",
+    day: "Día",
+    dailyLoading: "Cargando desglose diario…",
   },
   inviteModal: {
     eyebrow: "NUEVO MIEMBRO",

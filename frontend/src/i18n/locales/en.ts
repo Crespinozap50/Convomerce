@@ -791,14 +791,27 @@ export default {
     window7: "Last 7 days",
     window30: "Last 30 days",
     window90: "Last 90 days",
+    windowCustom: "Custom range",
     company: "Company",
     resolvedRate: "Resolved without fallback",
+    resolvedRateHint:
+      "Share of bot replies that gave a real answer instead of the generic \"I don't know that yet\" fallback.",
     humanHandledRate: "Escalated to a human",
+    humanHandledRateHint:
+      "Share of conversations that ended up handed off to a person instead of being resolved by the bot alone. Not inherently good or bad — some cases genuinely need a human.",
     conversionRate: "Assisted conversion",
+    conversionRateHint:
+      "Share of orders or bookings the bot started that the customer actually confirmed.",
     latency: "Response latency",
+    latencyHint:
+      "Average time between a customer's message and the bot's first reply in the same conversation.",
     aiCost: "AI cost",
+    aiCostHint:
+      "Estimated cost of the AI calls used to rewrite responses during the selected period.",
     messages: "messages",
     empty: "No activity recorded for this period yet.",
+    day: "Day",
+    dailyLoading: "Loading daily breakdown…",
   },
   inviteModal: {
     eyebrow: "NEW MEMBER",

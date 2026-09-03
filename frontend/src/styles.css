@@ -1376,6 +1376,99 @@ header h1 {
   padding: 26px 24px;
   color: #78847e;
 }
+.tenant-metrics-window {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tenant-metrics-window input[type="date"] {
+  width: auto;
+}
+.tenant-metrics-row-toggle {
+  width: 100%;
+  background: transparent;
+  color: #17211c;
+  font-weight: 400;
+  text-align: left;
+  border-radius: 0;
+  cursor: pointer;
+}
+.tenant-metrics-row-toggle:hover {
+  background: #f9fbfa;
+}
+.tenant-metrics-company-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tenant-metrics-company-cell > svg {
+  flex-shrink: 0;
+  color: #78847e;
+}
+.tenant-metrics-company-cell span {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+.sortable-header {
+  width: auto;
+  background: transparent;
+  color: #77837d;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 0;
+  gap: 4px;
+  border-radius: 0;
+  justify-content: flex-start;
+}
+.sortable-header-hint {
+  flex-shrink: 0;
+  color: #a8b3ac;
+  cursor: help;
+}
+.sortable-header:hover,
+.sortable-header.active {
+  color: #17211c;
+}
+.metric-bar {
+  display: inline-block;
+  width: 44px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: #eef1f0;
+  overflow: hidden;
+  vertical-align: middle;
+}
+.metric-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+.metric-bar-good {
+  background: #2f9e63;
+}
+.metric-bar-fair {
+  background: #d69a1f;
+}
+.metric-bar-poor {
+  background: #c8503f;
+}
+.metric-bar-neutral {
+  background: #9aa8a1;
+}
+.tenant-metrics-daily {
+  padding: 4px 24px 16px 56px;
+  background: #f9fbfa;
+}
+.tenant-metrics-daily .tenant-metrics-table .row {
+  padding: 10px 16px;
+  font-size: 13px;
+}
+.tenant-metrics-daily .row.heading {
+  font-size: 11px;
+}
 .extras-new-group {
   display: flex;
   gap: 10px;

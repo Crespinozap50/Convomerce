@@ -1,4 +1,5 @@
-import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
+import { validate as isUuid } from 'uuid';
 import { AuthenticatedRequest } from '../auth/authenticated-request';
 import { PasswordReadyGuard } from '../auth/password-ready.guard';
 import { SessionAuthGuard } from '../auth/session-auth.guard';
@@ -20,6 +21,19 @@ export class TenantMetricsController {
   ) {
     const { from, to } = parsePeriod(query);
     return this.metrics.summary(request.actor.userId, from, to);
+  }
+
+  @Get(':tenantId/daily')
+  daily(
+    @Param('tenantId') tenantId: string,
+    @Query() query: Record<string, unknown>,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    if (!isUuid(tenantId)) {
+      throw badRequest('VALIDATION_ERROR', 'tenantId must be a UUID');
+    }
+    const { from, to } = parsePeriod(query);
+    return this.metrics.daily(request.actor.userId, tenantId, from, to);
   }
 }
 
