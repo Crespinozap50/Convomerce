@@ -27,6 +27,7 @@ import { CommercialRequestsModule } from './commercial-requests/commercial-reque
 import { SchedulingModule } from './scheduling/scheduling.module';
 import { OperationalRequirementsModule } from './operational-requirements/operational-requirements.module';
 import { ModifierGroupsModule } from './modifier-groups/modifier-groups.module';
+import { TenantMetricsModule } from './tenant-metrics/tenant-metrics.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { ModifierGroupsModule } from './modifier-groups/modifier-groups.module';
     SchedulingModule,
     OperationalRequirementsModule,
     ModifierGroupsModule,
+    TenantMetricsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: HttpErrorFilter },

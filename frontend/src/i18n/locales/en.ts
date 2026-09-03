@@ -56,6 +56,7 @@ export default {
   },
   nav: {
     companies: "Companies",
+    tenantMetrics: "Metrics",
     team: "Team",
     connections: "Connections",
     bot: "Bot",
@@ -81,6 +82,11 @@ export default {
     companies: {
       title: "Companies",
       description: "Create and manage the businesses on the platform.",
+    },
+    tenantMetrics: {
+      title: "Metrics by company",
+      description:
+        "Compare quality, assisted conversion, latency, and AI cost across companies.",
     },
     team: {
       title: "Team and access",
@@ -779,6 +785,21 @@ export default {
     status: "Company status",
     updated: "Company updated successfully",
   },
+  tenantMetrics: {
+    title: "Metrics by company",
+    help: "Quality, assisted conversion, response latency, and AI cost for the selected period.",
+    window7: "Last 7 days",
+    window30: "Last 30 days",
+    window90: "Last 90 days",
+    company: "Company",
+    resolvedRate: "Resolved without fallback",
+    humanHandledRate: "Escalated to a human",
+    conversionRate: "Assisted conversion",
+    latency: "Response latency",
+    aiCost: "AI cost",
+    messages: "messages",
+    empty: "No activity recorded for this period yet.",
+  },
   inviteModal: {
     eyebrow: "NEW MEMBER",
     title: "Invite to the team",
@@ -802,6 +823,8 @@ export default {
     PLATFORM_TENANT_FORBIDDEN:
       "You do not have permission to manage companies.",
     PLATFORM_TENANT_DUPLICATE: "A company with this identifier already exists.",
+    TENANT_METRICS_FORBIDDEN:
+      "You do not have permission to view metrics across companies.",
     TENANT_USERS_FORBIDDEN: "You do not have permission to manage this team.",
     CHANNEL_CONNECTIONS_FORBIDDEN:
       "You do not have permission to manage connections.",

@@ -39,6 +39,10 @@ El alcance funcional inicial se detalla en [pilot-santos-tacos.md](pilot-santos-
 - Confirmar que no se requieren condiciones específicas por comercio.
 - Comparar calidad, conversión asistida, latencia y costo por tenant.
 
+Fase 2 completa: matriz de aceptación automatizada en D-091 y comparación de
+calidad/conversión/latencia/costo por tenant en D-092
+([acceptance-matrix.md](acceptance-matrix.md)).
+
 ## Fase 3 — Producto
 
 - Implementar el panel en Next.js, roles, límites de uso y operación repetible.

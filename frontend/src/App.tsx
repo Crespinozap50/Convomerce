@@ -7,6 +7,7 @@ import {
   CalendarDays,
   ChevronDown,
   ChevronUp,
+  Gauge,
   Info,
   Link2,
   Languages,
@@ -79,6 +80,7 @@ type ConnectionsResponse = {
 };
 type Page =
   | "companies"
+  | "tenant-metrics"
   | "team"
   | "connections"
   | "bot"
@@ -114,6 +116,7 @@ const knowledgePaths: Record<KnowledgeSection, string> = {
 };
 const pagePaths: Record<Page, string> = {
   companies: "/companies",
+  "tenant-metrics": "/tenant-metrics",
   team: "/team",
   connections: "/connections",
   bot: "/bot",
@@ -143,6 +146,7 @@ const formatLanguageName = (locale: string, displayLocale: string) => {
 };
 const dashboardPages: Page[] = [
   "companies",
+  "tenant-metrics",
   "team",
   "connections",
   "bot",
@@ -909,6 +913,15 @@ function Dashboard({
               {t("nav.companies")}
             </button>
           )}
+          {isSuperAdmin && (
+            <button
+              className={page === "tenant-metrics" ? "active" : ""}
+              onClick={() => navigate("tenant-metrics")}
+            >
+              <Gauge />
+              {t("nav.tenantMetrics")}
+            </button>
+          )}
           <button
             className={page === "team" ? "active" : ""}
             onClick={() => navigate("team")}
@@ -1032,7 +1045,9 @@ function Dashboard({
             <h1>
               {page === "companies"
                 ? t("pages.companies.title")
-                : page === "team"
+                : page === "tenant-metrics"
+                  ? t("pages.tenantMetrics.title")
+                  : page === "team"
                   ? t("pages.team.title")
                   : page === "connections"
                     ? t("pages.connections.title")
@@ -1049,7 +1064,9 @@ function Dashboard({
             <p>
               {page === "companies"
                 ? t("pages.companies.description")
-                : page === "team"
+                : page === "tenant-metrics"
+                  ? t("pages.tenantMetrics.description")
+                  : page === "team"
                   ? t("pages.team.description")
                   : page === "connections"
                     ? t("pages.connections.description")
@@ -1064,7 +1081,7 @@ function Dashboard({
                             : t("pages.conversations.description")}
             </p>
           </div>
-          {page !== "companies" && (
+          {page !== "companies" && page !== "tenant-metrics" && (
             <TenantSelector
               value={tenant}
               options={options}
@@ -1106,6 +1123,9 @@ function Dashboard({
               navigate("team");
             }}
           />
+        )}
+        {page === "tenant-metrics" && (
+          <TenantMetrics onNotice={setNotice} />
         )}
         {page === "team" && (
           <Team
@@ -1329,6 +1349,105 @@ function Companies({
               </button>
             </div>
           </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+type TenantOperationalSummary = {
+  tenantId: string;
+  slug: string;
+  displayName: string;
+  messagesTotal: number;
+  resolvedRate: number | null;
+  conversationsTotal: number;
+  humanHandledRate: number | null;
+  commercialRequestsTotal: number;
+  conversionRate: number | null;
+  avgResponseLatencyMs: number | null;
+  aiCallsTotal: number;
+  aiCostMinor: number;
+  aiCurrency: string | null;
+  aiAvgLatencyMs: number | null;
+};
+function TenantMetrics({
+  onNotice,
+}: {
+  onNotice: (message: string, type?: "success" | "error") => void;
+}) {
+  const { t } = useTranslation();
+  const [windowDays, setWindowDays] = useState<"7" | "30" | "90">("30");
+  const [rows, setRows] = useState<TenantOperationalSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    setLoading(true);
+    const to = new Date();
+    const from = new Date();
+    from.setUTCDate(from.getUTCDate() - Number(windowDays));
+    const isoDate = (date: Date) => date.toISOString().slice(0, 10);
+    api<TenantOperationalSummary[]>(
+      `/v1/admin/platform/tenant-metrics?from=${isoDate(from)}&to=${isoDate(to)}`,
+    )
+      .then(setRows)
+      .catch((error) => onNotice(error.message, "error"))
+      .finally(() => setLoading(false));
+    // onNotice is redefined every render; this effect must only reload when
+    // the selected window actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowDays]);
+  const percent = (value: number | null) =>
+    value === null ? "—" : `${Math.round(value * 100)}%`;
+  const ms = (value: number | null) =>
+    value === null ? "—" : `${Math.round(value).toLocaleString()} ms`;
+  const money = (value: number, currency: string | null) =>
+    currency
+      ? new Intl.NumberFormat(undefined, {
+          style: "currency",
+          currency,
+          maximumFractionDigits: 2,
+        }).format(value / 100)
+      : "—";
+  return (
+    <section className="panel page-panel">
+      <div className="panel-head">
+        <div>
+          <h2>{t("tenantMetrics.title")}</h2>
+          <p>{t("tenantMetrics.help")}</p>
+        </div>
+        <AppSelect
+          value={windowDays}
+          onChange={setWindowDays}
+          options={[
+            { value: "7", label: t("tenantMetrics.window7") },
+            { value: "30", label: t("tenantMetrics.window30") },
+            { value: "90", label: t("tenantMetrics.window90") },
+          ]}
+        />
+      </div>
+      <div className="tenant-metrics-table">
+        <div className="row heading">
+          <span>{t("tenantMetrics.company")}</span>
+          <span>{t("tenantMetrics.resolvedRate")}</span>
+          <span>{t("tenantMetrics.humanHandledRate")}</span>
+          <span>{t("tenantMetrics.conversionRate")}</span>
+          <span>{t("tenantMetrics.latency")}</span>
+          <span>{t("tenantMetrics.aiCost")}</span>
+        </div>
+        {!loading && rows.length === 0 && (
+          <p className="tenant-metrics-empty">{t("tenantMetrics.empty")}</p>
+        )}
+        {rows.map((row) => (
+          <div className="row" key={row.tenantId}>
+            <span>
+              <b>{row.displayName}</b>
+              <small>{row.messagesTotal} {t("tenantMetrics.messages")}</small>
+            </span>
+            <span>{percent(row.resolvedRate)}</span>
+            <span>{percent(row.humanHandledRate)}</span>
+            <span>{percent(row.conversionRate)}</span>
+            <span>{ms(row.avgResponseLatencyMs)}</span>
+            <span>{money(row.aiCostMinor, row.aiCurrency)}</span>
+          </div>
         ))}
       </div>
     </section>

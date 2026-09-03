@@ -1360,6 +1360,22 @@ header h1 {
 .offering-empty {
   padding: 26px 20px !important;
 }
+.tenant-metrics-table .row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr;
+  align-items: center;
+  gap: 18px;
+  padding: 15px 24px;
+  border-bottom: 1px solid #edf0ee;
+}
+.tenant-metrics-table .row span > small {
+  display: block;
+  color: #78847e;
+}
+.tenant-metrics-empty {
+  padding: 26px 24px;
+  color: #78847e;
+}
 .extras-new-group {
   display: flex;
   gap: 10px;

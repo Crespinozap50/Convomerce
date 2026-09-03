@@ -56,6 +56,7 @@ export default {
   },
   nav: {
     companies: "Empresas",
+    tenantMetrics: "Métricas",
     team: "Equipo",
     connections: "Conexiones",
     bot: "Bot",
@@ -81,6 +82,11 @@ export default {
     companies: {
       title: "Empresas",
       description: "Crea y administra los negocios de la plataforma.",
+    },
+    tenantMetrics: {
+      title: "Métricas por empresa",
+      description:
+        "Compara calidad, conversión asistida, latencia y costo de IA entre empresas.",
     },
     team: {
       title: "Equipo y accesos",
@@ -785,6 +791,21 @@ export default {
     status: "Estado de la empresa",
     updated: "Empresa actualizada correctamente",
   },
+  tenantMetrics: {
+    title: "Métricas por empresa",
+    help: "Calidad, conversión asistida, latencia de respuesta y costo de IA en el período seleccionado.",
+    window7: "Últimos 7 días",
+    window30: "Últimos 30 días",
+    window90: "Últimos 90 días",
+    company: "Empresa",
+    resolvedRate: "Resuelto sin fallback",
+    humanHandledRate: "Escalado a una persona",
+    conversionRate: "Conversión asistida",
+    latency: "Latencia de respuesta",
+    aiCost: "Costo de IA",
+    messages: "mensajes",
+    empty: "Todavía no hay actividad registrada en este período.",
+  },
   inviteModal: {
     eyebrow: "NUEVO MIEMBRO",
     title: "Invitar al equipo",
@@ -807,6 +828,8 @@ export default {
     VALIDATION_ERROR: "Revisa la información proporcionada.",
     PLATFORM_TENANT_FORBIDDEN: "No tienes permiso para administrar empresas.",
     PLATFORM_TENANT_DUPLICATE: "Ya existe una empresa con este identificador.",
+    TENANT_METRICS_FORBIDDEN:
+      "No tienes permiso para ver métricas entre empresas.",
     TENANT_USERS_FORBIDDEN: "No tienes permiso para administrar este equipo.",
     CHANNEL_CONNECTIONS_FORBIDDEN:
       "No tienes permiso para administrar conexiones.",
