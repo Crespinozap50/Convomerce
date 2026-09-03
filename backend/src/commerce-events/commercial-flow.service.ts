@@ -579,7 +579,7 @@ export class CommercialFlowService {
         [flow.commercial_request_id],
       );
       await this.step(client, flow.id, "awaiting_fulfillment", {});
-      return this.fulfillmentReply(client, input.locale);
+      return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
     }
     if (command === "change_address") {
       if (flow.context.fulfillment !== "delivery")
@@ -624,7 +624,7 @@ export class CommercialFlowService {
         return this.requirementPrompt(input.locale, next);
       }
       await this.step(client, flow.id, "awaiting_fulfillment", {});
-      return this.fulfillmentReply(client, input.locale);
+      return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
     }
     return undefined;
   }
@@ -1004,7 +1004,7 @@ export class CommercialFlowService {
           : input.understanding.requestedAction === "fulfillment.on_site"
             ? "on_site"
             : null;
-    if (!fulfillment) return this.fulfillmentReply(client, input.locale);
+    if (!fulfillment) return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
     const context: Record<string, unknown> = { ...flow.context, fulfillment };
     await client.query(
       `update app.commercial_requests set fulfillment_type=$2,updated_at=now() where id=$1`,
@@ -2446,11 +2446,11 @@ export class CommercialFlowService {
         [flow.commercial_request_id],
       );
       await this.step(client, flow.id, "awaiting_fulfillment", {});
-      return this.fulfillmentReply(client, locale);
+      return this.fulfillmentReply(client, flow.commercial_request_id, locale);
     }
     if (flow.step === "awaiting_confirmation") {
       await this.step(client, flow.id, "awaiting_fulfillment", {});
-      return this.fulfillmentReply(client, locale);
+      return this.fulfillmentReply(client, flow.commercial_request_id, locale);
     }
     if (flow.step === "awaiting_fulfillment") {
       await this.step(client, flow.id, "awaiting_more_items", {});
@@ -2572,7 +2572,7 @@ export class CommercialFlowService {
     // what a real fulfillment_type=null query actually returns.
     if (typeof context.fulfillment !== "string") {
       await this.step(client, flow.id, "awaiting_fulfillment", context);
-      return this.fulfillmentReply(client, input.locale);
+      return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
     }
     const filledKeys = ["name", ...Object.keys((context.values as Record<string, string>) ?? {})];
     if (context.address) filledKeys.push("delivery_address");
@@ -3157,9 +3157,10 @@ export class CommercialFlowService {
   // tenant until now and always had delivery enabled, so this never showed.
   private async fulfillmentReply(
     client: PoolClient,
+    requestId: string,
     locale: Locale,
   ): Promise<DeterministicReply> {
-    const deliveryEnabled = await this.deliveryCapabilityEnabled(client);
+    const deliveryEnabled = await this.deliveryCapabilityEnabled(client, requestId);
     const options: InteractiveMessage["options"] = [
       ...(deliveryEnabled
         ? [{ id: "fulfillment:delivery", title: this.copy(locale, "delivery") }]
@@ -3180,9 +3181,23 @@ export class CommercialFlowService {
       },
     };
   }
-  private async deliveryCapabilityEnabled(client: PoolClient): Promise<boolean> {
+  // Found writing packaging-fee.integration-spec.ts (D-108): this used to
+  // query app.tenant_capabilities (a genuinely per-tenant table — Santos
+  // Tacos has delivery=true, every other seeded tenant has it false) with
+  // no tenant_id filter and no order by, so which tenant's row rows[0]
+  // returned was undefined — any tenant's "¿domicilio, recogida o local?"
+  // question could show or hide "Domicilio" based on an unrelated tenant's
+  // config. Joined through the commercial_request instead of threading a
+  // tenantId param everywhere: every one of fulfillmentReply's 6 call sites
+  // already has a Workflow in scope with commercial_request_id, but not all
+  // of them carry the tenantId-bearing UnderstoodFlowInput (goBack only has
+  // `flow` + `locale`).
+  private async deliveryCapabilityEnabled(client: PoolClient, requestId: string): Promise<boolean> {
     const result = await client.query<{ enabled: boolean }>(
-      `select enabled from app.tenant_capabilities where capability='delivery'`,
+      `select capability.enabled from app.tenant_capabilities capability
+         join app.commercial_requests request on request.tenant_id=capability.tenant_id
+        where request.id=$1 and capability.capability='delivery'`,
+      [requestId],
     );
     return result.rows[0]?.enabled ?? false;
   }

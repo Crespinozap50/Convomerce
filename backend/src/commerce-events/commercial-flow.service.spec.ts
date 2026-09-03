@@ -1542,6 +1542,47 @@ describe("CommercialFlowService", () => {
     expect(JSON.stringify(stepUpdate?.[1])).toContain("chelita-envenenada-variant");
   });
 
+  it("scopes the delivery-capability check to the asking tenant's own request, not an unfiltered table read (D-108)", async () => {
+    // Found writing an integration test for something unrelated (D-104's
+    // packaging fee): deliveryCapabilityEnabled() used to read
+    // app.tenant_capabilities with no tenant_id filter and no order by —
+    // app.tenant_capabilities is genuinely per-tenant (Santos Tacos has
+    // delivery=true, every other seeded tenant has it false), so which
+    // tenant's row rows[0] returned was undefined. Fixed by joining through
+    // the commercial_request (every fulfillmentReply() call site has one),
+    // rather than threading a tenantId param everywhere — not every caller
+    // (goBack) carries the tenantId-bearing UnderstoodFlowInput.
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_item",
+              context: {},
+            },
+          ],
+        }) // active workflow lookup
+        .mockResolvedValueOnce({ rows: [{ exists: true }] }) // cart has an active line
+        .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_fulfillment
+        .mockResolvedValueOnce({ rows: [{ enabled: true }] }), // fulfillmentReply: delivery capability
+    };
+
+    await service().resolve(client as never, {
+      ...input,
+      body: "Ninguno",
+      understanding: await understand("Ninguno"),
+    });
+
+    const [sql, params] = client.query.mock.calls[3];
+    expect(String(sql)).toContain("join app.commercial_requests request");
+    expect(String(sql)).toContain("request.tenant_id=capability.tenant_id");
+    expect(String(sql)).toContain("request.id=$1");
+    expect(params).toEqual(["request-1"]);
+  });
+
   it("treats a plain decline ('ninguno') while selecting an item the same as finishing, instead of an unknown-product dead end", async () => {
     // Regression: "Ninguno" while the bot is asking "¿qué producto deseas
     // pedir?" fell through to matchItem (which of course found nothing) and
