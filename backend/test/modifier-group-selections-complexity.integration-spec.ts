@@ -163,7 +163,7 @@ describe('D-099 — modifier group selections, harder shapes and a second tenant
     conversationIds: string[],
     providerSubject: string,
     text: string,
-  ): Promise<{ body: string | null; conversationId: string }> {
+  ): Promise<{ body: string | null; interactive: unknown; conversationId: string }> {
     const id = uuidv7();
     const result = await messages.receive({
       tenantId: fixture.tenantId,
@@ -182,13 +182,17 @@ describe('D-099 — modifier group selections, harder shapes and a second tenant
         conversationId: result.conversationId,
       });
     }
-    const reply = await pool.query<{ body: string }>(
-      `select content->>'body' as body from app.messages
+    const reply = await pool.query<{ body: string; interactive: unknown }>(
+      `select content->>'body' as body, content->'interactive' as interactive from app.messages
         where conversation_id = $1 and direction = 'outbound'
         order by occurred_at desc, id desc limit 1`,
       [result.conversationId],
     );
-    return { body: reply.rows[0]?.body ?? null, conversationId: result.conversationId };
+    return {
+      body: reply.rows[0]?.body ?? null,
+      interactive: reply.rows[0]?.interactive ?? null,
+      conversationId: result.conversationId,
+    };
   }
 
   afterAll(async () => {
@@ -282,7 +286,26 @@ describe('D-099 — modifier group selections, harder shapes and a second tenant
 
     it('blocks on the required group while the optional group stays untouched, then finishes leaving the optional group at zero', async () => {
       const providerSubject = `two-groups-${shortSuffix}`;
-      await send(fixture, conversationIds, providerSubject, `Quiero ${itemName}`);
+      const opened = await send(fixture, conversationIds, providerSubject, `Quiero ${itemName}`);
+
+      // D-106 finding #5, live: the very first modifier prompt — right when
+      // the item lands in the cart, before "Listo" is ever tapped — used to
+      // mix the required group's options together with every optional
+      // group's, both under the same generic "¿quieres agregar algo más?"
+      // wording. On Santos Tacos' real menu that pushed real optional
+      // options (e.g. a second "Adiciones" item) past WhatsApp's 10-row cap
+      // with no way to reach them, and said nothing about anything being
+      // required. The required group must be offered alone until satisfied.
+      expect(opened.body).toBe(`Elige 1 más de "${requiredGroupName}" antes de continuar.`);
+      expect(opened.interactive).toEqual({
+        type: 'buttons',
+        body: opened.body,
+        options: [
+          { id: requiredOptionAId, title: requiredOptionAName },
+          { id: requiredOptionBId, title: requiredOptionBName },
+          { id: 'modifier:finish', title: 'Listo' },
+        ],
+      });
 
       // The required group (min=1,max=1) still has both options unpicked —
       // "Listo" must be blocked, even though the optional group has never
