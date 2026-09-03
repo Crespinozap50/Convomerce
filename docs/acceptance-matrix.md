@@ -75,7 +75,18 @@ en [decisions.md](decisions.md).
   negocio, con fallback verificado al español cuando no hay traducción.
 - **Comparación de calidad/conversión/latencia/costo por tenant** — no hay
   métricas desglosadas por tenant hoy; también sigue pendiente en Fase 2.
-- Esta matriz es un snapshot verificado hoy (2026-09-02), no una suite
-  automatizada — una regresión futura en cualquiera de estas celdas no se
-  detecta sola. Automatizarla (como pruebas de integración por tenant) sería
-  el siguiente paso natural si se quiere que esto se mantenga solo.
+
+## Automatizada desde D-091
+
+Esta matriz se probó manualmente el 2026-09-02 (webhooks simulados, limpieza
+manual de datos de prueba). Desde D-091 ese snapshot **también** corre como
+suite de integración en cada push —
+[`backend/test/acceptance-matrix.integration-spec.ts`](../backend/test/acceptance-matrix.integration-spec.ts),
+parte de `npm run test:integration` en CI. Cubre, por tenant, exactamente la
+clase de bug que la ronda manual encontró (colisión de vocabulario fijo,
+datos sembrados incompletos, fuga de routing entre tenants) — no repite la
+lógica interna de cada máquina de estados, que ya cubren
+`commercial-flow.service.spec.ts` y `appointment-flow.service.spec.ts` con
+mocks. Un pedido/cita se verifica hasta que arranca el flujo real (capacidad
+correcta, fila `conversation_workflows` activa), no hasta la confirmación
+completa — ver D-091 para el detalle de ese recorte deliberado.
