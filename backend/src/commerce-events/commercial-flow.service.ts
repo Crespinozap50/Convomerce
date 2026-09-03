@@ -292,22 +292,22 @@ export class CommercialFlowService {
     // itself collide with an unrelated word classifyMessage happens to
     // recognize (e.g. "3 tacos vegetarianos" contains "vegetarianos").
     // matchItemMentions() only ever returns non-null when 2+ segments each
-    // resolve to a distinct, unambiguous catalog item — that's a strong
-    // enough signal of ordering intent on its own, regardless of what the
-    // rest of the message also mentions.
+    // carry real signal (a confident match or a genuine tie) — that's a
+    // strong enough signal of ordering intent on its own, regardless of
+    // what the rest of the message also mentions.
     const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC");
     if (multi) {
       const requestId = uuidv7(),
         flowId = uuidv7();
+      // matches.length can be 0 here (a tie can be the *only* confident
+      // signal — see matchItemMentions), so the currency falls back to the
+      // tied candidates: matches.length + tied-segment count >= 2 is what
+      // gates a non-null result, and every tied segment collapses to at
+      // most one `tie`, so at least one of the two is always populated.
+      const currency = multi.matches[0]?.item.currency ?? multi.tie?.candidates[0]?.currency;
       await client.query(
         `insert into app.commercial_requests(id,tenant_id,conversation_id,contact_id,request_type,status,currency) values($1,$2,$3,$4,'order','draft',$5)`,
-        [
-          requestId,
-          input.tenantId,
-          input.conversationId,
-          input.contactId,
-          multi.matches[0].item.currency,
-        ],
+        [requestId, input.tenantId, input.conversationId, input.contactId, currency],
       );
       await client.query(
         `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','awaiting_more_items')`,
@@ -316,12 +316,7 @@ export class CommercialFlowService {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, requestId, item, quantity);
       }
-      const reply = await this.afterCartChange(
-        client,
-        input,
-        requestId,
-        multi.unmatched,
-      );
+      const reply = await this.afterMultiItemMatch(client, input, requestId, flowId, {}, multi);
       return input.understanding.entities.hasGreeting === true
         ? this.prependGreeting(
             reply,
@@ -726,11 +721,13 @@ export class CommercialFlowService {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, flow.commercial_request_id, item, quantity);
       }
-      return this.afterCartChange(
+      return this.afterMultiItemMatch(
         client,
         input,
         flow.commercial_request_id,
-        multi.unmatched,
+        flow.id,
+        flow.context,
+        multi,
       );
     }
     const { match, tied } = await this.matchItemCandidates(client, input);
@@ -775,11 +772,13 @@ export class CommercialFlowService {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, flow.commercial_request_id, item, quantity);
       }
-      return this.afterCartChange(
+      return this.afterMultiItemMatch(
         client,
         input,
         flow.commercial_request_id,
-        multi.unmatched,
+        flow.id,
+        flow.context,
+        multi,
       );
     }
     const { match, tied } = await this.matchItemCandidates(client, input);
@@ -1207,6 +1206,60 @@ export class CommercialFlowService {
     }
     return this.confirmOrderReply(input.locale);
   }
+  // Applied after matchItemMentions() finds a decomposition — its matched
+  // items are already in the cart (addItem already ran on multi.matches) by
+  // the time this runs. A pending tie needs the exact same persist-and-ask
+  // treatment as every single-item tie in this file (tiedItems +
+  // pendingQuantity on the workflow, resolved by index in
+  // handleSelectingItem's tiedChoice branch) — but framed around what was
+  // already matched, so "un Birria Bowl y una Chelita" shows the Bowl
+  // already in the cart alongside the question about which Chelita,
+  // instead of a bare disambiguation prompt that makes the Bowl look like
+  // it never happened.
+  private async afterMultiItemMatch(
+    client: PoolClient,
+    input: { tenantId: string; conversationId: string; locale: Locale },
+    requestId: string,
+    flowId: string,
+    existingContext: Record<string, unknown>,
+    multi: {
+      matches: { item: Item; quantity: number }[];
+      unmatched: string[];
+      tie?: { candidates: Item[]; quantity: number };
+    },
+  ): Promise<DeterministicReply> {
+    if (!multi.tie) return this.afterCartChange(client, input, requestId, multi.unmatched);
+    await this.step(client, flowId, "selecting_item", {
+      ...existingContext,
+      tiedItems: multi.tie.candidates,
+      pendingQuantity: multi.tie.quantity,
+    });
+    const cart = await this.cart(client, requestId, input.locale);
+    const interactive = this.itemChoiceInteractive(input.locale, multi.tie.candidates);
+    const withCart = multi.unmatched.length
+      ? this.content(input.locale, [
+          {
+            kind: "template",
+            template: { namespace: "commercial", key: "itemsNotFound" },
+            values: { items: multi.unmatched.join(", ") },
+          },
+          { kind: "line_break" },
+          { kind: "line_break" },
+          ...cart.plan.segments,
+        ])
+      : cart;
+    return this.plannedReply(
+      this.append(
+        input.locale,
+        withCart,
+        [
+          { kind: "line_break" },
+          { kind: "template", template: { namespace: "commercial", key: "itemChoice" } },
+        ],
+        interactive,
+      ),
+    );
+  }
   private async afterCartChange(
     client: PoolClient,
     input: { tenantId: string; conversationId: string; locale: Locale },
@@ -1421,23 +1474,45 @@ export class CommercialFlowService {
       .filter(Boolean);
   }
   // Only worth acting on when the message actually decomposes into 2+
-  // confidently-matched products — a single segment (no separator found, or
-  // every other segment failed to match) is left to the existing
-  // single-item flow, which already has better handling for ties and
-  // "I didn't understand" replies. Deliberately conservative: an ambiguous
-  // segment (tie or no match) is reported back to the customer as
-  // unmatched, never guessed.
+  // segments each carrying real signal — a single segment (no separator
+  // found) is left to the existing single-item flow, which already has
+  // better handling for ties and "I didn't understand" replies. A segment
+  // matching nothing in the catalog at all is weak evidence (could just be
+  // a stray word), but a segment that *ties* between two-or-more catalog
+  // items is strong evidence it names a real product — found live: "un
+  // Birria Bowl y una Chelita" ties "Chelita" against "Chelita Envenenada"
+  // (a name-prefix tie, same class matchItemCandidates already resolves
+  // for a single-item message), so the old "matches.length >= 2" gate
+  // rejected the whole decomposition over one ambiguous word and fell back
+  // to scoring the entire message as a single bag of tokens — which silently
+  // matched only the Bowl and dropped "Chelita" with no trace, not even a
+  // "not found". Matches and ties now count together toward the 2+ gate,
+  // and only a segment that matched nothing at all is weak enough to stay
+  // excluded from it.
   private async matchItemMentions(
     client: PoolClient,
     message: string,
     timezone: string,
-  ): Promise<{ matches: { item: Item; quantity: number }[]; unmatched: string[] } | null> {
+  ): Promise<{
+    matches: { item: Item; quantity: number }[];
+    unmatched: string[];
+    // Only the first tie found is ever surfaced for disambiguation — the
+    // rest of this flow (selecting_item's tiedItems) only ever tracks one
+    // pending tie at a time, the same as every other tie in this file. A
+    // second simultaneously-ambiguous segment in the same message is rare
+    // enough that queuing it for a follow-up disambiguation would be a
+    // genuinely bigger design change (flagged as out of scope in D-100);
+    // it's reported as unmatched instead, same as a segment naming nothing
+    // at all — never silently guessed, never silently dropped.
+    tie?: { candidates: Item[]; quantity: number };
+  } | null> {
     const segments = this.splitItemMentions(message);
     if (segments.length < 2) return null;
     const catalog = await this.catalogItems(client, timezone);
     const ignored = new Set(mergedLanguageTerms("itemStopWords"));
     const matches: { item: Item; quantity: number }[] = [];
     const unmatched: string[] = [];
+    const tied: { segment: string; candidates: Item[]; quantity: number }[] = [];
     for (const segment of segments) {
       // A pure number survives even at 1-2 digits ("16", "12") — same fix
       // as DeterministicUnderstandingProvider.searchTerms(), otherwise a
@@ -1448,15 +1523,26 @@ export class CommercialFlowService {
           .filter((term) => (term.length > 2 || /^\d+$/.test(term)) && !ignored.has(term))
           .map(singularize),
       );
-      const { match } = this.scoreCandidatesByTokens(catalog, tokens);
-      if (match)
+      const { match, tied: candidates } = this.scoreCandidatesByTokens(catalog, tokens);
+      if (match) {
         matches.push({
           item: match,
           quantity: quantityExcludingItemName(parseQuantity(segment), match.name),
         });
-      else unmatched.push(segment);
+      } else if (candidates.length > 1) {
+        tied.push({ segment, candidates, quantity: parseQuantity(segment) });
+      } else {
+        unmatched.push(segment);
+      }
     }
-    return matches.length >= 2 ? { matches, unmatched } : null;
+    if (matches.length + tied.length < 2) return null;
+    const [tie, ...extraTies] = tied;
+    for (const extra of extraTies) unmatched.push(extra.segment);
+    return {
+      matches,
+      unmatched,
+      ...(tie ? { tie: { candidates: tie.candidates, quantity: tie.quantity } } : {}),
+    };
   }
   // Mirrors requirementPrompt's select-options rendering: buttons for up to
   // 3 tied candidates, a list beyond that. Ids are the option's 1-based
@@ -1471,12 +1557,15 @@ export class CommercialFlowService {
   // loop found live. Titles disambiguate same-named items with the variant
   // in parentheses; a tie between distinct item names keeps the bare name
   // (unambiguous and shorter).
-  private itemChoiceReply(
+  // Extracted from itemChoiceReply so afterMultiItemMatch can build the
+  // exact same tappable options for a tie found mid-multi-item extraction,
+  // composed alongside cart/unmatched text instead of itemChoiceReply's own
+  // fixed body.
+  private itemChoiceInteractive(
     locale: Locale,
     items: Item[],
-    bodyKey: CommercialCopyKey = "itemChoice",
     allowRemoveAll = false,
-  ): DeterministicReply {
+  ): InteractiveMessage {
     const nameCounts = new Map<string, number>();
     for (const item of items)
       nameCounts.set(item.name, (nameCounts.get(item.name) ?? 0) + 1);
@@ -1526,25 +1615,32 @@ export class CommercialFlowService {
       id: String(items.length + 1),
       title: this.truncate(this.copy(locale, "removeAllOption"), max),
     });
-    const interactive: InteractiveMessage =
-      items.length <= 3 && !hasDuplicateNames && !hasLongName
-        ? {
-            type: "buttons",
-            body: "",
-            options: [
-              ...items.map((item, index) => optionFor(item, index, 20)),
-              ...(offerRemoveAll ? [allOption(20)] : []),
-            ],
-          }
-        : {
-            type: "list",
-            body: "",
-            buttonLabel: this.copy(locale, "chooseButtonLabel"),
-            options: [
-              ...items.map((item, index) => optionFor(item, index, 24)),
-              ...(offerRemoveAll ? [allOption(24)] : []),
-            ],
-          };
+    return items.length <= 3 && !hasDuplicateNames && !hasLongName
+      ? {
+          type: "buttons",
+          body: "",
+          options: [
+            ...items.map((item, index) => optionFor(item, index, 20)),
+            ...(offerRemoveAll ? [allOption(20)] : []),
+          ],
+        }
+      : {
+          type: "list",
+          body: "",
+          buttonLabel: this.copy(locale, "chooseButtonLabel"),
+          options: [
+            ...items.map((item, index) => optionFor(item, index, 24)),
+            ...(offerRemoveAll ? [allOption(24)] : []),
+          ],
+        };
+  }
+  private itemChoiceReply(
+    locale: Locale,
+    items: Item[],
+    bodyKey: CommercialCopyKey = "itemChoice",
+    allowRemoveAll = false,
+  ): DeterministicReply {
+    const interactive = this.itemChoiceInteractive(locale, items, allowRemoveAll);
     return {
       ...this.reply(this.copy(locale, bodyKey)),
       responsePlan: {

@@ -1423,6 +1423,125 @@ describe("CommercialFlowService", () => {
     expect(reply).not.toBeNull();
   });
 
+  it("asks to disambiguate an ambiguous product instead of silently dropping it, while still adding the unambiguous one from the same message (D-100 deferred finding)", async () => {
+    // D-100 documented this as an out-of-scope gap: "un Birria Bowl y una
+    // Chelita" ties "Chelita" against "Chelita Envenenada" (a name-prefix
+    // tie — the exact same class matchItemCandidates already resolves for
+    // a single-item message). matchItemMentions() used to require 2+
+    // *confident* matches before acting at all, so with only "Birria Bowl"
+    // confidently resolved it discarded the whole decomposition and fell
+    // back to scoring the entire message as one flat bag of tokens, which
+    // matched only the Bowl and never mentioned "Chelita" again — not
+    // added, not asked about, not reported missing. A tie now counts
+    // alongside a confident match toward the same 2+ gate, and the tie is
+    // offered for disambiguation instead of discarded.
+    const catalogRows = {
+      rows: [
+        { item_id: "bowl", variant_id: "bowl-variant", name: "Birria Bowl", variant_name: "Unidad", price_minor: "2600000", currency: "COP" },
+        { item_id: "chelita", variant_id: "chelita-variant", name: "Chelita", variant_name: "Unidad", price_minor: "2500000", currency: "COP" },
+        { item_id: "chelita-envenenada", variant_id: "chelita-envenenada-variant", name: "Chelita Envenenada", variant_name: "Unidad", price_minor: "2500000", currency: "COP" },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_more_items",
+              context: {},
+            },
+          ],
+        }) // active workflow lookup
+        .mockResolvedValueOnce(catalogRows) // matchItemMentions -> catalogItems()
+        .mockResolvedValue({ rows: [] }), // addItem(Birria Bowl), step(), cart()
+    };
+
+    const message = "Quiero un Birria Bowl y una Chelita";
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    // The confident match still lands in the cart — the fix must never
+    // regress the case D-050 already covers.
+    const insertCalls = client.query.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into app.request_lines"),
+    );
+    expect(insertCalls).toHaveLength(1);
+    expect(insertCalls[0][1]).toEqual(
+      expect.arrayContaining(["request-1", "bowl-variant"]),
+    );
+    // The ambiguous mention is offered for disambiguation, not dropped.
+    const stepUpdate = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.conversation_workflows"),
+    );
+    expect(String(stepUpdate?.[1])).toContain("selecting_item");
+    expect(JSON.stringify(stepUpdate?.[1])).toContain("tiedItems");
+    expect(JSON.stringify(stepUpdate?.[1])).toContain("chelita-envenenada-variant");
+    // Cart content itself isn't mocked here (covered live and by the cart()
+    // unit tests elsewhere) — what matters is that the disambiguation
+    // question is actually asked, appended after the cart rather than
+    // replacing it.
+    expect(reply?.body).toContain("Encontré varias opciones, ¿cuál prefieres?");
+    expect(
+      reply?.responsePlan?.kind === "composite" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "buttons",
+      body: "",
+      options: [
+        { id: "1", title: "Chelita" },
+        { id: "2", title: "Chelita Envenenada" },
+      ],
+    });
+  });
+
+  it("does not crash when every segment of a multi-item message ties, falling back to reporting the second tie as unmatched (D-100 deferred finding, edge case)", async () => {
+    // matchItemMentions() only ever tracks one pending tie at a time (see
+    // its own comment) — a genuinely rare second simultaneous tie in the
+    // same message must not crash (matches[0] can now be undefined when
+    // every segment ties) and must still surface, not silently drop, the
+    // second ambiguity.
+    const catalogRows = {
+      rows: [
+        { item_id: "chelita", variant_id: "chelita-variant", name: "Chelita", variant_name: "Unidad", price_minor: "2500000", currency: "COP" },
+        { item_id: "chelita-envenenada", variant_id: "chelita-envenenada-variant", name: "Chelita Envenenada", variant_name: "Unidad", price_minor: "2500000", currency: "COP" },
+        { item_id: "agua", variant_id: "agua-variant", name: "Agua", variant_name: "Unidad", price_minor: "700000", currency: "COP" },
+        { item_id: "agua-fresca", variant_id: "agua-fresca-variant", name: "Agua Fresca", variant_name: "Unidad", price_minor: "900000", currency: "COP" },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] }) // no active workflow
+        .mockResolvedValueOnce(catalogRows) // matchItemMentions -> catalogItems()
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    const message = "Quiero una Chelita y un Agua";
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply).not.toBeNull();
+    // No product was confidently matched, so nothing was inserted — only
+    // the first tie is offered, the second is reported as unmatched rather
+    // than silently dropped or guessed.
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(false);
+    expect(reply?.body).toContain("No encontré");
+    const stepUpdate = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.conversation_workflows"),
+    );
+    expect(JSON.stringify(stepUpdate?.[1])).toContain("chelita-envenenada-variant");
+  });
+
   it("treats a plain decline ('ninguno') while selecting an item the same as finishing, instead of an unknown-product dead end", async () => {
     // Regression: "Ninguno" while the bot is asking "¿qué producto deseas
     // pedir?" fell through to matchItem (which of course found nothing) and
