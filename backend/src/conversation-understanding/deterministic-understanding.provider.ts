@@ -180,9 +180,17 @@ export class DeterministicUnderstandingProvider implements ConversationUnderstan
 
   private searchTerms(text: string): string[] {
     const ignored = new Set(mergedLanguageTerms("itemStopWords"));
+    // A pure number survives the length filter even at 1-2 digits ("16",
+    // "12") — otherwise a size like "16 oz" is silently dropped before it
+    // ever reaches item/variant matching, and "¿cuál de las dos aguas
+    // frescas?" gets asked back even though the customer already named the
+    // size. Found live: "Quiero una agua fresca de 16 oz" still tied
+    // between both sizes.
     return [
       ...new Set(
-        text.split(" ").filter((term) => term.length > 2 && !ignored.has(term)),
+        text
+          .split(" ")
+          .filter((term) => (term.length > 2 || /^\d+$/.test(term)) && !ignored.has(term)),
       ),
     ];
   }

@@ -131,9 +131,23 @@ export const classifyFlowCommand = (value: string): FlowCommand => {
   if (matchesConversationRule(text, "change")) return "change";
   return null;
 };
+// A number right after "de"/"of" ("agua fresca de 16 oz") names a size, not
+// a quantity — the catalog's own variant names use exactly this
+// "de <number> <unit>" shape (Vaso de 16 oz, Ritual de 50 minutos), and a
+// customer naming a size in the same message phrases it the same way. A
+// real quantity is never phrased "de 2 tacos" — it's "2 tacos" — so this
+// never excludes an actual requested quantity. Found live: "Quiero una
+// agua fresca de 16 oz" added 16 of them instead of 1, once the variant
+// scoring fix below started actually resolving this message to an item
+// instead of leaving it as an unresolved tie.
+const SIZE_QUALIFIER_NUMBER = /\b(?:de|of)\s+(\d{1,2})\b/;
 export const parseQuantity = (value: string) => {
   const text = norm(value);
-  const numeric = text.match(/\b(\d{1,2})\b/);
+  const sizeQualifier = text.match(SIZE_QUALIFIER_NUMBER);
+  const withoutSize = sizeQualifier
+    ? text.slice(0, sizeQualifier.index) + text.slice(sizeQualifier.index! + sizeQualifier[0].length)
+    : text;
+  const numeric = withoutSize.match(/\b(\d{1,2})\b/);
   if (numeric) return Math.min(99, Math.max(1, Number(numeric[1])));
   for (const [word, quantity] of Object.entries(
     mergedLanguageMap("quantityWords"),
@@ -1194,8 +1208,29 @@ export class CommercialFlowService {
     const equallyRelevant = scored.filter(
       (candidate) => candidate.score === best.score,
     );
-    return equallyRelevant.length === 1
-      ? { match: best.item, tied: [] }
+    if (equallyRelevant.length === 1) return { match: best.item, tied: [] };
+    // Scoring above only ever looks at item.name, so two variants of the
+    // same product ("Agua fresca" 12oz/16oz) always tie on it — even when
+    // the customer already named the size ("...de 16 oz"). Re-score just
+    // the tied candidates against variant_name and resolve automatically
+    // when exactly one is a strictly better match; otherwise the tie
+    // genuinely wasn't broken by anything the customer said, and stays a
+    // tie rather than guessing. Found live.
+    const byVariant = equallyRelevant
+      .map((candidate) => ({
+        item: candidate.item,
+        variantScore: norm(candidate.item.variant_name)
+          .split(" ")
+          .map(singularize)
+          .filter((x) => tokens.has(x)).length,
+      }))
+      .sort((a, b) => b.variantScore - a.variantScore);
+    const bestVariant = byVariant[0];
+    const tiedByVariant = byVariant.filter(
+      (candidate) => candidate.variantScore === bestVariant.variantScore,
+    );
+    return bestVariant.variantScore > 0 && tiedByVariant.length === 1
+      ? { match: tiedByVariant[0].item, tied: [] }
       : { match: null, tied: equallyRelevant.map((candidate) => candidate.item) };
   }
   // Splits "nachos y 3 tacos vegetarianos" into ["nachos", "3 tacos
@@ -1238,10 +1273,13 @@ export class CommercialFlowService {
     const matches: { item: Item; quantity: number }[] = [];
     const unmatched: string[] = [];
     for (const segment of segments) {
+      // A pure number survives even at 1-2 digits ("16", "12") — same fix
+      // as DeterministicUnderstandingProvider.searchTerms(), otherwise a
+      // named size never reaches item/variant scoring at all.
       const tokens = new Set(
         segment
           .split(" ")
-          .filter((term) => term.length > 2 && !ignored.has(term))
+          .filter((term) => (term.length > 2 || /^\d+$/.test(term)) && !ignored.has(term))
           .map(singularize),
       );
       const { match } = this.scoreCandidatesByTokens(catalog, tokens);

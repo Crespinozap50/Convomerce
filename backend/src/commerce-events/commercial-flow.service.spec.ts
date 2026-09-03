@@ -82,6 +82,11 @@ describe("CommercialFlowService", () => {
     ["tres aguas", 3],
     ["un combo", 1],
     ["producto", 1],
+    // Regression: a size named "de <number> <unit>" ("de 16 oz") isn't a
+    // requested quantity — found live when "Quiero una agua fresca de 16
+    // oz" added 16 of them instead of 1.
+    ["una agua fresca de 16 oz", 1],
+    ["2 tacos al pastor y una agua fresca de 16 oz", 2],
   ])("extracts quantity from “%s”", (message, quantity) => {
     expect(parseQuantity(message)).toBe(quantity);
   });
@@ -206,6 +211,60 @@ describe("CommercialFlowService", () => {
         String(sql).includes("round($6::bigint*$8::numeric)::bigint"),
       ),
     ).toBe(true);
+  });
+
+  it("resolves a same-named variant tie automatically when the customer already named the size, instead of asking again (regression)", async () => {
+    // Found live: "Quiero una agua fresca de 16 oz" still asked which size
+    // — scoreCandidatesByTokens only ever looked at item.name (identical
+    // for both variants), and the "16"/"oz" tokens were silently dropped by
+    // the length>2 filter before they could even be compared.
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              item_id: "agua",
+              variant_id: "agua-16",
+              name: "Agua fresca",
+              variant_name: "Vaso de 16 oz",
+              price_minor: "900000",
+              currency: "COP",
+            },
+            {
+              item_id: "agua",
+              variant_id: "agua-12",
+              name: "Agua fresca",
+              variant_name: "Vaso de 12 oz",
+              price_minor: "700000",
+              currency: "COP",
+            },
+          ],
+        })
+        .mockResolvedValue({ rows: [] }),
+    };
+    const message = "Quiero una agua fresca de 16 oz";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).not.toContain("Encontré varias opciones");
+    // The 16oz variant was resolved and inserted directly — not the 12oz
+    // one, and not left as an unresolved tie.
+    expect(
+      client.query.mock.calls.some(([, params]) =>
+        (params as unknown[])?.includes?.("agua-16"),
+      ),
+    ).toBe(true);
+    expect(
+      client.query.mock.calls.some(([, params]) =>
+        (params as unknown[])?.includes?.("agua-12"),
+      ),
+    ).toBe(false);
   });
 
   it("starts an order from a bare, unambiguous product name with no purchase verb", async () => {
