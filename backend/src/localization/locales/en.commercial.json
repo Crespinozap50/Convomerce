@@ -3,6 +3,7 @@
   "assistantGreeting": "Hi! I'm {{assistant}}, the virtual assistant for {{business}}.",
   "greetingItem": "Hi! I'm {{assistant}}, the virtual assistant for {{business}}. Which product would you like to order?",
   "itemUnknown": "I could not find that product. Type \"show catalog\" to see the options.",
+  "greetingItemUnknown": "Hi! I'm {{assistant}}, the virtual assistant for {{business}}. I could not find that product. Type \"show catalog\" to see the options.",
   "itemsNotFound": "I could not find: {{items}}. I added the rest to your order.",
   "itemChoice": "I found a few matching options, which one would you like?",
   "modifierChoice": "Would you like to add anything extra?",

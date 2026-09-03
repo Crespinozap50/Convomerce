@@ -3,6 +3,7 @@
   "assistantGreeting": "¡Hola! Soy {{assistant}}, el asistente virtual de {{business}}.",
   "greetingItem": "¡Hola! Soy {{assistant}}, el asistente virtual de {{business}}. ¿Qué producto deseas pedir?",
   "itemUnknown": "No encontré ese producto. Puedes escribir \"ver menú\" para consultar las opciones.",
+  "greetingItemUnknown": "¡Hola! Soy {{assistant}}, el asistente virtual de {{business}}. No encontré ese producto. Puedes escribir \"ver menú\" para consultar las opciones.",
   "itemsNotFound": "No encontré: {{items}}. Agregué el resto a tu pedido.",
   "itemChoice": "Encontré varias opciones, ¿cuál prefieres?",
   "modifierChoice": "¿Quieres agregar alguna adición?",

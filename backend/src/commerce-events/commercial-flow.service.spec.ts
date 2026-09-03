@@ -653,6 +653,67 @@ describe("CommercialFlowService", () => {
     });
   });
 
+  it("says the named product wasn't found instead of the generic prompt, when one was actually named (regression)", async () => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const message = "Quiero pedir una hamburguesa";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toBe(
+      'No encontré ese producto. Puedes escribir "ver menú" para consultar las opciones.',
+    );
+    expect(reply?.responsePlan).toMatchObject({
+      template: { namespace: "commercial", key: "itemUnknown" },
+    });
+  });
+
+  it("shows the catalog as a tappable list instead of a bare text prompt when a named product wasn't found, and creates no request/workflow row", async () => {
+    const catalogRows = {
+      rows: [
+        { item_id: "item-1", variant_id: "pastor-variant", name: "Tacos al pastor", variant_name: "Unidad", price_minor: "1890000", currency: "COP" },
+        { item_id: "item-2", variant_id: "agua-variant", name: "Agua fresca", variant_name: "Vaso de 12 oz", price_minor: "700000", currency: "COP" },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] }) // no active workflow
+        .mockResolvedValueOnce(catalogRows) // matchItemCandidates() -> catalogItems()
+        .mockResolvedValueOnce(catalogRows), // catalogChoiceReply() -> catalogItems()
+    };
+    const message = "Quiero pedir una hamburguesa";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toBe(
+      'No encontré ese producto. Puedes escribir "ver menú" para consultar las opciones.',
+    );
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "pastor-variant", title: "Tacos al pastor", description: "$ 18.900" },
+        { id: "agua-variant", title: "Agua fresca", description: "Vaso de 12 oz · $ 7.000" },
+      ],
+    });
+    // Only the workflow lookup and two catalog lookups happen — no
+    // commercial_request/workflow insert, so the next message isn't trapped
+    // answering a tie that was never actually offered (regression, found
+    // live).
+    expect(client.query).toHaveBeenCalledTimes(3);
+  });
+
   it("shows the catalog while an order is waiting for a product", async () => {
     const client = {
       query: jest.fn().mockResolvedValueOnce({

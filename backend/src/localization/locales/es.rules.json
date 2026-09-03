@@ -32,7 +32,7 @@
     "tomorrow": ["\\bmanana\\b"]
   },
   "quantityWords": { "un": 1, "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10 },
-  "itemStopWords": ["quiero", "pedir", "pedido", "orden", "una", "uno", "unos", "con", "los", "las", "necesito", "reservar", "agendar", "servicio", "para", "del", "por", "sin", "manana"],
+  "itemStopWords": ["quiero", "pedir", "pedido", "orden", "una", "uno", "unos", "con", "los", "las", "necesito", "reservar", "agendar", "servicio", "para", "del", "por", "sin", "manana", "hola", "buenas", "buenos", "tardes", "dias", "noches", "hacer"],
   "months": { "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6, "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12 },
   "weekdays": { "domingo": 0, "lunes": 1, "martes": 2, "miercoles": 3, "jueves": 4, "viernes": 5, "sabado": 6 }
 }

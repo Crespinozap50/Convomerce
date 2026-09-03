@@ -322,46 +322,54 @@ export class CommercialFlowService {
     const bareNameStart =
       !starts && match !== null && !looksLikeQuestion(input.body);
     if (!starts && !bareNameStart) return null;
+    // Reaching here with `match` still null always means `starts` was true
+    // (the `!starts && !bareNameStart` guard above already returned
+    // otherwise, and bareNameStart requires match !== null) — the customer
+    // explicitly asked to order something, but nothing in the catalog
+    // matched it. Whether they actually named a (nonexistent) product, as
+    // opposed to a vague "quiero hacer un pedido" naming nothing at all,
+    // decides which reply fits: "itemUnknown" says plainly that the named
+    // product wasn't found (found live: "Quiero pedir una hamburguesa" used
+    // to get the generic "¿Qué producto deseas pedir?" as if nothing had
+    // been said); a genuinely empty request still gets that generic prompt.
+    // Deliberately creates no commercial_request/workflow row here — found
+    // live that the old code parked every unmatched attempt in
+    // "selecting_item" with nothing actually offered to select from,
+    // permanently trapping every later message in that dead-end step
+    // instead of letting a fresh order attempt through normally.
+    if (!match) {
+      const namedSomething = this.searchTerms(input).length > 0;
+      const key: CommercialCopyKey = namedSomething
+        ? input.understanding.entities.hasGreeting === true
+          ? "greetingItemUnknown"
+          : "itemUnknown"
+        : input.understanding.entities.hasGreeting === true
+          ? "greetingItem"
+          : "item";
+      const values = {
+        assistant: input.assistantName ?? "Commerce Assistant",
+        business: input.businessName ?? "Commerce",
+      };
+      // Shows the actual catalog as a tappable list instead of just telling
+      // the customer to type "ver menú" — falls back to the plain text
+      // prompt only when there's nothing to list or it exceeds WhatsApp's
+      // 10-row limit (see catalogChoiceReply).
+      return (
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client), key, values) ??
+        this.localizedReply(input.locale, key, values)
+      );
+    }
     const requestId = uuidv7(),
       flowId = uuidv7();
     await client.query(
       `insert into app.commercial_requests(id,tenant_id,conversation_id,contact_id,request_type,status,currency) values($1,$2,$3,$4,'order','draft',$5)`,
-      [
-        requestId,
-        input.tenantId,
-        input.conversationId,
-        input.contactId,
-        match?.currency ?? "COP",
-      ],
+      [requestId, input.tenantId, input.conversationId, input.contactId, match.currency],
     );
-    const step = match ? "awaiting_more_items" : "selecting_item";
     await client.query(
-      `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order',$6)`,
-      [
-        flowId,
-        input.tenantId,
-        input.conversationId,
-        input.contactId,
-        requestId,
-        step,
-      ],
+      `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','awaiting_more_items')`,
+      [flowId, input.tenantId, input.conversationId, input.contactId, requestId],
     );
-    if (match)
-      await this.addItem(
-        client,
-        input.tenantId,
-        requestId,
-        match,
-        this.quantity(input),
-      );
-    if (!match) {
-      return input.understanding.entities.hasGreeting === true
-        ? this.localizedReply(input.locale, "greetingItem", {
-            assistant: input.assistantName ?? "Commerce Assistant",
-            business: input.businessName ?? "Commerce",
-          })
-        : this.localizedReply(input.locale, "item");
-    }
+    await this.addItem(client, input.tenantId, requestId, match, this.quantity(input));
     const reply = await this.afterAddItem(client, input, requestId, flowId, match);
     return input.understanding.entities.hasGreeting === true
       ? this.prependGreeting(
@@ -1330,6 +1338,7 @@ export class CommercialFlowService {
     locale: Locale,
     items: Item[],
     bodyKey: CommercialCopyKey = "item",
+    values: Record<string, string | number> = {},
   ): DeterministicReply | null {
     if (items.length === 0 || items.length > 10) return null;
     const labels = catalogFor(locale).labels;
@@ -1351,10 +1360,10 @@ export class CommercialFlowService {
       }),
     };
     return {
-      ...this.reply(this.copy(locale, bodyKey)),
+      ...this.reply(this.copy(locale, bodyKey, values)),
       responsePlan: {
         kind: "verified_content",
-        body: this.copy(locale, bodyKey),
+        body: this.copy(locale, bodyKey, values),
         interactive,
       },
     };
