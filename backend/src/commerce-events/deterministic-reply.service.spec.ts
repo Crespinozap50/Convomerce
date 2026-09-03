@@ -33,12 +33,7 @@ describe('DeterministicReplyService', () => {
     expect(classifyMessage(message, [])).toBe('fallback');
   });
 
-  it('builds a COP menu from active database offerings (more than 10 items, no tappable list to fall back on)', async () => {
-    // 11 rows exceeds WhatsApp's 10-row list limit, so no interactive list
-    // is attached and the full text listing (with money formatting) is the
-    // only way the customer sees the offering — see the "does not repeat"
-    // test below for the ≤10-items case, where the list carries this info
-    // instead and the body is just the heading.
+  it('offers a tappable category picker instead of a wall of text when a generic menu question matches more than 10 items (D-102)', async () => {
     const filler = Array.from({ length: 10 }, (_, index) => ({
       item_id: `filler-${index}`, name: `Relleno ${index}`, category: 'Otros',
       variant_name: 'Unidad', price_minor: '100000', currency: 'COP',
@@ -60,10 +55,42 @@ describe('DeterministicReplyService', () => {
       welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.intent).toBe('menu');
+    expect(reply.body).toBe('Tenemos varias categorías, elige una para ver las opciones:');
+    expect(reply.interactive).toEqual({
+      type: 'list',
+      body: '',
+      buttonLabel: 'Ver opciones',
+      options: [
+        { id: 'Otros', title: 'Menú Otros' },
+        { id: 'Tacos', title: 'Menú Tacos' },
+      ],
+    });
+    expect(reply.sources).toEqual([]);
+  });
+
+  it('falls back to the full text listing when a category question that already narrowed still matches more than 10 items (D-102)', async () => {
+    // The category picker only ever applies to a *generic* "ver menú" with
+    // no narrowing at all — a customer who already asked about a specific
+    // (unusually large) category gets that category's own items, not
+    // another picker (which would show one lone category and loop back
+    // into itself).
+    const tacos = Array.from({ length: 12 }, (_, index) => ({
+      item_id: `taco-${index}`, name: `Taco ${index}`, category: 'Tacos',
+      variant_name: 'Unidad', price_minor: '950000', currency: 'COP',
+    }));
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValue({ rowCount: 12, rows: tacos }),
+    };
+    const reply = await new DeterministicReplyService().resolve(client as never, '¿Qué tacos tienen?', {
+      locale: 'es',
+      welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
+    });
+    expect(reply.intent).toBe('menu');
     expect(reply.interactive).toBeUndefined();
-    expect(reply.body).toContain('Tacos de birria');
-    expect(reply.body).toContain('$ 22.900');
-    expect(reply.sources).toContain('catalog_item:item-1');
+    expect(reply.body).toContain('Taco 0');
+    expect(reply.body).toContain('Taco 11');
   });
 
   it('attaches a tappable list of the menu items alongside the text', async () => {
@@ -88,6 +115,7 @@ describe('DeterministicReplyService', () => {
       options: [
         { id: 'variant-1', title: 'Tacos al pastor', description: '$ 18.900' },
         { id: 'variant-2', title: 'Agua fresca', description: 'Vaso de 12 oz · $ 7.000' },
+        { id: 'cart:view_catalog', title: 'Ver opciones' },
       ],
     });
   });
@@ -111,7 +139,7 @@ describe('DeterministicReplyService', () => {
       locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toBe('Esta es nuestra oferta disponible:');
-    expect(reply.interactive?.options).toHaveLength(2);
+    expect(reply.interactive?.options).toHaveLength(3); // 2 items + the "Ver opciones" escape row
   });
 
   it('does not attach a list for a price question (a single filtered result)', async () => {
@@ -135,6 +163,13 @@ describe('DeterministicReplyService', () => {
       welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
     });
     expect(reply.body).toContain('¿De cuál producto');
+    // D-100/D-095 rule: no quoted "escribe ver catálogo" instruction — a
+    // real button instead.
+    expect(reply.interactive).toEqual({
+      type: 'buttons',
+      body: '',
+      options: [{ id: 'cart:view_catalog', title: 'Ver opciones' }],
+    });
     expect(reply.sources).toEqual([]);
   });
 
@@ -168,6 +203,7 @@ describe('DeterministicReplyService', () => {
     // the tappable list (not the body text, which is just the heading).
     expect(reply.interactive?.options).toEqual([
       expect.objectContaining({ title: 'Tacos de birria' }),
+      { id: 'cart:view_catalog', title: 'Ver opciones' },
     ]);
   });
 
@@ -328,6 +364,7 @@ describe('DeterministicReplyService', () => {
     expect(reply.sources).toEqual(['catalog_item:item-1']);
     expect(reply.interactive?.options).toEqual([
       expect.objectContaining({ title: 'Tacos al pastor' }),
+      { id: 'cart:view_catalog', title: 'Ver opciones' },
     ]);
   });
 

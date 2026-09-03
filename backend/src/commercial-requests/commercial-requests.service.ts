@@ -85,6 +85,28 @@ export class CommercialRequestsService {
       await client.query(`select app.transition_appointment($1,'cancel',null,null)`,[current.rows[0].appointment_id]);
     }
     const result=await client.query(`update app.commercial_requests set status=$2,updated_at=now(),version=version+1 where id=$1 returning *`,[requestId,status]);
+    // Only 'draft'/'awaiting_confirmation' can still have an active
+    // conversation_workflow at this point — every later transition
+    // (ready/accepted/in_progress) already had its own workflow closed by
+    // commercial-flow.service.ts once the customer finished building the
+    // order. Without this, an admin cancelling a draft/pending order from
+    // the panel while the customer is still mid-chat leaves their workflow
+    // dangling in whatever step it was in, permanently trapping every
+    // later message they send against a now-dead request — the same
+    // failure class already fixed for the chat's own "Cancelar pedido"
+    // command (see the sibling update a few lines above this file's
+    // 'cancelled' branch in commercial-flow.service.ts). Found live
+    // testing D-099.
+    if(status==='cancelled'||status==='rejected'){
+      // app.conversation_workflows.status has no 'rejected' value (only
+      // active/completed/cancelled/expired) — a rejected order is, from the
+      // customer's chat-side perspective, exactly the same "this order is
+      // dead, stop offering to continue it" as a cancelled one.
+      await client.query(
+        `update app.conversation_workflows set status='cancelled',updated_at=now() where commercial_request_id=$1 and status='active'`,
+        [requestId],
+      );
+    }
     return{request:this.map(result.rows[0])};
   })}
   private async actor(client:PoolClient,userId:string,manage=false){const result=await client.query(`select role from app.tenant_users where tenant_id=app.current_tenant_id() and user_id=$1 and status='active'`,[userId]);if(result.rows[0]){if(manage&&result.rows[0].role==='viewer')throw forbidden('COMMERCIAL_REQUESTS_FORBIDDEN','Actor cannot manage commercial requests');return result.rows[0]}const platform=await client.query(`select app.can_manage_channel_connections($1) allowed`,[userId]);if(!platform.rows[0]?.allowed)throw forbidden('COMMERCIAL_REQUESTS_FORBIDDEN','Actor cannot access commercial requests');return{role:'platform_admin'}}

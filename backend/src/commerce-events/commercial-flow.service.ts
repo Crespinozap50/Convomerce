@@ -40,6 +40,12 @@ type Item = {
   variant_name: string;
   price_minor: string;
   currency: string;
+  // Only ever populated by catalogItems() (used to group catalogChoiceReply
+  // into a category picker past WhatsApp's 10-row cap — D-102) — optional
+  // so the several places that build an Item by hand (e.g. accepting a
+  // recommendation) or select it from cartItems()/matchCartItemCandidates()
+  // don't need to carry a category they never use.
+  category?: string | null;
 };
 type ModifierOption = {
   option_id: string;
@@ -53,6 +59,15 @@ type ModifierOption = {
   // increments this instead of removing it from what's offered — see
   // remainingModifiers and addModifier.
   quantity: string;
+  // Group-level "pick exactly N" constraints (e.g. Santos Tacos' "elige tus
+  // 3 tacos" package) — 0/null for every group before D-099, so existing
+  // groups are unaffected. group_picked is the total quantity already
+  // picked across the whole group (not just this option), always "0" from
+  // itemModifiers since the line was just created.
+  min_selections: string;
+  max_selections: string | null;
+  group_name: string;
+  group_picked: string;
 };
 type CommercialSegment =
   | {
@@ -155,6 +170,27 @@ export const parseQuantity = (value: string) => {
     if (new RegExp(`\\b${word}\\b`).test(text)) return quantity;
   return 1;
 };
+// parseQuantity (and DeterministicUnderstandingProvider.explicitQuantity,
+// which feeds it) reads a number anywhere in the message with no idea which
+// catalog item it will eventually resolve to — a product whose own name
+// carries a number ("Orden x 3 Tacos", a package deal) gets read as
+// "quantity 3", tripling its price for a single package. Found live
+// testing Santos Tacos' own package feature. Applied once the matched
+// item's name is known, right before addItem() — generic across any
+// catalog item whose name embeds a digit, not specific to one tenant or
+// product: a genuinely repeated number ("Quiero 3 Orden x 3 Tacos") still
+// isn't caught by this (parseQuantity only ever returns the first number it
+// finds), so it's deliberately conservative — it only suppresses the
+// single-number case, never invents a lower quantity than what
+// parseQuantity actually found once a second, distinct number is present.
+export const quantityExcludingItemName = (
+  requestedQuantity: number,
+  itemName: string,
+): number => {
+  if (requestedQuantity <= 1) return requestedQuantity;
+  const nameNumbers: string[] = itemName.match(/\d{1,2}/g) ?? [];
+  return nameNumbers.includes(String(requestedQuantity)) ? 1 : requestedQuantity;
+};
 export const parseRecommendationAction = (
   value?: string,
 ): { action: "add" | "reject"; eventId: string } | null => {
@@ -175,6 +211,20 @@ export class CommercialFlowService {
     client: PoolClient,
     input: UnderstoodFlowInput,
   ): Promise<DeterministicReply | null> {
+    // A category tapped from categoryPickerReply() (D-102) — checked before
+    // any workflow/command routing so it works the same whether it was
+    // shown mid-order ("Otro producto") or from the very first unmatched-
+    // product prompt, which deliberately creates no workflow row at all
+    // (D-095). Resolved by id, not by reprocessing the tapped title as
+    // text, since this file's normal item-matching never considers
+    // category (only deterministic-reply.service.ts's sibling menu picker
+    // needs the text-based trick, because it has no id-based dispatch of
+    // its own to hook into).
+    if (input.interactiveSelectionId?.startsWith("category:")) {
+      const category = input.interactiveSelectionId.slice("category:".length);
+      const reply = await this.categoryItemsReply(client, input.locale, input.timezone ?? "UTC", category);
+      if (reply) return reply;
+    }
     const active = await client.query<Workflow>(
       `select id,commercial_request_id,step,context from app.conversation_workflows where conversation_id=$1 and status='active'`,
       [input.conversationId],
@@ -213,7 +263,7 @@ export class CommercialFlowService {
       return this.recommendationRequestReply(client, input.locale);
     }
     if (command === "handoff") return null;
-    if (command === "help") return this.localizedReply(input.locale, "help");
+    if (command === "help") return this.helpReply(input.locale);
     if (command === "catalog") return null;
     if (!flow && command === "cancel")
       return this.localizedReply(input.locale, "nothingToCancel");
@@ -384,7 +434,13 @@ export class CommercialFlowService {
       `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','awaiting_more_items')`,
       [flowId, input.tenantId, input.conversationId, input.contactId, requestId],
     );
-    await this.addItem(client, input.tenantId, requestId, match, this.quantity(input));
+    await this.addItem(
+      client,
+      input.tenantId,
+      requestId,
+      match,
+      quantityExcludingItemName(this.quantity(input), match.name),
+    );
     const reply = await this.afterAddItem(client, input, requestId, flowId, match);
     return input.understanding.entities.hasGreeting === true
       ? this.prependGreeting(
@@ -482,14 +538,25 @@ export class CommercialFlowService {
         }
         return this.itemChoiceReply(input.locale, tied);
       }
-      if (!match || pendingQuantity === null) {
+      if (!match) {
         await this.step(
           client,
           flow.id,
           "changing_quantity_item",
           flow.context,
         );
-        return this.localizedReply(input.locale, "quantityWhich");
+        return this.changeQuantityWhichReply(client, flow.commercial_request_id, input.locale);
+      }
+      if (pendingQuantity === null) {
+        // The product is known but no number came with it — persist it as
+        // quantityTarget so the bare number the customer types next (no
+        // product name attached to match against) applies to this item
+        // instead of re-asking which product. See handleChangingQuantityItem.
+        await this.step(client, flow.id, "changing_quantity_item", {
+          ...flow.context,
+          quantityTarget: match,
+        });
+        return this.localizedReply(input.locale, "quantityHowMany", { item: match.name });
       }
       return this.changeQuantity(
         client,
@@ -646,7 +713,7 @@ export class CommercialFlowService {
         input.tenantId,
         flow.commercial_request_id,
         tiedChoice,
-        tiedQuantity,
+        quantityExcludingItemName(tiedQuantity, tiedChoice.name),
         flow.context.replaceItem === true ? "replace" : "add",
         flow.context.replaceItem === true
           ? (flow.context.replaceItemId as string | undefined)
@@ -692,7 +759,7 @@ export class CommercialFlowService {
       input.tenantId,
       flow.commercial_request_id,
       match,
-      this.quantity(input),
+      quantityExcludingItemName(this.quantity(input), match.name),
       flow.context.replaceItem === true ? "replace" : "add",
       flow.context.replaceItem === true
         ? (flow.context.replaceItemId as string | undefined)
@@ -733,11 +800,18 @@ export class CommercialFlowService {
         input.tenantId,
         flow.commercial_request_id,
         match,
-        this.quantity(input),
+        quantityExcludingItemName(this.quantity(input), match.name),
       );
       return this.afterAddItem(client, input, flow.commercial_request_id, flow.id, match);
     }
-    return this.localizedReply(input.locale, "moreItemsAnswer");
+    // D-095 already set the rule ("no debería aparecer nada entre
+    // comillas... no hagamos más respuestas de ese tipo") for item/
+    // greetingItem/itemUnknown/greetingItemUnknown, but missed this
+    // fallback — found live still showing the quoted "sí"/"ver menú"/
+    // "listo" instruction instead of the real buttons those very actions
+    // already have (moreItemsButtons). moreItemsReply attaches them the
+    // same way every other "what's next" moment in this flow does.
+    return this.moreItemsReply(input.locale, "moreItemsAnswer");
   }
 
   private async handleRemovingItem(
@@ -787,8 +861,21 @@ export class CommercialFlowService {
       await this.step(client, flow.id, "awaiting_more_items", {});
       return this.afterCartChange(client, input, flow.commercial_request_id);
     };
-    if (!requestLineId || command === "finish_items") return finish();
+    if (!requestLineId) return finish();
     const remaining = await this.remainingModifiers(client, requestLineId);
+    // "Listo" is normally free to tap early — extras are optional. A group
+    // with min_selections>0 (Santos Tacos' "elige tus 3 tacos" package,
+    // D-099) is the one exception: tapping "Listo" before reaching the
+    // minimum re-shows the same choices instead of finishing, so the
+    // package can't be added to the cart with 0-2 flavors picked. Reaching
+    // max_selections (also enforced, in remainingModifiers) always finishes
+    // automatically below without ever needing this check, since the data
+    // constraint max_selections>=min_selections guarantees the minimum is
+    // already met by then.
+    if (command === "finish_items") {
+      const unmet = this.unmetRequiredGroup(remaining);
+      return unmet ? this.modifierChoiceReply(input.locale, remaining, undefined, unmet) : finish();
+    }
     // A tapped option's title becomes this inbound message (see
     // moreItemsButtons/itemChoiceReply for the same convention); "Listo"
     // is also matched here via the finishItems rule (command check above).
@@ -841,15 +928,25 @@ export class CommercialFlowService {
         pendingQuantity,
       );
     }
+    const newPendingQuantity =
+      typeof input.understanding.entities.quantity === "number"
+        ? input.understanding.entities.quantity
+        : null;
+    // A product was already pinned down — either tapped from
+    // changeQuantityWhichReply, or named in an earlier message with no
+    // number attached (see the "pendingQuantity === null" branch below and
+    // its top-level "change_quantity" twin) — and we're only waiting on the
+    // new count now. A bare "3" carries no product name to run through
+    // matchCartItemCandidates, so it's read against the item persisted in
+    // context instead.
+    const quantityTarget = flow.context.quantityTarget as Item | undefined;
+    if (quantityTarget && newPendingQuantity !== null)
+      return this.changeQuantity(client, flow, input.locale, quantityTarget, newPendingQuantity);
     const { match, tied } = await this.matchCartItemCandidates(
       client,
       flow.commercial_request_id,
       input,
     );
-    const newPendingQuantity =
-      typeof input.understanding.entities.quantity === "number"
-        ? input.understanding.entities.quantity
-        : null;
     if (tied.length > 1) {
       if (newPendingQuantity !== null) {
         await this.step(client, flow.id, "changing_quantity_item", {
@@ -860,8 +957,15 @@ export class CommercialFlowService {
       }
       return this.itemChoiceReply(input.locale, tied);
     }
-    if (!match || newPendingQuantity === null)
-      return this.localizedReply(input.locale, "quantityWhich");
+    if (!match)
+      return this.changeQuantityWhichReply(client, flow.commercial_request_id, input.locale);
+    if (newPendingQuantity === null) {
+      await this.step(client, flow.id, "changing_quantity_item", {
+        ...flow.context,
+        quantityTarget: match,
+      });
+      return this.localizedReply(input.locale, "quantityHowMany", { item: match.name });
+    }
     return this.changeQuantity(
       client,
       flow,
@@ -890,6 +994,22 @@ export class CommercialFlowService {
       `update app.commercial_requests set fulfillment_type=$2,updated_at=now() where id=$1`,
       [flow.commercial_request_id, fulfillment],
     );
+    // syncPackagingFee() reads fulfillment_type fresh from the row (D-104)
+    // — choosing pickup/delivery here is the one moment that can turn
+    // packaging on (or, choosing on_site after having chosen pickup via
+    // "Corregir", turn it back off) with no cart change involved, so it
+    // can't wait for an addItem/removeItem to pick it up. Deliberately not
+    // folded into recalculate() itself — that runs on every single
+    // addItem/removeItem/changeQuantity/addModifier call, and syncing
+    // packaging on every one of those would mean two more queries per cart
+    // edit for every tenant, including the (overwhelming majority) that
+    // never configure a packaging fee at all. Calling it explicitly just
+    // here and at final confirmation (see handleAwaitingConfirmation) is
+    // enough: nothing about the packaging line depends on being live
+    // mid-build, only on being correct by the time the customer sees the
+    // review and the moment the order is actually confirmed.
+    await this.syncPackagingFee(client, flow.commercial_request_id);
+    await this.recalculate(client, flow.commercial_request_id);
     return this.afterRequirementFilled(client, flow, input, context);
   }
 
@@ -1042,6 +1162,12 @@ export class CommercialFlowService {
     negative: boolean,
   ): Promise<DeterministicReply | null> {
     if (affirmative) {
+      // Safety net for the rarer path — cart changed (e.g. "Corregir" ->
+      // added another item) after fulfillment was already chosen, so the
+      // packaging line synced back in handleAwaitingFulfillment could be
+      // stale by the time the customer actually confirms (D-104).
+      await this.syncPackagingFee(client, flow.commercial_request_id);
+      await this.recalculate(client, flow.commercial_request_id);
       await client.query(
         `update app.commercial_requests set status='ready',confirmed_at=now(),updated_at=now() where id=$1`,
         [flow.commercial_request_id],
@@ -1162,9 +1288,9 @@ export class CommercialFlowService {
   // the kitchen can actually make at this moment.
   private async catalogItems(client: PoolClient, timezone: string): Promise<Item[]> {
     const result = await client.query<Item>(
-      `select item.id item_id,variant.id variant_id,item.name,variant.name variant_name,variant.price_minor::text,variant.currency
+      `select item.id item_id,variant.id variant_id,item.name,item.category,variant.name variant_name,variant.price_minor::text,variant.currency
        from app.catalog_items item join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
-       where item.status='active' and variant.status='active' and variant.availability_status='available'
+       where item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
          and (item.available_from_time is null or item.available_until_time is null
               or (now() at time zone $1)::time between item.available_from_time and item.available_until_time)
        order by item.name`,
@@ -1299,7 +1425,11 @@ export class CommercialFlowService {
           .map(singularize),
       );
       const { match } = this.scoreCandidatesByTokens(catalog, tokens);
-      if (match) matches.push({ item: match, quantity: parseQuantity(segment) });
+      if (match)
+        matches.push({
+          item: match,
+          quantity: quantityExcludingItemName(parseQuantity(segment), match.name),
+        });
       else unmatched.push(segment);
     }
     return matches.length >= 2 ? { matches, unmatched } : null;
@@ -1338,6 +1468,15 @@ export class CommercialFlowService {
     // disambiguating variant, so any such tie always uses list regardless
     // of count.
     const hasDuplicateNames = [...nameCounts.values()].some((count) => count > 1);
+    // Same reasoning extended to a single long name, not just a tie: found
+    // live disambiguating "Orden x 3 Tacos" against "Orden x 3 Tacos Birria
+    // de Camarón o Güerito" — with only 2 options this used `buttons`
+    // (20-char cap), truncating the second one to "Orden x 3 Tacos Bir…"
+    // and silently dropping the exact words that told the customer the two
+    // options apart. `list` rows get 24 chars for the title *and* a
+    // separate 72-char `description` — see descriptionFor below — so a name
+    // that wouldn't survive a button never has to lose its meaning here.
+    const hasLongName = items.some((item) => labelFor(item).length > 20);
     // "Todas" only makes sense — and is only offered — when the tie is
     // between variants of the same product ("Agua fresca" 12oz/16oz): the
     // customer asked to remove "agua fresca" without specifying which, so
@@ -1347,16 +1486,24 @@ export class CommercialFlowService {
     // guessing "remove both kinds" would be a much riskier assumption. Its
     // id is items.length+1, one past the real options — see removing_item.
     const offerRemoveAll = allowRemoveAll && hasDuplicateNames;
-    const optionFor = (item: Item, index: number, max: number) => ({
-      id: String(index + 1),
-      title: this.truncate(labelFor(item), max),
-    });
+    const optionFor = (item: Item, index: number, max: number) => {
+      const label = labelFor(item);
+      return {
+        id: String(index + 1),
+        title: this.truncate(label, max),
+        // A label that doesn't even fit the list's own 24-char title cap
+        // still isn't lost — the full text goes in `description` (72
+        // chars), so "Orden x 3 Tacos Birria de Camarón o Güerito" reads in
+        // full instead of ending at "Orden x 3 Tacos Bir…".
+        ...(label.length > max ? { description: this.truncate(label, 72) } : {}),
+      };
+    };
     const allOption = (max: number) => ({
       id: String(items.length + 1),
       title: this.truncate(this.copy(locale, "removeAllOption"), max),
     });
     const interactive: InteractiveMessage =
-      items.length <= 3 && !hasDuplicateNames
+      items.length <= 3 && !hasDuplicateNames && !hasLongName
         ? {
             type: "buttons",
             body: "",
@@ -1395,24 +1542,50 @@ export class CommercialFlowService {
     bodyKey: CommercialCopyKey = "item",
     values: Record<string, string | number> = {},
   ): DeterministicReply | null {
-    if (items.length === 0 || items.length > 10) return null;
+    if (items.length === 0) return null;
+    // A catalog bigger than WhatsApp's 10-row list cap used to fall all the
+    // way through to `null` here, and every caller's `?? catalogButtonReply`
+    // fallback then showed a bare "Ver menú" button with nothing tappable
+    // behind it — found live once Santos Tacos' real 41-item menu replaced
+    // the small demo one (D-102). Grouping into a category picker first
+    // (same mechanism as deterministic-reply.service.ts's
+    // menuCategoriesReply, see its own comment for the full reasoning and
+    // the ">10 categories" caveat) means only a genuinely empty catalog
+    // still needs that plain-button fallback.
+    if (items.length > 10) return this.categoryPickerReply(locale, items);
     const labels = catalogFor(locale).labels;
+    // Found live: reaching a single-item (or otherwise short) list — e.g.
+    // "Extras" after picking it from the category picker — offered no way
+    // out except typing something else; "Cancelar pedido" or "Volver" still
+    // worked as global commands, but neither was ever shown as an option,
+    // so the customer had to already know to type it (D-104). "Ver menú"
+    // reuses the exact same button/id (cart:view_catalog) catalogButtonReply
+    // already uses, and resolves to `command === "catalog"` — resolve()
+    // returns null for that, which lets the knowledge layer's own menu/
+    // category reply handle it — an escape hatch that works identically
+    // whether or not an order is even in progress. Capped to 9 real items
+    // (not 10) so this extra row never pushes a full list past WhatsApp's
+    // own 10-row cap.
+    const shown = items.slice(0, 9);
     const interactive: InteractiveMessage = {
       type: "list",
       body: "",
       buttonLabel: this.copy(locale, "chooseButtonLabel"),
-      options: items.map((item) => {
-        const price = formatMoney(item.price_minor, item.currency, locale);
-        const variantLabel =
-          item.variant_name === labels.unit || item.variant_name.startsWith(labels.orderPrefix)
-            ? ""
-            : item.variant_name;
-        return {
-          id: item.variant_id,
-          title: this.truncate(item.name, 24),
-          description: this.truncate(variantLabel ? `${variantLabel} · ${price}` : price, 72),
-        };
-      }),
+      options: [
+        ...shown.map((item) => {
+          const price = formatMoney(item.price_minor, item.currency, locale);
+          const variantLabel =
+            item.variant_name === labels.unit || item.variant_name.startsWith(labels.orderPrefix)
+              ? ""
+              : item.variant_name;
+          return {
+            id: item.variant_id,
+            title: this.truncate(item.name, 24),
+            description: this.truncate(variantLabel ? `${variantLabel} · ${price}` : price, 72),
+          };
+        }),
+        { id: "cart:view_catalog", title: this.copy(locale, "viewMenuButton") },
+      ],
     };
     return {
       ...this.reply(this.copy(locale, bodyKey, values)),
@@ -1423,8 +1596,63 @@ export class CommercialFlowService {
       },
     };
   }
+  // Groups items by category and offers the categories themselves as a
+  // tappable list — id carries "category:{name}" so the *next* inbound tap
+  // is resolved directly by id in resolve() (see the interactiveSelectionId
+  // check near the top), unlike deterministic-reply.service.ts's sibling
+  // menuCategoriesReply(), which has no id-based dispatch available to it
+  // and has to rely on the tapped title's text instead. Same >10-categories
+  // cap and the same documented gap (the smallest categories are dropped
+  // from the picker, not merged) as that sibling implementation — see its
+  // comment for the full reasoning.
+  private categoryPickerReply(locale: Locale, items: Item[]): DeterministicReply {
+    const counts = new Map<string, number>();
+    for (const item of items) {
+      const category = item.category ?? this.copy(locale, "categoryUncategorized");
+      counts.set(category, (counts.get(category) ?? 0) + 1);
+    }
+    // Sorted by item count purely to decide which categories survive the
+    // 10-row cap — never shown to the customer, per the project owner's own
+    // call: "Ese 3 productos ... no debería salir".
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const body = this.copy(locale, "categoriesHeading");
+    const interactive: InteractiveMessage = {
+      type: "list",
+      body: "",
+      buttonLabel: this.copy(locale, "chooseButtonLabel"),
+      options: top.map(([category]) => ({
+        id: `category:${category}`,
+        title: this.truncate(`${this.copy(locale, "categoryPrefix")} ${category}`, 24),
+      })),
+    };
+    return {
+      ...this.reply(body),
+      responsePlan: { kind: "verified_content", body, interactive },
+    };
+  }
+  // Resolves a category picked from categoryPickerReply() (id
+  // "category:{name}") straight back to that category's own items, via
+  // catalogChoiceReply() — never re-shows the picker even if this category
+  // still has more than 10 items, since that would loop back into a picker
+  // with just one row and go nowhere; the plain catalogButtonReply fallback
+  // (called by whichever caller of catalogChoiceReply this ends up
+  // reaching) already covers that rare case.
+  private async categoryItemsReply(
+    client: PoolClient,
+    locale: Locale,
+    timezone: string,
+    category: string,
+  ): Promise<DeterministicReply | null> {
+    const uncategorizedLabel = this.copy(locale, "categoryUncategorized");
+    const items = (await this.catalogItems(client, timezone)).filter(
+      (item) => (item.category ?? uncategorizedLabel) === category,
+    );
+    if (items.length === 0 || items.length > 10) return null;
+    return this.catalogChoiceReply(locale, items, "categoryItemsHeading", { category });
+  }
   // Final fallback when catalogChoiceReply() can't show the list itself
-  // (empty catalog, or over WhatsApp's 10-row limit) — a tappable "Ver
+  // (an empty catalog, or a single category somehow still over WhatsApp's
+  // 10-row limit) — a tappable "Ver
   // menú" button instead of telling the customer to type a command in
   // quotes. Tapping it reconstructs as its own title text, which already
   // matches the existing "catalog" pattern rule the same as if the
@@ -1450,6 +1678,48 @@ export class CommercialFlowService {
       },
     };
   }
+  // "/help" used to list every global command as ten quoted phrases in one
+  // paragraph ("...puedes escribir \"ver menú\", \"ver pedido\"..."). Same
+  // rule D-095 already set for item/greetingItem/itemUnknown/
+  // greetingItemUnknown ("no debería aparecer nada entre comillas... para
+  // eso tenemos las opciones que hemos creado") applies here too — found
+  // live still showing it. Exactly ten commands fit WhatsApp's own 10-row
+  // list cap, one row each, titled with the same phrasing already used as
+  // a button elsewhere in this flow (or, for the three that had no
+  // existing button — view order/back/handoff — a new short copy key) so a
+  // tap round-trips through the identical rule match a typed command
+  // would.
+  private helpReply(locale: Locale): DeterministicReply {
+    const optionKeys: CommercialCopyKey[] = [
+      "viewMenuButton",
+      "viewOrderOption",
+      "addItemButton",
+      "changeRemoveOption",
+      "changeQuantityOption",
+      "backOption",
+      "changeFulfillmentOption",
+      "changeAddressOption",
+      "cancelOrderButton",
+      "handoffOption",
+    ];
+    const interactive: InteractiveMessage = {
+      type: "list",
+      body: "",
+      buttonLabel: this.copy(locale, "chooseButtonLabel"),
+      options: optionKeys.map((key, index) => ({
+        id: String(index + 1),
+        title: this.copy(locale, key),
+      })),
+    };
+    return {
+      ...this.reply(this.copy(locale, "help")),
+      responsePlan: {
+        kind: "verified_content",
+        body: this.copy(locale, "help"),
+        interactive,
+      },
+    };
+  }
   // Only counts lines that stayed on a *confirmed* order ('ready' is the
   // post-confirmation status — see commercial_requests' check constraint
   // tying it to confirmed_at) so an abandoned/cancelled draft never inflates
@@ -1462,7 +1732,7 @@ export class CommercialFlowService {
        join app.item_variants variant on variant.tenant_id=line.tenant_id and variant.id=line.item_variant_id
        join app.catalog_items item on item.tenant_id=variant.tenant_id and item.id=variant.catalog_item_id
        where request.status='ready' and line.status='active'
-         and item.status='active' and variant.status='active' and variant.availability_status='available'
+         and item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
        group by item.id,variant.id,item.name,variant.name,variant.price_minor,variant.currency
        order by count(*) desc,item.name
        limit $1`,
@@ -1482,7 +1752,11 @@ export class CommercialFlowService {
     const items = await this.mostOrderedItems(client);
     return (
       this.catalogChoiceReply(locale, items, "recommendationSuggestion") ??
-      this.localizedReply(locale, "recommendationNone")
+      // Same "no quoted instruction, use the real button" rule D-095 set
+      // for the empty/oversized-catalog case — this is the same situation
+      // (nothing to show as a tappable list), so it reuses the identical
+      // catalogButtonReply fallback instead of the "ver menú" text.
+      this.catalogButtonReply(locale, "recommendationNone")
     );
   }
   // Shows the customer's own cart as tappable options instead of leaving
@@ -1499,6 +1773,27 @@ export class CommercialFlowService {
     return items.length > 0 && items.length <= 10
       ? this.itemChoiceReply(locale, items, "removeWhich")
       : this.localizedReply(locale, "removeWhich");
+  }
+  // Used to ask "indicate the product and new quantity" as one bare-text
+  // prompt with a quoted example ("3 tacos de birria") — the customer had to
+  // already know the exact product name and type it themselves, with no way
+  // to see what was actually in the cart. Mirrors removeWhichReply: shows
+  // the cart as tappable options when it's short enough for a WhatsApp list,
+  // falls back to the plain question (no interactive) only for the
+  // degenerate cases — an empty cart, or one long enough to blow the 10-row
+  // cap. A tapped option's title becomes the next inbound message (same
+  // convention as itemChoiceReply everywhere else), which resolves to a
+  // `match` with no quantity yet — see handleChangingQuantityItem, which
+  // then asks quantityHowMany next instead of re-showing this list.
+  private async changeQuantityWhichReply(
+    client: PoolClient,
+    requestId: string,
+    locale: Locale,
+  ): Promise<DeterministicReply> {
+    const items = await this.cartItems(client, requestId);
+    return items.length > 0 && items.length <= 10
+      ? this.itemChoiceReply(locale, items, "quantityWhich")
+      : this.localizedReply(locale, "quantityWhich");
   }
   // Runs right after an item lands in the cart, from all three "an item was
   // just added" call sites (top-level order start, selecting_item step,
@@ -1526,10 +1821,31 @@ export class CommercialFlowService {
     });
     return this.modifierChoiceReply(input.locale, modifiers);
   }
+  // First still-unmet group among the offered options (there is only ever
+  // one on Santos Tacos' current setup, but this holds for an item with
+  // several required groups too). Options are already deduped by group_id
+  // only in the sense that every option of the same group carries the same
+  // group_picked/min_selections, so checking the first occurrence per group
+  // is enough.
+  private unmetRequiredGroup(
+    options: ModifierOption[],
+  ): { groupName: string; needed: number } | null {
+    const seen = new Set<string>();
+    for (const option of options) {
+      if (seen.has(option.group_id)) continue;
+      seen.add(option.group_id);
+      const min = Number(option.min_selections ?? 0);
+      const picked = Number(option.group_picked ?? 0);
+      if (min > picked) return { groupName: option.group_name, needed: min - picked };
+    }
+    return null;
+  }
   private async itemModifiers(client: PoolClient, catalogItemId: string): Promise<ModifierOption[]> {
     const result = await client.query<ModifierOption>(
       `select opt.id as option_id,opt.modifier_group_id as group_id,grp.selection_type,
-              opt.name,opt.price_delta_minor::text,opt.currency,'0' as quantity
+              opt.name,opt.price_delta_minor::text,opt.currency,'0' as quantity,
+              grp.min_selections::text as min_selections,grp.max_selections::text as max_selections,
+              grp.name as group_name,'0' as group_picked
          from app.item_modifier_groups link
          join app.modifier_groups grp on grp.tenant_id=link.tenant_id and grp.id=link.modifier_group_id
          join app.modifier_options opt on opt.tenant_id=grp.tenant_id and opt.modifier_group_id=grp.id
@@ -1542,10 +1858,14 @@ export class CommercialFlowService {
   // Options still offerable for a line. A 'multiple' (checkbox) option stays
   // offered even after being picked — tapping it again increments its
   // quantity (see addModifier) rather than being removed, per the customer's
-  // "cómo indico 2 porciones" ask. A 'single' (radio-button) option's whole
-  // group disappears once any option in it has been picked, which is what
-  // gives single-select semantics without a separate "replace the previous
-  // pick" step.
+  // "cómo indico 2 porciones" ask — until the group's max_selections (if
+  // any) is reached, e.g. Santos Tacos' "elige tus 3 tacos" package group
+  // (min=max=3, see D-099): once the 3rd taco is picked, group_totals.picked
+  // hits max_selections and the whole group stops being offered, same as a
+  // 'single' group after its one pick. A 'single' (radio-button) option's
+  // whole group disappears once any option in it has been picked, which is
+  // what gives single-select semantics without a separate "replace the
+  // previous pick" step.
   private async remainingModifiers(
     client: PoolClient,
     requestLineId: string,
@@ -1553,12 +1873,21 @@ export class CommercialFlowService {
     const result = await client.query<ModifierOption>(
       `select opt.id as option_id,opt.modifier_group_id as group_id,grp.selection_type,
               opt.name,opt.price_delta_minor::text,opt.currency,
-              coalesce(picked.quantity::text,'0') as quantity
+              coalesce(picked.quantity::text,'0') as quantity,
+              grp.min_selections::text as min_selections,grp.max_selections::text as max_selections,
+              grp.name as group_name,coalesce(group_totals.picked,0)::text as group_picked
          from app.item_modifier_groups link
          join app.modifier_groups grp on grp.tenant_id=link.tenant_id and grp.id=link.modifier_group_id
          join app.modifier_options opt on opt.tenant_id=grp.tenant_id and opt.modifier_group_id=grp.id
          left join app.request_line_modifiers picked
            on picked.tenant_id=opt.tenant_id and picked.request_line_id=$1 and picked.modifier_option_id=opt.id
+         left join (
+           select mo.modifier_group_id as group_id,sum(rlm.quantity) as picked
+             from app.request_line_modifiers rlm
+             join app.modifier_options mo on mo.tenant_id=rlm.tenant_id and mo.id=rlm.modifier_option_id
+            where rlm.request_line_id=$1
+            group by mo.modifier_group_id
+         ) group_totals on group_totals.group_id=grp.id
         where grp.status='active' and opt.status='active'
           and link.catalog_item_id=(
             select variant.catalog_item_id from app.item_variants variant
@@ -1566,12 +1895,18 @@ export class CommercialFlowService {
              where rl.id=$1
           )
           and (
-            grp.selection_type='multiple'
-            or grp.id not in (
-              select mg2.id from app.request_line_modifiers rlm
-                join app.modifier_options mo2 on mo2.tenant_id=rlm.tenant_id and mo2.id=rlm.modifier_option_id
-                join app.modifier_groups mg2 on mg2.tenant_id=mo2.tenant_id and mg2.id=mo2.modifier_group_id
-               where rlm.request_line_id=$1 and mg2.selection_type='single'
+            (
+              grp.selection_type='multiple'
+              and (grp.max_selections is null or coalesce(group_totals.picked,0)<grp.max_selections)
+            )
+            or (
+              grp.selection_type='single'
+              and grp.id not in (
+                select mg2.id from app.request_line_modifiers rlm
+                  join app.modifier_options mo2 on mo2.tenant_id=rlm.tenant_id and mo2.id=rlm.modifier_option_id
+                  join app.modifier_groups mg2 on mg2.tenant_id=mo2.tenant_id and mg2.id=mo2.modifier_group_id
+                 where rlm.request_line_id=$1 and mg2.selection_type='single'
+              )
             )
           )
         order by link.sort_order,opt.sort_order`,
@@ -1615,6 +1950,7 @@ export class CommercialFlowService {
     locale: Locale,
     options: ModifierOption[],
     justAdded?: string,
+    unmetGroup?: { groupName: string; needed: number } | null,
   ): DeterministicReply {
     const shown = options.slice(0, 9);
     // Name-plus-price routinely exceeds WhatsApp's 20-char button-title
@@ -1629,16 +1965,28 @@ export class CommercialFlowService {
       Number(option.price_delta_minor) > 0
         ? `+${formatMoney(option.price_delta_minor, option.currency, locale)}`
         : undefined;
+    // A name longer than the list row's own 24-char title cap (e.g. "Salsa
+    // de Mermelada de Jalapeño", 31 chars) used to just lose everything past
+    // "Salsa de Mermelada de J…" with no fallback — descriptionFor only ever
+    // carried quantity/price, never the name itself. Found live testing
+    // Santos Nachos' own Salsas group (D-102) — same class of bug already
+    // fixed for itemChoiceReply in D-101, missed here.
     const descriptionFor = (option: ModifierOption) => {
       const parts = [
+        option.name.length > 24 ? option.name : null,
         Number(option.quantity) > 0 ? `x${Number(option.quantity)}` : null,
         priceText(option) ?? null,
       ].filter((part): part is string => part !== null);
       return parts.length ? this.truncate(parts.join(" · "), 72) : undefined;
     };
     const finishTitle = this.copy(locale, "finishButton");
+    // Same D-101 reasoning as itemChoiceReply: a name that wouldn't survive
+    // a button's 20-char cap forces `list` regardless of how few options
+    // there are, so it gets the list's extra room (24 chars + description)
+    // instead of being silently cut short.
+    const hasLongName = shown.some((option) => option.name.length > 20);
     const interactive: InteractiveMessage =
-      shown.length < 3
+      shown.length < 3 && !hasLongName
         ? {
             type: "buttons",
             body: "",
@@ -1672,9 +2020,14 @@ export class CommercialFlowService {
     // an identical, unchanged message both times. The body itself now
     // acknowledges what was just added instead of relying on the
     // interactive alone.
-    const body = justAdded
-      ? this.copy(locale, "modifierAdded", { item: justAdded })
-      : this.copy(locale, "modifierChoice");
+    const body = unmetGroup
+      ? this.copy(locale, "modifierMinRequired", {
+          needed: unmetGroup.needed,
+          group: unmetGroup.groupName,
+        })
+      : justAdded
+        ? this.copy(locale, "modifierAdded", { item: justAdded })
+        : this.copy(locale, "modifierChoice");
     return {
       ...this.reply(body),
       responsePlan: {
@@ -1801,6 +2154,99 @@ export class CommercialFlowService {
        where request.id=$1`,
       [requestId],
     );
+  }
+  // Automatic "1 packaging fee per N food items, minimum 1 whenever the
+  // order has anything at all, only for pickup/delivery" (D-104) — entirely
+  // data-driven per tenant (app.catalog_items.is_packaging_fee/
+  // packaging_ratio/counts_toward_packaging), never hardcoded to one
+  // product name or one tenant. A tenant with no packaging-fee item
+  // configured is a no-op here, same as before this feature existed.
+  private async syncPackagingFee(client: PoolClient, requestId: string) {
+    // One query for both the request's own fulfillment_type and its
+    // tenant's packaging-fee config (left join — most tenants configure
+    // none, so this stays a single round trip either way, not two).
+    const request = await client.query<{
+      tenant_id: string; fulfillment_type: string | null;
+      variant_id: string | null; item_name: string | null; price_minor: string | null; currency: string | null; ratio: number | null;
+    }>(
+      `select request.tenant_id,request.fulfillment_type,
+              variant.id as variant_id,item.name as item_name,variant.price_minor::text,variant.currency,item.packaging_ratio as ratio
+         from app.commercial_requests request
+         left join app.catalog_items item
+           on item.tenant_id=request.tenant_id and item.is_packaging_fee=true and item.status='active'
+         left join app.item_variants variant
+           on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id and variant.status='active'
+        where request.id=$1`,
+      [requestId],
+    );
+    const requestRow = request.rows[0];
+    if (!requestRow || !requestRow.variant_id) return;
+    const config = requestRow as {
+      tenant_id: string; variant_id: string; item_name: string; price_minor: string; currency: string; ratio: number | null;
+    };
+    const wantsPackaging =
+      !!config.ratio &&
+      (requestRow.fulfillment_type === "pickup" || requestRow.fulfillment_type === "delivery");
+    const existing = await client.query<{ id: string }>(
+      `select id from app.request_lines where commercial_request_id=$1 and item_variant_id=$2 and status='active'`,
+      [requestId, config.variant_id],
+    );
+    if (!wantsPackaging) {
+      if (existing.rows[0]) {
+        await client.query(
+          `update app.request_lines set status='removed',removed_at=now(),updated_at=now() where id=$1`,
+          [existing.rows[0].id],
+        );
+      }
+      return;
+    }
+    const counts = await client.query<{ food: string; total: string }>(
+      `select
+         coalesce(sum(line.quantity) filter (where item.counts_toward_packaging),0)::text as food,
+         coalesce(sum(line.quantity),0)::text as total
+       from app.request_lines line
+       join app.item_variants variant on variant.tenant_id=line.tenant_id and variant.id=line.item_variant_id
+       join app.catalog_items item on item.tenant_id=variant.tenant_id and item.id=variant.catalog_item_id
+      where line.commercial_request_id=$1 and line.status='active' and item.is_packaging_fee=false`,
+      [requestId],
+    );
+    // "no se puede quitar si hay mínimo un item, sin importar si es comida
+    // o gaseosa" — the floor of 1 applies once *anything* real is in the
+    // cart, even an order of drinks alone (which count toward `total` but
+    // not `food`, per the separate counts_toward_packaging flag).
+    if (Number(counts.rows[0].total) === 0) {
+      if (existing.rows[0]) {
+        await client.query(
+          `update app.request_lines set status='removed',removed_at=now(),updated_at=now() where id=$1`,
+          [existing.rows[0].id],
+        );
+      }
+      return;
+    }
+    const packages = Math.max(1, Math.ceil(Number(counts.rows[0].food) / (config.ratio as number)));
+    const lineTotal = String(Number(config.price_minor) * packages);
+    if (existing.rows[0]) {
+      await client.query(
+        `update app.request_lines set quantity=$2::numeric,line_total_minor=$3::bigint,updated_at=now() where id=$1`,
+        [existing.rows[0].id, packages, lineTotal],
+      );
+    } else {
+      await client.query(
+        `insert into app.request_lines(id,tenant_id,commercial_request_id,item_variant_id,description_snapshot,unit_price_minor_snapshot,currency,quantity,line_total_minor)
+         values($1,$2,$3,$4,$5,$6::bigint,$7,$8::numeric,$9::bigint)`,
+        [
+          uuidv7(),
+          requestRow.tenant_id,
+          requestId,
+          config.variant_id,
+          config.item_name,
+          config.price_minor,
+          config.currency,
+          packages,
+          lineTotal,
+        ],
+      );
+    }
   }
   private async goBack(client: PoolClient, flow: Workflow, locale: Locale) {
     // 'name' is the only requirement asked before fulfillment; any other
@@ -2459,6 +2905,15 @@ export class CommercialFlowService {
       body: "",
       buttonLabel: this.copy(locale, "chooseButtonLabel"),
       options: [
+        // Reuses addItemButton's exact copy ("Otro producto") — its title is
+        // what actually resolves the tap (see the comment above this
+        // method), and that title already matches the global addItem rule
+        // (es.rules.json), so a tenant with an active order can add more
+        // items from this menu the same way they would right after any
+        // other cart change, instead of "Corregir" only ever offering to
+        // change what's already in the cart. Found live: no way to add a
+        // product from here, only to modify existing lines.
+        { id: "cart:add_item", title: this.copy(locale, "addItemButton") },
         { id: "change:product", title: this.copy(locale, "changeProductOption") },
         { id: "change:remove", title: this.copy(locale, "changeRemoveOption") },
         { id: "change:quantity", title: this.copy(locale, "changeQuantityOption") },

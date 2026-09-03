@@ -101,10 +101,41 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
   const createdConversations: { tenantId: string; conversationId: string }[] =
     [];
 
+  // D-098 replaced restaurante-demo's whole demo catalog with Santos Tacos'
+  // real menu, and D-097/D-098 gave every real item a daily time window —
+  // there is no longer a single active item without one (checked directly:
+  // zero rows with available_from_time is null), and Santos Tacos' two
+  // windows don't even cover the full day (e.g. nothing is orderable
+  // 4am-11:45am). A hardcoded real item id, or one resolved from "whatever
+  // happens to be in its window right now", would make the "catálogo"/
+  // "pedidos" cases below pass or fail depending on the hour the suite
+  // happens to run. This test's job is cross-tenant isolation, not menu
+  // content or time-gating (that's D-097's job) — so it uses its own
+  // synthetic, always-available item for restaurante-demo instead, same
+  // "category='prueba'" convention as D-097/D-099's integration specs.
+  const restauranteItem = { id: uuidv7(), name: `PruebaMatrizAceptacion${suffix.slice(-6)}` };
+
+  beforeAll(async () => {
+    await pool.query(
+      `insert into app.catalog_items(id,tenant_id,catalog_id,name,status,category,offering_type)
+       values ($1,$2,$3,$4,'active','prueba','product')`,
+      [restauranteItem.id, restaurante.tenantId, '0194f004-0000-7000-8000-000000000001', restauranteItem.name],
+    );
+    await pool.query(
+      `insert into app.item_variants(id,tenant_id,catalog_item_id,name,status,price_minor,currency,availability_status)
+       values ($1,$2,$3,'Unidad','active',100000,'COP','available')`,
+      [uuidv7(), restaurante.tenantId, restauranteItem.id],
+    );
+  });
+
   afterAll(async () => {
     for (const { tenantId, conversationId } of createdConversations) {
       await cleanupConversation(pool, tenantId, conversationId);
     }
+    await pool.query('delete from app.item_variants where catalog_item_id = $1', [
+      restauranteItem.id,
+    ]);
+    await pool.query('delete from app.catalog_items where id = $1', [restauranteItem.id]);
     await database.onModuleDestroy();
     await pool.end();
   });
@@ -226,12 +257,24 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
   });
 
   describe('catálogo — cada tenant expone su propio catálogo activo, nunca el de otro tenant', () => {
+    it('restaurante-demo: preguntar por su propio producto de prueba resuelve a su propio catálogo', async () => {
+      // D-102: una pregunta *genérica* de menú ("¿Qué tienen en el menú?")
+      // ahora responde con el selector de categorías cuando el catálogo del
+      // tenant supera las 10 filas de WhatsApp — Santos Tacos real ya tiene
+      // más de 10 categorías, así que `sources` queda vacío para esa
+      // pregunta genérica (correcto, ver commercial-flow.service.ts's
+      // menuCategoriesReply). Nombrar el producto de prueba directamente
+      // sigue narrowing a él igual que antes, que es lo que esta prueba de
+      // aislamiento entre tenants realmente necesita verificar.
+      const reply = await sendTurn(
+        restaurante,
+        `matrix-${suffix}-catalogo-${restaurante.slug}`,
+        `¿Tienen ${restauranteItem.name} en el menú?`,
+      );
+      expect(reply.sources).toContain(`catalog_item:${restauranteItem.id}`);
+    });
+
     it.each([
-      {
-        tenant: restaurante,
-        question: '¿Qué tienen en el menú?',
-        itemId: '0194f005-0000-7000-8000-000000000001',
-      },
       {
         tenant: tecnologia,
         question: '¿Cuánto cuesta el celular gama alta?',
@@ -266,14 +309,11 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
   });
 
   describe('pedidos — solo los tenants con `orders` habilitado inician un pedido real', () => {
-    it.each([
-      { tenant: restaurante, message: 'Quiero pedir Tacos al pastor' },
-      { tenant: tecnologia, message: 'Quiero pedir Celular gama alta' },
-    ])('$tenant.slug: inicia un pedido real', async ({ tenant, message }) => {
+    it('restaurante-demo: inicia un pedido real', async () => {
       const reply = await sendTurn(
-        tenant,
-        `matrix-${suffix}-pedido-${tenant.slug}`,
-        message,
+        restaurante,
+        `matrix-${suffix}-pedido-${restaurante.slug}`,
+        `Quiero pedir ${restauranteItem.name}`,
       );
       expect(reply.decision?.capability).toBe('commerce');
       expect(reply.decision?.outcome).toBe('respond');
@@ -285,6 +325,26 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
       );
       expect(workflow.rowCount).toBe(1);
     });
+
+    it.each([{ tenant: tecnologia, message: 'Quiero pedir Celular gama alta' }])(
+      '$tenant.slug: inicia un pedido real',
+      async ({ tenant, message }) => {
+        const reply = await sendTurn(
+          tenant,
+          `matrix-${suffix}-pedido-${tenant.slug}`,
+          message,
+        );
+        expect(reply.decision?.capability).toBe('commerce');
+        expect(reply.decision?.outcome).toBe('respond');
+
+        const workflow = await pool.query(
+          `select 1 from app.conversation_workflows
+            where conversation_id = $1 and status = 'active' and operation_type = 'order'`,
+          [reply.conversationId],
+        );
+        expect(workflow.rowCount).toBe(1);
+      },
+    );
   });
 
   describe('citas y recursos — solo los tenants con `appointments` habilitado inician una reserva real', () => {

@@ -4,6 +4,7 @@ import {
   isAddressDetailedEnough,
   parseQuantity,
   parseRecommendationAction,
+  quantityExcludingItemName,
 } from "./commercial-flow.service";
 import { DeterministicUnderstandingProvider } from "../conversation-understanding/deterministic-understanding.provider";
 import { PendingRequirement } from "./requirement-loop";
@@ -91,6 +92,25 @@ describe("CommercialFlowService", () => {
     expect(parseQuantity(message)).toBe(quantity);
   });
 
+  // Found live testing Santos Tacos' "Orden x 3 Tacos" package (D-099):
+  // parseQuantity has no idea which catalog item the message resolves to,
+  // so "Quiero Orden x 3 Tacos" read the package's own "3" as a requested
+  // quantity of 3 — tripling the price of a single package to $76.500
+  // instead of $25.500. Generic across any product whose name embeds a
+  // number, not specific to this one item.
+  it.each([
+    [3, "Orden x 3 Tacos", 1],
+    [1, "Orden x 3 Tacos", 1],
+    // A genuinely repeated number (a real quantity distinct from the one in
+    // the name) is left untouched — parseQuantity only ever returns the
+    // first number it finds, so this only guards against the single-number
+    // case actually seen live.
+    [2, "Orden x 3 Tacos", 2],
+    [3, "Combo parceros", 3],
+  ])("quantityExcludingItemName(%i, %s) -> %i", (requested, itemName, expected) => {
+    expect(quantityExcludingItemName(requested, itemName)).toBe(expected);
+  });
+
   it.each([
     ["Robledo", false],
     ["Calle 65", false],
@@ -152,6 +172,41 @@ describe("CommercialFlowService", () => {
         String(sql).includes("insert into app.commercial_requests"),
       ),
     ).toBe(false);
+  });
+
+  it("orders one package, not three, when the package's own name embeds a number (regression, D-099 live finding)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              item_id: "item-1",
+              variant_id: "variant-1",
+              name: "Orden x 3 Tacos",
+              variant_name: "Unidad",
+              price_minor: "2550000",
+              currency: "COP",
+            },
+          ],
+        })
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    await service().resolve(client as never, {
+      ...input,
+      body: "Quiero Orden x 3 Tacos",
+      understanding: await understand("Quiero Orden x 3 Tacos"),
+    });
+
+    const insertLine = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("insert into app.request_lines"),
+    );
+    // quantity is the 8th positional param; line_total is computed from it
+    // by the query itself, so this is the one place a tripled price would
+    // actually originate.
+    expect((insertLine?.[1] as unknown[])?.[7]).toBe(1);
   });
 
   it("starts a global order flow from a clear purchase intent", async () => {
@@ -412,6 +467,64 @@ describe("CommercialFlowService", () => {
     ).toBe(false);
   });
 
+  it("keeps a long modifier option's full name readable via description instead of silently truncating it (regression, D-102 live finding)", async () => {
+    // Found live testing Santos Nachos' "Salsas" group: "Salsa de Mermelada
+    // de Jalapeño" (31 chars) truncated to "Salsa de Mermelada de J…" with
+    // no fallback anywhere — descriptionFor only ever carried quantity/
+    // price, never the option's own name. Same bug class D-101 already
+    // fixed for itemChoiceReply, missed here.
+    const longName = "Salsa de Mermelada de Jalapeño";
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] }) // active workflow lookup
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              item_id: "item-1",
+              variant_id: "variant-1",
+              name: "Santos Nachos",
+              variant_name: "Unidad",
+              price_minor: "1900000",
+              currency: "COP",
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }) // insert commercial_requests
+        .mockResolvedValueOnce({ rows: [] }) // insert conversation_workflows
+        .mockResolvedValueOnce({ rows: [] }) // addItem: existing-line lookup
+        .mockResolvedValueOnce({ rows: [] }) // addItem: insert request_lines
+        .mockResolvedValueOnce({ rows: [] }) // addItem: recalculate()
+        .mockResolvedValueOnce({
+          rows: [
+            { option_id: "salsa-tamarindo", group_id: "salsas", selection_type: "multiple", name: "Salsa de Tamarindo", price_delta_minor: "0", currency: "COP" },
+            { option_id: "salsa-jalapeno", group_id: "salsas", selection_type: "multiple", name: longName, price_delta_minor: "0", currency: "COP" },
+          ],
+        }) // afterAddItem: itemModifiers
+        .mockResolvedValueOnce({ rows: [{ id: "line-1" }] }) // afterAddItem: line lookup
+        .mockResolvedValueOnce({ rows: [] }), // step() -> selecting_modifiers
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Quiero Santos Nachos",
+      understanding: await understand("Quiero Santos Nachos"),
+    });
+
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "salsa-tamarindo", title: "Salsa de Tamarindo" },
+        { id: "salsa-jalapeno", title: "Salsa de Mermelada de J…", description: longName },
+        { id: "modifier:finish", title: "Listo" },
+      ],
+    });
+  });
+
   it("offers configured extras after adding an item instead of jumping straight to 'anything else'", async () => {
     const client = {
       query: jest
@@ -651,6 +764,112 @@ describe("CommercialFlowService", () => {
     expect(reply?.body).toContain("¿Quieres agregar algo más?");
   });
 
+  it("blocks 'Listo' before a package's minimum selections are met (D-099, Santos Tacos' 'elige tus 3 tacos')", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_modifiers",
+              context: { requestLineId: "line-1" },
+            },
+          ],
+        }) // active workflow lookup
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              option_id: "birria",
+              group_id: "tacos-group",
+              selection_type: "multiple",
+              name: "Birria",
+              price_delta_minor: "0",
+              currency: "COP",
+              quantity: "1",
+              min_selections: "3",
+              max_selections: "3",
+              group_name: "Elige tus 3 tacos",
+              group_picked: "1",
+            },
+          ],
+        }), // remainingModifiers: only 1 of the required 3 picked so far
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Listo",
+      understanding: await understand("Listo"),
+    });
+
+    expect(reply?.body).toBe('Elige 2 más de "Elige tus 3 tacos" antes de continuar.');
+    // Never reached finish(): no step transition back to awaiting_more_items.
+    expect(
+      client.query.mock.calls.some(
+        ([sql, params]) =>
+          String(sql).includes("update app.conversation_workflows") &&
+          (params as unknown[])?.[1] === "awaiting_more_items",
+      ),
+    ).toBe(false);
+  });
+
+  it("lets 'Listo' finish a package once its minimum selections are already met (D-099)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_modifiers",
+              context: { requestLineId: "line-1" },
+            },
+          ],
+        }) // active workflow lookup
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              option_id: "birria",
+              group_id: "tacos-group",
+              selection_type: "multiple",
+              name: "Birria",
+              price_delta_minor: "0",
+              currency: "COP",
+              quantity: "3",
+              min_selections: "3",
+              max_selections: null,
+              group_name: "Elige tus 3 tacos",
+              group_picked: "3",
+            },
+          ],
+        }) // remainingModifiers: the 3 required tacos are already picked
+        .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_more_items
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "line-1",
+              description_snapshot: "Orden x 3 Tacos",
+              quantity: "1",
+              line_total_minor: "2550000",
+              total_minor: "2550000",
+              currency: "COP",
+            },
+          ],
+        }) // afterCartChange -> cart() lines
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Listo",
+      understanding: await understand("Listo"),
+    });
+
+    expect(reply?.body).toContain("¿Quieres agregar algo más?");
+  });
+
   it("matches a plural order against a singular catalog item name (regression)", async () => {
     const client = {
       query: jest
@@ -770,6 +989,7 @@ describe("CommercialFlowService", () => {
       options: [
         { id: "pastor-variant", title: "Tacos al pastor", description: "$ 18.900" },
         { id: "agua-variant", title: "Agua fresca", description: "Vaso de 12 oz · $ 7.000" },
+        { id: "cart:view_catalog", title: "Ver menú" },
       ],
     });
     // Only the workflow lookup and two catalog lookups happen — no
@@ -842,6 +1062,7 @@ describe("CommercialFlowService", () => {
       options: [
         { id: "pastor-variant", title: "Tacos al pastor", description: "$ 18.900" },
         { id: "agua-variant", title: "Agua fresca", description: "Vaso de 12 oz · $ 7.000" },
+        { id: "cart:view_catalog", title: "Ver menú" },
       ],
     });
     expect(
@@ -849,6 +1070,85 @@ describe("CommercialFlowService", () => {
         ([, params]) => (params as unknown[])?.[1] === "selecting_item",
       ),
     ).toBe(true);
+  });
+
+  it("offers a tappable category picker instead of a bare 'Ver menú' button when 'Otro producto' matches more than 10 items (D-102)", async () => {
+    // Found live testing Santos Tacos' real 41-item menu: catalogChoiceReply
+    // returned null for >10 items, and every caller's `?? catalogButtonReply`
+    // fallback then showed a bare button with nothing tappable behind it.
+    const filler = Array.from({ length: 9 }, (_, index) => ({
+      item_id: `filler-${index}`, variant_id: `filler-${index}-v`, name: `Relleno ${index}`,
+      category: "Otros", variant_name: "Unidad", price_minor: "100000", currency: "COP",
+    }));
+    const catalogRows = {
+      rows: [
+        { item_id: "item-1", variant_id: "pastor-variant", name: "Tacos al pastor", category: "Tacos", variant_name: "Unidad", price_minor: "1890000", currency: "COP" },
+        { item_id: "item-2", variant_id: "birria-variant", name: "Tacos de birria", category: "Tacos", variant_name: "Unidad", price_minor: "2290000", currency: "COP" },
+        ...filler,
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_confirmation", context: {} },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }) // step() -> selecting_item
+        .mockResolvedValueOnce(catalogRows), // catalogItems()
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Agregar otro producto",
+      understanding: await understand("Agregar otro producto"),
+    });
+
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "category:Otros", title: "Menú Otros" },
+        { id: "category:Tacos", title: "Menú Tacos" },
+      ],
+    });
+  });
+
+  it("resolves a tapped category (from the picker above) straight to that category's own items, by id, without touching workflow state (D-102)", async () => {
+    const client = {
+      query: jest.fn().mockResolvedValueOnce({
+        rows: [
+          { item_id: "item-1", variant_id: "pastor-variant", name: "Tacos al pastor", category: "Tacos", variant_name: "Unidad", price_minor: "1890000", currency: "COP" },
+          { item_id: "item-2", variant_id: "birria-variant", name: "Tacos de birria", category: "Tacos", variant_name: "Unidad", price_minor: "2290000", currency: "COP" },
+        ],
+      }), // catalogItems() — the only query this path ever needs
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Menú Tacos",
+      interactiveSelectionId: "category:Tacos",
+      understanding: await understand("Menú Tacos"),
+    });
+
+    expect(reply?.body).toBe("Estas son las opciones de Tacos:");
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "pastor-variant", title: "Tacos al pastor", description: "$ 18.900" },
+        { id: "birria-variant", title: "Tacos de birria", description: "$ 22.900" },
+        { id: "cart:view_catalog", title: "Ver menú" },
+      ],
+    });
+    expect(client.query).toHaveBeenCalledTimes(1);
   });
 
   it("answers an explicit recommendation request with the tenant's best sellers instead of failing item-matching", async () => {
@@ -882,6 +1182,7 @@ describe("CommercialFlowService", () => {
       options: [
         { id: "pastor-variant", title: "Tacos al pastor", description: "$ 18.900" },
         { id: "nachos-variant", title: "Nachos", description: "Orden · $ 15.000" },
+        { id: "cart:view_catalog", title: "Ver menú" },
       ],
     });
     expect(reply?.body).toBe("Esto es lo más pedido, ¿quieres agregar alguno?");
@@ -901,9 +1202,15 @@ describe("CommercialFlowService", () => {
       understanding: await understand("Recomiéndame algo"),
     });
 
-    expect(reply?.body).toBe(
-      "Aún no tengo suficientes pedidos para recomendarte algo. Escribe \"ver menú\" para ver las opciones.",
-    );
+    expect(reply?.body).toBe("Aún no tengo suficientes pedidos para recomendarte algo.");
+    // D-100: no quoted "escribe ver menú" instruction — a real button instead.
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "buttons",
+      body: "",
+      options: [{ id: "cart:view_catalog", title: "Ver menú" }],
+    });
   });
 
   it("shows the catalog as a tappable list when the customer answers 'sí' to adding another item", async () => {
@@ -943,8 +1250,87 @@ describe("CommercialFlowService", () => {
       buttonLabel: "Elegir",
       options: [
         { id: "pastor-variant", title: "Tacos al pastor", description: "$ 18.900" },
+        { id: "cart:view_catalog", title: "Ver menú" },
       ],
     });
+  });
+
+  it("offers real buttons instead of a quoted \"sí\"/\"ver menú\"/\"listo\" instruction when the answer to 'anything else?' isn't understood (D-100, D-095 rule)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_more_items",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              item_id: "item-1",
+              variant_id: "variant-1",
+              name: "Quesadilla",
+              variant_name: "Unidad",
+              price_minor: "2500000",
+              currency: "COP",
+            },
+          ],
+        }), // matchItem() -> catalogItems(), nothing scores a match
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "asdf",
+      understanding: await understand("asdf"),
+    });
+
+    expect(reply?.body).toBe(
+      "No entendí tu respuesta. Escribe el nombre de otro producto o elige una opción.",
+    );
+    expect(
+      reply?.responsePlan?.kind === "localized_template" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "buttons",
+      body: "",
+      options: [
+        { id: "cart:add_item", title: "Otro producto" },
+        { id: "cart:finish_items", title: "Listo" },
+      ],
+    });
+  });
+
+  it("answers /help with a tappable list of every command instead of ten quoted phrases in one paragraph (D-100, D-095 rule)", async () => {
+    const client = { query: jest.fn().mockResolvedValueOnce({ rows: [] }) }; // no active workflow
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Ayuda",
+      understanding: await understand("Ayuda"),
+    });
+
+    expect(reply?.body).toBe("Puedes elegir cualquiera de estas opciones:");
+    const interactive =
+      reply?.responsePlan?.kind === "verified_content" ? reply.responsePlan.interactive : undefined;
+    expect(interactive?.type).toBe("list");
+    expect(
+      interactive?.type === "list" ? interactive.options.map((o) => o.title) : [],
+    ).toEqual([
+      "Ver menú",
+      "Ver pedido",
+      "Otro producto",
+      "Quitar producto",
+      "Cambiar cantidad",
+      "Volver",
+      "Cambiar entrega",
+      "Cambiar dirección",
+      "Cancelar pedido",
+      "Hablar con una persona",
+    ]);
   });
 
   it("adds every product mentioned in one message instead of dropping all but the highest-scoring one (D-050)", async () => {
@@ -1172,8 +1558,11 @@ describe("CommercialFlowService", () => {
         : undefined;
     expect(interactive?.type).toBe("list");
     expect(interactive?.options).toEqual([
-      { id: "1", title: expect.stringContaining("12") },
-      { id: "2", title: expect.stringContaining("16") },
+      // "Agua fresca (Vaso de 12 oz)" is 27 chars — longer than a list
+      // row's 24-char title cap, so the full label now also carries over
+      // into `description` instead of being silently lost to truncation.
+      { id: "1", title: expect.stringContaining("12"), description: "Agua fresca (Vaso de 12 oz)" },
+      { id: "2", title: expect.stringContaining("16"), description: "Agua fresca (Vaso de 16 oz)" },
       { id: "3", title: "Todas" },
     ]);
   });
@@ -1317,6 +1706,141 @@ describe("CommercialFlowService", () => {
     });
   });
 
+  it("shows the current cart as tappable options when asking which product's quantity to change, instead of a bare-text example prompt (live finding)", async () => {
+    const cartRows = {
+      rows: [
+        {
+          item_id: "pollo",
+          variant_id: "pollo-variant",
+          name: "Tacos de pollo",
+          variant_name: "Orden de 3 tacos",
+          price_minor: "1790000",
+          currency: "COP",
+        },
+        {
+          item_id: "agua",
+          variant_id: "agua-variant",
+          name: "Agua fresca",
+          variant_name: "Vaso de 12 oz",
+          price_minor: "700000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_more_items",
+              context: {},
+            },
+          ],
+        })
+        // matchCartItemCandidates: no product named at all
+        .mockResolvedValueOnce(cartRows)
+        // step() marking the workflow as changing_quantity_item
+        .mockResolvedValueOnce({ rows: [] })
+        // changeQuantityWhichReply's own cartItems() lookup for the option list
+        .mockResolvedValueOnce(cartRows),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Cambiar cantidad",
+      understanding: await understand("Cambiar cantidad"),
+    });
+
+    expect(reply?.body).toContain("¿Qué producto deseas cambiar de cantidad?");
+    expect(
+      reply?.responsePlan?.kind === "verified_content" &&
+        reply.responsePlan.interactive,
+    ).toEqual({
+      type: "buttons",
+      body: "",
+      options: [
+        { id: "1", title: "Tacos de pollo" },
+        { id: "2", title: "Agua fresca" },
+      ],
+    });
+  });
+
+  it("asks how many units once the product is picked but no quantity was given, then applies the number typed next to that same product (live finding)", async () => {
+    const item = {
+      item_id: "pollo",
+      variant_id: "pollo-variant",
+      name: "Tacos de pollo",
+      variant_name: "Orden de 3 tacos",
+      price_minor: "1790000",
+      currency: "COP",
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_more_items",
+              context: {},
+            },
+          ],
+        })
+        // matchCartItemCandidates: "tacos de pollo" matches the cart line, no number in the message
+        .mockResolvedValueOnce({ rows: [item] })
+        // step() persisting quantityTarget
+        .mockResolvedValueOnce({ rows: [] }),
+    };
+
+    const firstReply = await service().resolve(client as never, {
+      ...input,
+      body: "Cambiar la cantidad de tacos de pollo",
+      understanding: await understand("Cambiar la cantidad de tacos de pollo"),
+    });
+
+    expect(firstReply?.body).toBe("¿Cuántas unidades de Tacos de pollo quieres?");
+    const stepCall = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.conversation_workflows"),
+    );
+    expect(JSON.parse(stepCall?.[1]?.[2] as string)).toEqual(
+      expect.objectContaining({ quantityTarget: item }),
+    );
+
+    const client2 = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "changing_quantity_item",
+              context: { quantityTarget: item },
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [{ id: "line-1" }] }) // update request_lines set quantity=...
+        .mockResolvedValue({ rows: [] }), // recalculate(), step(), cart()
+    };
+
+    await service().resolve(client2 as never, {
+      ...input,
+      body: "5",
+      understanding: await understand("5"),
+    });
+
+    const updateCall = client2.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.request_lines set quantity="),
+    );
+    expect(updateCall?.[1]).toEqual(
+      expect.arrayContaining(["request-1", "pollo-variant", 5]),
+    );
+  });
+
   it("asks which product when catalog matches are tied instead of picking arbitrarily", async () => {
     const client = {
       query: jest
@@ -1374,6 +1898,74 @@ describe("CommercialFlowService", () => {
       ],
     });
     expect(client.query).toHaveBeenCalledTimes(3);
+  });
+
+  it("uses a list instead of buttons when a tied product's name would otherwise be truncated unreadable (regression, D-100 live finding)", async () => {
+    // Found live testing Santos Tacos' packages: with only 2 tied options
+    // this used `buttons` (20-char cap, since neither name repeats and
+    // there are ≤3 candidates), truncating "Orden x 3 Tacos Birria de
+    // Camarón o Güerito" to "Orden x 3 Tacos Bir…" — losing exactly the
+    // words that told the two options apart, right next to the other
+    // option's untruncated, identical-looking prefix "Orden x 3 Tacos".
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_item",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              item_id: "package-regular",
+              variant_id: "package-regular-variant",
+              name: "Orden x 3 Tacos",
+              variant_name: "Unidad",
+              price_minor: "2550000",
+              currency: "COP",
+            },
+            {
+              item_id: "package-premium",
+              variant_id: "package-premium-variant",
+              name: "Orden x 3 Tacos Birria de Camarón o Güerito",
+              variant_name: "Unidad",
+              price_minor: "2950000",
+              currency: "COP",
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }),
+    };
+    const message = "Quiero Orden x 3 Tacos";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      reply?.responsePlan?.kind === "verified_content" &&
+        reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "1", title: "Orden x 3 Tacos" },
+        {
+          id: "2",
+          title: "Orden x 3 Tacos Birria …",
+          description: "Orden x 3 Tacos Birria de Camarón o Güerito",
+        },
+      ],
+    });
   });
 
   it("resolves a tapped catalog/menu list item by its exact variant id instead of re-matching the tied name (regression)", async () => {
@@ -1788,6 +2380,150 @@ describe("CommercialFlowService", () => {
     ).toBe(true);
   });
 
+  it("adds an automatic packaging line (1 per N food items, rounded up) once pickup is chosen, when the tenant has one configured (D-104)", async () => {
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_fulfillment", context: {} },
+            ],
+          };
+        if (sql.includes("left join app.catalog_items item"))
+          // 7 food items in the cart, ratio 3 -> ceil(7/3) = 3 packages.
+          return {
+            rows: [
+              {
+                tenant_id: "tenant-1",
+                fulfillment_type: "pickup",
+                variant_id: "packaging-variant",
+                item_name: "Empaque para llevar",
+                price_minor: "100000",
+                currency: "COP",
+                ratio: 3,
+              },
+            ],
+          };
+        if (sql.includes("select id from app.request_lines where commercial_request_id"))
+          return { rows: [] }; // no existing packaging line yet
+        if (sql.includes("food") && sql.includes("counts_toward_packaging"))
+          return { rows: [{ food: "7", total: "8" }] }; // 7 food + 1 drink
+        return { rows: [] };
+      }),
+    };
+
+    await service([]).resolve(client as never, {
+      ...input,
+      body: "Recogida",
+      understanding: fulfillmentUnderstanding("fulfillment.pickup"),
+    });
+
+    const insert = queries.find(({ sql }) => sql.includes("insert into app.request_lines"));
+    expect(insert).toBeDefined();
+    expect(insert?.params).toEqual([
+      expect.any(String),
+      "tenant-1",
+      "request-1",
+      "packaging-variant",
+      "Empaque para llevar",
+      "100000",
+      "COP",
+      3, // packages: ceil(7/3)
+      "300000", // 3 * 100000
+    ]);
+  });
+
+  it("charges the packaging floor of 1 even for a drinks-only order (0 food items still counts as 'has something')", async () => {
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_fulfillment", context: {} },
+            ],
+          };
+        if (sql.includes("left join app.catalog_items item"))
+          return {
+            rows: [
+              {
+                tenant_id: "tenant-1",
+                fulfillment_type: "delivery",
+                variant_id: "packaging-variant",
+                item_name: "Empaque para llevar",
+                price_minor: "100000",
+                currency: "COP",
+                ratio: 3,
+              },
+            ],
+          };
+        if (sql.includes("select id from app.request_lines where commercial_request_id"))
+          return { rows: [] };
+        if (sql.includes("food") && sql.includes("counts_toward_packaging"))
+          return { rows: [{ food: "0", total: "2" }] }; // 2 drinks, 0 food
+        return { rows: [] };
+      }),
+    };
+
+    await service([]).resolve(client as never, {
+      ...input,
+      body: "Domicilio",
+      understanding: fulfillmentUnderstanding("fulfillment.delivery"),
+    });
+
+    const insert = queries.find(({ sql }) => sql.includes("insert into app.request_lines"));
+    expect(insert?.params[7]).toBe(1); // max(1, ceil(0/3)) = 1, never 0
+  });
+
+  it("removes an existing packaging line when the cart ends up with nothing in it (D-104)", async () => {
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_fulfillment", context: {} },
+            ],
+          };
+        if (sql.includes("left join app.catalog_items item"))
+          return {
+            rows: [
+              {
+                tenant_id: "tenant-1",
+                fulfillment_type: "pickup",
+                variant_id: "packaging-variant",
+                item_name: "Empaque para llevar",
+                price_minor: "100000",
+                currency: "COP",
+                ratio: 3,
+              },
+            ],
+          };
+        if (sql.includes("select id from app.request_lines where commercial_request_id"))
+          return { rows: [{ id: "packaging-line-1" }] }; // a stale line from before the cart was emptied
+        if (sql.includes("food") && sql.includes("counts_toward_packaging"))
+          return { rows: [{ food: "0", total: "0" }] }; // cart is empty
+        return { rows: [] };
+      }),
+    };
+
+    await service([]).resolve(client as never, {
+      ...input,
+      body: "Recogida",
+      understanding: fulfillmentUnderstanding("fulfillment.pickup"),
+    });
+
+    const removal = queries.find(
+      ({ sql, params }) =>
+        sql.includes("update app.request_lines set status='removed'") && params[0] === "packaging-line-1",
+    );
+    expect(removal).toBeDefined();
+  });
+
   it("skips the address entirely when it is not configured as required for the chosen modality (regression)", async () => {
     const client = {
       query: jest
@@ -1803,6 +2539,8 @@ describe("CommercialFlowService", () => {
           ],
         })
         .mockResolvedValueOnce({ rows: [] }) // update commercial_requests.fulfillment_type
+        .mockResolvedValueOnce({ rows: [{ tenant_id: "tenant-1", fulfillment_type: "pickup", variant_id: null }] }) // syncPackagingFee: no packaging fee configured (D-104)
+        .mockResolvedValueOnce({ rows: [] }) // recalculate(): totals update
         .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_confirmation
         .mockResolvedValueOnce({
           rows: [
@@ -1889,6 +2627,10 @@ describe("CommercialFlowService", () => {
       body: "",
       buttonLabel: "Elegir",
       options: [
+        // "debió darme la opción de agregar más productos" — live finding,
+        // "Corregir" used to only offer to modify what was already in the
+        // cart, with no way back to adding another item.
+        { id: "cart:add_item", title: "Otro producto" },
         { id: "change:product", title: "Cambiar producto" },
         { id: "change:remove", title: "Quitar producto" },
         { id: "change:quantity", title: "Cambiar cantidad" },
