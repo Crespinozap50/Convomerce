@@ -17,7 +17,6 @@ import {
   Gauge,
   Info,
   Link2,
-  Languages,
   LogOut,
   MessageCircle,
   MessagesSquare,
@@ -40,17 +39,26 @@ import {
 import { useTranslation } from "react-i18next";
 import { api } from "./api";
 import { OperationalRequirementsPanel } from "./operational-requirements/OperationalRequirementsPanel";
+import { Session } from "./types";
+import {
+  Page,
+  KnowledgeSection,
+  knowledgeSections,
+  knowledgePaths,
+  pagePaths,
+  knowledgeDescriptionKeys,
+  readDashboardPage,
+  readDashboardTenant,
+  readDashboardRoute,
+} from "./dashboard/routing";
+import { playNotificationSound, showDesktopNotification, roleName } from "./dashboard/utils";
+import { AppSelect } from "./components/AppSelect";
+import { FieldHelp } from "./components/FieldHelp";
+import { ConfirmModal } from "./components/ConfirmModal";
+import { LanguageSwitcher } from "./components/LanguageSwitcher";
+import { Login } from "./auth/Login";
+import { ChangePassword } from "./auth/ChangePassword";
 
-type Membership = { tenantId: string; tenantName?: string; role: string };
-type Session = {
-  userId: string;
-  email: string;
-  displayName: string;
-  uiLanguage: "en" | "es";
-  mustChangePassword: boolean;
-  platformRole: string | null;
-  memberships: Membership[];
-};
 type Member = {
   membershipId: string;
   userId: string;
@@ -85,62 +93,7 @@ type ConnectionsResponse = {
   webhookPath: string;
   connections: Connection[];
 };
-type Page =
-  | "companies"
-  | "tenant-metrics"
-  | "team"
-  | "connections"
-  | "bot"
-  | "knowledge"
-  | "scheduling"
-  | "requests"
-  | "conversations";
-type KnowledgeSection =
-  | "profile"
-  | "catalog"
-  | "requirements"
-  | "responses"
-  | "learning"
-  | "answers"
-  | "sources";
-const knowledgeSections: KnowledgeSection[] = [
-  "profile",
-  "catalog",
-  "requirements",
-  "responses",
-  "learning",
-  "answers",
-  "sources",
-];
-const knowledgePaths: Record<KnowledgeSection, string> = {
-  profile: "/knowledge/profile",
-  catalog: "/knowledge/catalog",
-  requirements: "/knowledge/requirements",
-  responses: "/knowledge/learned-responses",
-  learning: "/knowledge/learning-queue",
-  answers: "/knowledge/published-answers",
-  sources: "/knowledge/sources",
-};
-const pagePaths: Record<Page, string> = {
-  companies: "/companies",
-  "tenant-metrics": "/tenant-metrics",
-  team: "/team",
-  connections: "/connections",
-  bot: "/bot",
-  knowledge: knowledgePaths.profile,
-  scheduling: "/scheduling",
-  requests: "/orders-and-bookings",
-  conversations: "/conversations",
-};
-const knowledgeDescriptionKeys: Record<KnowledgeSection, string> = {
-  profile: "pages.knowledge.description",
-  catalog: "knowledge.catalogHelp",
-  requirements: "requirements.description",
-  responses: "knowledge.responseVariantsHelp",
-  learning: "knowledge.learningHelp",
-  answers: "knowledge.faqHelp",
-  sources: "knowledge.sourcesHelp",
-};
+
 const formatLanguageName = (locale: string, displayLocale: string) => {
   try {
     const name =
@@ -151,80 +104,6 @@ const formatLanguageName = (locale: string, displayLocale: string) => {
     return locale;
   }
 };
-const dashboardPages: Page[] = [
-  "companies",
-  "tenant-metrics",
-  "team",
-  "connections",
-  "bot",
-  "knowledge",
-  "scheduling",
-  "requests",
-  "conversations",
-];
-const readDashboardPage = (userId: string, fallback: Page): Page => {
-  const saved = window.localStorage.getItem(
-    `commerce.dashboard.page.${userId}`,
-  ) as Page | null;
-  return saved && dashboardPages.includes(saved) ? saved : fallback;
-};
-const readDashboardTenant = (userId: string, fallback: string): string =>
-  window.localStorage.getItem(`commerce.dashboard.tenant.${userId}`) ??
-  fallback;
-const readDashboardRoute = (fallback: Page) => {
-  const knowledgeSection = knowledgeSections.find(
-    (section) => knowledgePaths[section] === window.location.pathname,
-  );
-  if (knowledgeSection) return { page: "knowledge" as Page, knowledgeSection };
-  const page = dashboardPages.find(
-    (candidate) => pagePaths[candidate] === window.location.pathname,
-  );
-  return { page: page ?? fallback, knowledgeSection: null };
-};
-// Two quick sine tones synthesized with the Web Audio API — no asset file to
-// ship/host, and it works the same on every OS. Errors are swallowed:
-// playing the chime is a nice-to-have, never worth failing anything over.
-function playNotificationSound() {
-  try {
-    const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const now = ctx.currentTime;
-    [880, 1320].forEach((frequency, index) => {
-      const start = now + index * 0.12;
-      const oscillator = ctx.createOscillator();
-      const gain = ctx.createGain();
-      oscillator.type = "sine";
-      oscillator.frequency.value = frequency;
-      gain.gain.setValueAtTime(0, start);
-      gain.gain.linearRampToValueAtTime(0.2, start + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.18);
-      oscillator.connect(gain).connect(ctx.destination);
-      oscillator.start(start);
-      oscillator.stop(start + 0.2);
-    });
-    window.setTimeout(() => void ctx.close(), 500);
-  } catch {
-    // Audio isn't available/allowed yet (e.g. no user gesture) — skip it.
-  }
-}
-// Only shown when the tab isn't focused: while the admin is actively looking
-// at the inbox, a new message already appears there — an OS notification on
-// top would just be redundant. The sound chime (called separately) still
-// plays either way, matching how chat apps like Slack behave.
-function showDesktopNotification(title: string, body: string, tag: string) {
-  if (typeof document !== "undefined" && !document.hidden) return;
-  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-  try {
-    new Notification(title, { body, tag });
-  } catch {
-    // Some browsers/contexts (e.g. no service worker on certain mobile
-    // browsers) reject the Notification constructor — never fatal here.
-  }
-}
 type BotConfig = {
   enabled: boolean;
   assistantName: string;
@@ -351,98 +230,6 @@ type ResponseVariant = {
   updatedAt: string;
 };
 
-function AppSelect<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (value: T) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState({ left: 0, top: 0, width: 0 });
-  const root = useRef<HTMLDivElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
-  const selected = options.find((option) => option.value === value);
-  useEffect(() => {
-    const close = (event: PointerEvent) => {
-      const node = event.target as Node;
-      if (!root.current?.contains(node) && !menu.current?.contains(node))
-        setOpen(false);
-    };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, []);
-  useEffect(() => {
-    if (!open || !root.current) return;
-    const rect = root.current.getBoundingClientRect();
-    const width = Math.min(Math.max(rect.width, 260), window.innerWidth - 32);
-    const left = Math.max(
-      16,
-      Math.min(rect.left, window.innerWidth - width - 16),
-    );
-    setPosition({ left, top: rect.bottom + 7, width });
-    const close = () => setOpen(false);
-    const closeOnExternalScroll = (event: Event) => {
-      if (!menu.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("resize", close);
-    window.addEventListener("scroll", closeOnExternalScroll, true);
-    return () => {
-      window.removeEventListener("resize", close);
-      window.removeEventListener("scroll", closeOnExternalScroll, true);
-    };
-  }, [open]);
-  const popup = open
-    ? createPortal(
-        <div
-          className="app-select-menu"
-          role="listbox"
-          ref={menu}
-          style={{
-            left: position.left,
-            top: position.top,
-            width: position.width,
-          }}
-        >
-          {options.map((option) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              className={option.value === value ? "selected" : ""}
-              key={option.value}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-            >
-              <span>{option.label}</span>
-              {option.value === value && <ShieldCheck size={16} />}
-            </button>
-          ))}
-        </div>,
-        document.body,
-      )
-    : null;
-  return (
-    <div className="app-select" ref={root}>
-      <button
-        type="button"
-        className="app-select-trigger"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span>{selected?.label ?? value}</span>
-        <ChevronDown size={17} className={open ? "rotated" : ""} />
-      </button>
-      {popup}
-    </div>
-  );
-}
-
 export default function App() {
   const { i18n } = useTranslation();
   const [session, setSession] = useState<Session | null>(null);
@@ -489,148 +276,6 @@ export default function App() {
         setSession(null);
       }}
     />
-  );
-}
-
-function Login({ onLogin }: { onLogin: (s: Session) => void }) {
-  const { t } = useTranslation();
-  const [email, setEmail] = useState("admin@commerce.test");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await api("/v1/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      });
-      onLogin(await api("/v1/auth/me"));
-    } catch (x) {
-      setError((x as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <main className="auth-shell">
-      <section className="auth-brand">
-        <div className="brand-mark">
-          <MessageCircle size={32} />
-        </div>
-        <span className="eyebrow">COMMERCE ASSISTANT</span>
-        <h1>{t("login.headline")}</h1>
-        <p>{t("login.description")}</p>
-        <div className="trust">
-          <ShieldCheck />
-          <span>{t("login.trust")}</span>
-        </div>
-      </section>
-      <section className="auth-card">
-        <div>
-          <LanguageSwitcher />
-          <span className="eyebrow green">{t("login.eyebrow")}</span>
-          <h2>{t("login.title")}</h2>
-          <p>{t("login.subtitle")}</p>
-        </div>
-        <form onSubmit={submit}>
-          <label>
-            {t("login.email")}
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            {t("login.password")}
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={12}
-            />
-          </label>
-          {error && <div className="error">{error}</div>}
-          <button disabled={busy}>
-            {busy ? t("login.busy") : t("login.submit")}
-          </button>
-        </form>
-        <small>{t("login.secure")}</small>
-      </section>
-    </main>
-  );
-}
-
-function ChangePassword({
-  onChanged,
-  error,
-  onError,
-}: {
-  onChanged: () => void;
-  error: string;
-  onError: (v: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [currentPassword, setCurrent] = useState("");
-  const [newPassword, setNew] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    onError("");
-    try {
-      await api("/v1/auth/change-password", {
-        method: "POST",
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
-      onChanged();
-    } catch (x) {
-      onError((x as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <main className="center muted-bg">
-      <section className="password-card">
-        <div className="icon-box">
-          <ShieldCheck />
-        </div>
-        <LanguageSwitcher persist />
-        <span className="eyebrow green">{t("password.eyebrow")}</span>
-        <h2>{t("password.title")}</h2>
-        <p>{t("password.description")}</p>
-        <form onSubmit={submit}>
-          <label>
-            {t("password.current")}
-            <input
-              type="password"
-              value={currentPassword}
-              onChange={(e) => setCurrent(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            {t("password.next")}
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNew(e.target.value)}
-              minLength={12}
-              required
-            />
-            <small>{t("password.hint")}</small>
-          </label>
-          {error && <div className="error">{error}</div>}
-          <button disabled={busy}>{t("password.submit")}</button>
-        </form>
-      </section>
-    </main>
   );
 }
 
@@ -1806,47 +1451,6 @@ function Team({
     </>
   );
 }
-function FieldHelp({ children }: { children: string }) {
-  return (
-    <small className="field-help">
-      <Info size={14} />
-      <span>{children}</span>
-    </small>
-  );
-}
-function ConfirmModal({
-  message,
-  confirmLabel,
-  onConfirm,
-  onCancel,
-}: {
-  message: string;
-  confirmLabel: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  const { t } = useTranslation();
-  return createPortal(
-    <div className="modal-backdrop" onClick={onCancel}>
-      <section
-        className="modal confirm-modal"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <p>{message}</p>
-        <div className="modal-actions">
-          <button type="button" className="text-button" onClick={onCancel}>
-            {t("common.cancel")}
-          </button>
-          <button type="button" className="danger-soft" onClick={onConfirm}>
-            {confirmLabel}
-          </button>
-        </div>
-      </section>
-    </div>,
-    document.body,
-  );
-}
-
 function BusinessHoursEditor({
   value,
   onChange,
@@ -6153,73 +5757,6 @@ function ConversationInbox({
   );
 }
 
-function LanguageSwitcher({
-  compact = false,
-  persist = false,
-}: {
-  compact?: boolean;
-  persist?: boolean;
-}) {
-  const { t, i18n } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const current = i18n.language.startsWith("es") ? "es" : "en";
-  const languages = [
-    { code: "es", label: "Spanish (ES)" },
-    { code: "en", label: "English (EN)" },
-  ];
-  const selected = languages.find((language) => language.code === current)!;
-  return (
-    <div className={compact ? "language-picker compact" : "language-picker"}>
-      <button
-        type="button"
-        className="language-toggle"
-        onClick={() => setOpen(!open)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={t("language.label")}
-      >
-        <Languages size={17} />
-        <span>{selected.label}</span>
-        <ChevronDown className={open ? "rotated" : ""} size={16} />
-      </button>
-      {open && (
-        <div
-          className="language-menu"
-          role="listbox"
-          aria-label={t("language.label")}
-        >
-          {languages.map((language) => (
-            <button
-              key={language.code}
-              type="button"
-              role="option"
-              aria-selected={language.code === current}
-              className={language.code === current ? "selected" : ""}
-              onClick={() => {
-                void i18n.changeLanguage(language.code);
-                if (persist)
-                  void api("/v1/auth/preferences", {
-                    method: "PATCH",
-                    body: JSON.stringify({ uiLanguage: language.code }),
-                  });
-                setOpen(false);
-              }}
-            >
-              <span>{language.label}</span>
-              {language.code === current && <ShieldCheck size={17} />}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-function roleName(
-  role: string,
-  t: (key: string, options?: Record<string, unknown>) => string,
-) {
-  return t(`roles.${role}`, { defaultValue: role });
-}
 function slugify(value: string) {
   return value
     .normalize("NFD")
