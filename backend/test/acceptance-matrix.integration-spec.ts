@@ -389,6 +389,17 @@ async function cleanupConversation(
     )
   ).rows.map((row) => row.id);
   if (commercialRequestIds.length > 0) {
+    // Un tenant con reglas de recomendación reales (Santos Tacos) puede
+    // ofrecer una al arrancar el pedido, dejando una fila en
+    // recommendation_events que referencia este commercial_request — solo
+    // aparece contra una instalación fresca donde esas reglas están
+    // activas, no contra un dev DB con historia acumulada (mismo patrón de
+    // D-082/083/084: la instalación fresca revela lo que el estado viejo
+    // esconde). Debe borrarse antes que commercial_requests por su FK.
+    await pool.query(
+      'delete from app.recommendation_events where commercial_request_id = any($1::uuid[])',
+      [commercialRequestIds],
+    );
     await pool.query(
       'delete from app.request_lines where commercial_request_id = any($1::uuid[])',
       [commercialRequestIds],
