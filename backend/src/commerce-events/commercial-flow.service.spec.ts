@@ -999,6 +999,48 @@ describe("CommercialFlowService", () => {
     expect(client.query).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps a long product name readable in the catalog list instead of truncating away what distinguishes it (live finding)", async () => {
+    // Found live browsing Santos Tacos' real "Entradas" category: the two
+    // sandwiches came back as "Sandwich de queso y Sop…" and "Sandwich de
+    // queso y bir…", identical up to the ellipsis. itemChoiceReply already
+    // solved this for disambiguation lists (D-101/D-102); the catalog list
+    // now follows the same rule — full name in the 72-char description,
+    // ahead of the variant/price it already carried.
+    const catalogRows = {
+      rows: [
+        { item_id: "item-1", variant_id: "sandwich-variant", name: "Sandwich de queso y Sopa MX", variant_name: "Unidad", price_minor: "2100000", currency: "COP" },
+        { item_id: "item-2", variant_id: "sandwich-birria-variant", name: "Sandwich de queso y birria y Sopa MX", variant_name: "Unidad", price_minor: "2800000", currency: "COP" },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] }) // no active workflow
+        .mockResolvedValueOnce(catalogRows) // matchItemCandidates() -> catalogItems()
+        .mockResolvedValueOnce(catalogRows), // catalogChoiceReply() -> catalogItems()
+    };
+    const message = "Quiero pedir una hamburguesa";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "sandwich-variant", title: "Sandwich de queso y Sop…", description: "Sandwich de queso y Sopa MX · $NBSP21.000".replace(/NBSP/g, "\u00a0") },
+        { id: "sandwich-birria-variant", title: "Sandwich de queso y bir…", description: "Sandwich de queso y birria y Sopa MX · $NBSP28.000".replace(/NBSP/g, "\u00a0") },
+        { id: "cart:view_catalog", title: "Ver menú" },
+      ],
+    });
+  });
+
   it("shows the catalog while an order is waiting for a product", async () => {
     const client = {
       query: jest.fn().mockResolvedValueOnce({
@@ -1680,10 +1722,11 @@ describe("CommercialFlowService", () => {
         })
         // matchCartItemCandidates: nothing in the cart matches "el pastel"
         .mockResolvedValueOnce(cartRows)
-        // step() marking the workflow as removing_item
-        .mockResolvedValueOnce({ rows: [] })
         // removeWhichReply's own cartItems() lookup for the option list
-        .mockResolvedValueOnce(cartRows),
+        .mockResolvedValueOnce(cartRows)
+        // step() marking the workflow as removing_item, with the offered
+        // lines persisted so the tap resolves by index
+        .mockResolvedValueOnce({ rows: [] }),
     };
 
     const reply = await service().resolve(client as never, {
@@ -1742,10 +1785,11 @@ describe("CommercialFlowService", () => {
         })
         // matchCartItemCandidates: no product named at all
         .mockResolvedValueOnce(cartRows)
-        // step() marking the workflow as changing_quantity_item
-        .mockResolvedValueOnce({ rows: [] })
         // changeQuantityWhichReply's own cartItems() lookup for the option list
-        .mockResolvedValueOnce(cartRows),
+        .mockResolvedValueOnce(cartRows)
+        // step() marking the workflow as changing_quantity_item, with the
+        // offered lines persisted so the tap resolves by index
+        .mockResolvedValueOnce({ rows: [] }),
     };
 
     const reply = await service().resolve(client as never, {
@@ -1766,6 +1810,219 @@ describe("CommercialFlowService", () => {
         { id: "2", title: "Agua fresca" },
       ],
     });
+  });
+
+  it("asks which product when a mention ties while a cart is already open, instead of answering 'no entendí' (live finding)", async () => {
+    // Found live: with an order in progress, "Quiero una Sopa MX" — the
+    // menu's own spelling — got "No entendí tu respuesta", because every
+    // token of "Sopa MX" also appears in "Sandwich de queso y Sopa MX".
+    // startNewOrder already asks "which one?" for that same message; this
+    // step now does too, persisting the tie for the tap that follows.
+    const catalogRows = {
+      rows: [
+        { item_id: "sopa", variant_id: "sopa-variant", name: "Sopa MX", variant_name: "Unidad", price_minor: "800000", currency: "COP" },
+        { item_id: "sandwich", variant_id: "sandwich-variant", name: "Sandwich de queso y Sopa MX", variant_name: "Unidad", price_minor: "2100000", currency: "COP" },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_more_items",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValue(catalogRows),
+    };
+    const message = "Quiero una Sopa MX";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toBe("Encontré varias opciones, ¿cuál prefieres?");
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "1", title: "Sopa MX" },
+        { id: "2", title: "Sandwich de queso y Sop…", description: "Sandwich de queso y Sopa MX" },
+      ],
+    });
+    // The tie is persisted on the workflow it already has — no second
+    // request/workflow row — so the tap next turn resolves by index.
+    const stepUpdate = client.query.mock.calls.find(
+      ([sql]) => String(sql).includes("update app.conversation_workflows"),
+    );
+    expect(String(stepUpdate?.[1])).toContain("selecting_item");
+    expect(JSON.stringify(stepUpdate?.[1])).toContain("tiedItems");
+  });
+
+  it("resolves the cart row tapped to change its quantity by index, instead of looping on a name that ties (live finding)", async () => {
+    // Found live: the cart held "Sopa MX" and "Sandwich de queso y birria y
+    // Sopa MX". Tapping "Sopa MX" from the picker re-matched the tapped
+    // title by name, tied against the longer line, and every answer after
+    // it — the bare number included — came back to "¿Qué producto deseas
+    // cambiar de cantidad?" with no way out. The offered lines are now
+    // persisted as tiedItems, so the tap resolves positionally.
+    const soup = {
+      item_id: "sopa",
+      variant_id: "sopa-variant",
+      name: "Sopa MX",
+      variant_name: "Unidad",
+      price_minor: "800000",
+      currency: "COP",
+    };
+    const sandwich = {
+      item_id: "sandwich",
+      variant_id: "sandwich-variant",
+      name: "Sandwich de queso y birria y Sopa MX",
+      variant_name: "Unidad",
+      price_minor: "2800000",
+      currency: "COP",
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "changing_quantity_item",
+              context: { tiedItems: [soup, sandwich] },
+            },
+          ],
+        })
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Sopa MX",
+      understanding: { ...(await understand("Sopa MX")), entities: { ...(await understand("Sopa MX")).entities, selectionIndex: 1 } },
+    });
+
+    expect(reply?.body).toBe("¿Cuántas unidades de Sopa MX quieres?");
+    const stepUpdate = client.query.mock.calls.find(
+      ([sql]) => String(sql).includes("update app.conversation_workflows"),
+    );
+    // The picked row becomes the quantity target, and the offered rows are
+    // dropped so the number typed next is read as a count, not an index.
+    expect(JSON.stringify(stepUpdate?.[1])).toContain("quantityTarget");
+    expect(JSON.stringify(stepUpdate?.[1])).not.toContain("tiedItems");
+  });
+
+  it("offers a required modifier group on its own, instead of burying it among optional extras past WhatsApp's row cap (live finding)", async () => {
+    // Found live adding "Orden x 3 Tacos": the prompt listed the mandatory
+    // flavors, the salsas and one adición together — 9 rows plus "Listo" —
+    // so the second adición ("Queso extra") could never be picked at all,
+    // under a body that read "¿Quieres agregar alguna adición?" as if
+    // nothing were required.
+    const option = (
+      optionId: string,
+      name: string,
+      groupId: string,
+      groupName: string,
+      min: string | null,
+    ) => ({
+      option_id: optionId,
+      group_id: groupId,
+      group_name: groupName,
+      selection_type: "multiple",
+      name,
+      price_delta_minor: "0",
+      currency: "COP",
+      quantity: "0",
+      min_selections: min,
+      max_selections: min,
+      group_picked: "0",
+    });
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_modifiers",
+              context: { requestLineId: "line-1" },
+            },
+          ],
+        }) // active workflow lookup
+        .mockResolvedValueOnce({
+          rows: [
+            option("birria", "Birria", "tacos-group", "Elige tus 3 tacos", "3"),
+            option("cochinita", "Cochinita", "tacos-group", "Elige tus 3 tacos", "3"),
+            option("chorizo", "Chorizo", "tacos-group", "Elige tus 3 tacos", "3"),
+            option("tamarindo", "Salsa de Tamarindo", "salsas-group", "Salsas", null),
+            option("queso", "Queso extra", "adiciones-group", "Adiciones", null),
+          ],
+        }), // remainingModifiers: nothing picked yet in the required group
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Listo",
+      understanding: await understand("Listo"),
+    });
+
+    expect(reply?.body).toBe('Elige 3 más de "Elige tus 3 tacos" antes de continuar.');
+    const interactive =
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive;
+    expect(interactive && interactive.options.map((row) => row.title)).toEqual([
+      "Birria",
+      "Cochinita",
+      "Chorizo",
+      "Listo",
+    ]);
+  });
+
+  it("never offers the automatic packaging line among the cart's own options (live finding)", async () => {
+    // Found live: "Empaque para llevar" (D-104) showed up in both the
+    // "Cambiar cantidad" and "Quitar producto" pickers, so the customer
+    // could ask for 7 of them — and syncPackagingFee silently recomputed it
+    // back to 2 at the next fulfillment step. It is derived from the cart,
+    // never chosen, so cartItems() excludes it at the source: every cart
+    // picker and every cart match share that one query.
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_more_items",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    await service().resolve(client as never, {
+      ...input,
+      body: "Cambiar cantidad",
+      understanding: await understand("Cambiar cantidad"),
+    });
+
+    const cartLookups = client.query.mock.calls
+      .map(([sql]) => String(sql))
+      .filter((sql) => sql.includes("from app.request_lines line"));
+    expect(cartLookups.length).toBeGreaterThan(0);
+    for (const sql of cartLookups) expect(sql).toContain("item.is_packaging_fee=false");
   });
 
   it("asks how many units once the product is picked but no quantity was given, then applies the number typed next to that same product (live finding)", async () => {

@@ -507,10 +507,7 @@ export class CommercialFlowService {
         });
         return this.itemChoiceReply(input.locale, tied, "itemChoice", true);
       }
-      if (!match) {
-        await this.step(client, flow.id, "removing_item", flow.context);
-        return this.removeWhichReply(client, flow.commercial_request_id, input.locale);
-      }
+      if (!match) return this.removeWhichReply(client, flow, input.locale);
       return this.removeItem(client, flow, input.locale, match);
     }
     if (command === "change_quantity") {
@@ -538,15 +535,7 @@ export class CommercialFlowService {
         }
         return this.itemChoiceReply(input.locale, tied);
       }
-      if (!match) {
-        await this.step(
-          client,
-          flow.id,
-          "changing_quantity_item",
-          flow.context,
-        );
-        return this.changeQuantityWhichReply(client, flow.commercial_request_id, input.locale);
-      }
+      if (!match) return this.changeQuantityWhichReply(client, flow, input.locale);
       if (pendingQuantity === null) {
         // The product is known but no number came with it — persist it as
         // quantityTarget so the bare number the customer types next (no
@@ -793,7 +782,28 @@ export class CommercialFlowService {
         multi.unmatched,
       );
     }
-    const match = await this.matchItem(client, input);
+    const { match, tied } = await this.matchItemCandidates(client, input);
+    // An ambiguous product mention used to die here as "no entendí tu
+    // respuesta": matchItem() collapses a tie into a bare null, and this
+    // step — unlike startNewOrder, which asks "which one?" for the exact
+    // same message — had nothing left to say. Found live with "Quiero una
+    // Sopa MX" while a cart was already open: "Sopa MX" ties against
+    // "Sandwich de queso y Sopa MX" and "Sandwich de queso y birria y Sopa
+    // MX" (every token of the shorter name appears in the longer ones), so
+    // a product named exactly as the menu spells it looked unrecognized.
+    // Same tie-persisting mechanism startNewOrder uses (tiedItems +
+    // pendingQuantity read back by handleSelectingItem), minus the
+    // request/workflow inserts — this order already has both. The question
+    // guard is startNewOrder's too: "¿los tacos pican?" ties just as
+    // easily and must still fall through to the knowledge layer.
+    if (tied.length > 1 && !looksLikeQuestion(input.body)) {
+      await this.step(client, flow.id, "selecting_item", {
+        ...flow.context,
+        tiedItems: tied,
+        pendingQuantity: this.quantity(input),
+      });
+      return this.itemChoiceReply(input.locale, tied);
+    }
     if (match) {
       await this.addItem(
         client,
@@ -845,7 +855,7 @@ export class CommercialFlowService {
       return this.itemChoiceReply(input.locale, tied, "itemChoice", true);
     }
     if (!match)
-      return this.removeWhichReply(client, flow.commercial_request_id, input.locale);
+      return this.removeWhichReply(client, flow, input.locale);
     return this.removeItem(client, flow, input.locale, match);
   }
 
@@ -914,19 +924,26 @@ export class CommercialFlowService {
       typeof flow.context.pendingQuantity === "number"
         ? flow.context.pendingQuantity
         : null;
-    if (
-      tiedItems &&
-      typeof selectionIndex === "number" &&
-      tiedItems[selectionIndex - 1] &&
-      pendingQuantity !== null
-    ) {
-      return this.changeQuantity(
-        client,
-        flow,
-        input.locale,
-        tiedItems[selectionIndex - 1],
-        pendingQuantity,
-      );
+    const tiedChoice =
+      tiedItems && typeof selectionIndex === "number"
+        ? tiedItems[selectionIndex - 1]
+        : undefined;
+    if (tiedChoice && pendingQuantity !== null) {
+      return this.changeQuantity(client, flow, input.locale, tiedChoice, pendingQuantity);
+    }
+    if (tiedChoice) {
+      // Tapped from changeQuantityWhichReply, which offers the cart without
+      // asking for a number first (D-105) — so the row identifies the
+      // product and the count is still missing. Same landing place as
+      // naming the product in free text below: persist it and ask how many.
+      // tiedItems is dropped on the way out so the bare number typed next
+      // ("5") is read as a quantity, never as a row index.
+      const { tiedItems: _shown, ...rest } = flow.context;
+      await this.step(client, flow.id, "changing_quantity_item", {
+        ...rest,
+        quantityTarget: tiedChoice,
+      });
+      return this.localizedReply(input.locale, "quantityHowMany", { item: tiedChoice.name });
     }
     const newPendingQuantity =
       typeof input.understanding.entities.quantity === "number"
@@ -958,7 +975,7 @@ export class CommercialFlowService {
       return this.itemChoiceReply(input.locale, tied);
     }
     if (!match)
-      return this.changeQuantityWhichReply(client, flow.commercial_request_id, input.locale);
+      return this.changeQuantityWhichReply(client, flow, input.locale);
     if (newPendingQuantity === null) {
       await this.step(client, flow.id, "changing_quantity_item", {
         ...flow.context,
@@ -1313,11 +1330,18 @@ export class CommercialFlowService {
   }
   private async cartItems(client: PoolClient, requestId: string): Promise<Item[]> {
     const result = await client.query<Item>(
+      // A packaging-fee line (D-104) is derived from the cart, never chosen:
+      // syncPackagingFee() recomputes its quantity on every fulfillment
+      // choice and again before confirming. Offering it among the cart's own
+      // options let the customer ask for "7 empaques" and have that silently
+      // overwritten back to the computed 2 one step later (found live), so
+      // it is excluded from every cart picker and cart match — removing it
+      // or changing its quantity by hand is never a real choice.
       `select item.id item_id,variant.id variant_id,item.name,variant.name variant_name,variant.price_minor::text,variant.currency
        from app.request_lines line
        join app.item_variants variant on variant.tenant_id=line.tenant_id and variant.id=line.item_variant_id
        join app.catalog_items item on item.tenant_id=variant.tenant_id and item.id=variant.catalog_item_id
-       where line.commercial_request_id=$1 and line.status='active'`,
+       where line.commercial_request_id=$1 and line.status='active' and item.is_packaging_fee=false`,
       [requestId],
     );
     return result.rows;
@@ -1578,10 +1602,20 @@ export class CommercialFlowService {
             item.variant_name === labels.unit || item.variant_name.startsWith(labels.orderPrefix)
               ? ""
               : item.variant_name;
+          const detail = variantLabel ? `${variantLabel} · ${price}` : price;
           return {
             id: item.variant_id,
             title: this.truncate(item.name, 24),
-            description: this.truncate(variantLabel ? `${variantLabel} · ${price}` : price, 72),
+            // Same rule as itemChoiceReply (D-101/D-102), applied to the
+            // catalog list too: a name past the 24-char title cap keeps its
+            // distinguishing words in the description instead of losing them
+            // to "…" — found live on "Sandwich de queso y Sopa MX" vs.
+            // "Sandwich de queso y birria y Sopa MX", which rendered as two
+            // near-identical rows. Variant/price stay after the full name.
+            description: this.truncate(
+              item.name.length > 24 ? `${item.name} · ${detail}` : detail,
+              72,
+            ),
           };
         }),
         { id: "cart:view_catalog", title: this.copy(locale, "viewMenuButton") },
@@ -1766,11 +1800,23 @@ export class CommercialFlowService {
   // empty or exceeds WhatsApp's 10-row list limit.
   private async removeWhichReply(
     client: PoolClient,
-    requestId: string,
+    flow: Workflow,
     locale: Locale,
   ): Promise<DeterministicReply> {
-    const items = await this.cartItems(client, requestId);
-    return items.length > 0 && items.length <= 10
+    const items = await this.cartItems(client, flow.commercial_request_id);
+    const listable = items.length > 0 && items.length <= 10;
+    // Persisting the exact lines offered means the tap that follows is
+    // resolved by index (handleRemovingItem's tiedChoice branch) instead of
+    // being re-matched by name — the same reason startNewOrder persists its
+    // ties. Found live in this reply's change-quantity twin: "Sopa MX" is a
+    // token-subset of "Sandwich de queso y Sopa MX", so tapping that very
+    // row re-tied against the other line and the conversation looped with
+    // no way to ever pick it.
+    await this.step(client, flow.id, "removing_item", {
+      ...flow.context,
+      ...(listable ? { tiedItems: items } : {}),
+    });
+    return listable
       ? this.itemChoiceReply(locale, items, "removeWhich")
       : this.localizedReply(locale, "removeWhich");
   }
@@ -1787,11 +1833,20 @@ export class CommercialFlowService {
   // then asks quantityHowMany next instead of re-showing this list.
   private async changeQuantityWhichReply(
     client: PoolClient,
-    requestId: string,
+    flow: Workflow,
     locale: Locale,
   ): Promise<DeterministicReply> {
-    const items = await this.cartItems(client, requestId);
-    return items.length > 0 && items.length <= 10
+    const items = await this.cartItems(client, flow.commercial_request_id);
+    const listable = items.length > 0 && items.length <= 10;
+    // Same tie-persisting reason as removeWhichReply above — found live
+    // here first: tapping "Sopa MX" from this very list re-matched by name,
+    // tied against "Sandwich de queso y birria y Sopa MX", and every answer
+    // after it (including the bare number) came back to this same question.
+    await this.step(client, flow.id, "changing_quantity_item", {
+      ...flow.context,
+      ...(listable ? { tiedItems: items } : {}),
+    });
+    return listable
       ? this.itemChoiceReply(locale, items, "quantityWhich")
       : this.localizedReply(locale, "quantityWhich");
   }
@@ -1829,14 +1884,19 @@ export class CommercialFlowService {
   // is enough.
   private unmetRequiredGroup(
     options: ModifierOption[],
-  ): { groupName: string; needed: number } | null {
+  ): { groupId: string; groupName: string; needed: number } | null {
     const seen = new Set<string>();
     for (const option of options) {
       if (seen.has(option.group_id)) continue;
       seen.add(option.group_id);
       const min = Number(option.min_selections ?? 0);
       const picked = Number(option.group_picked ?? 0);
-      if (min > picked) return { groupName: option.group_name, needed: min - picked };
+      if (min > picked)
+        return {
+          groupId: option.group_id,
+          groupName: option.group_name,
+          needed: min - picked,
+        };
     }
     return null;
   }
@@ -1950,9 +2010,22 @@ export class CommercialFlowService {
     locale: Locale,
     options: ModifierOption[],
     justAdded?: string,
-    unmetGroup?: { groupName: string; needed: number } | null,
+    unmetGroup?: { groupId: string; groupName: string; needed: number } | null,
   ): DeterministicReply {
-    const shown = options.slice(0, 9);
+    // A group the customer *must* answer is offered on its own. Mixing it
+    // with the optional groups both buried the choice that actually blocks
+    // the order and pushed real options past WhatsApp's 10-row cap — found
+    // live on "Orden x 3 Tacos": 5 taco choices + 3 salsas + 2 adiciones +
+    // "Listo" is 11 rows, so "Queso extra" was silently unreachable, and
+    // the prompt read "¿Quieres agregar alguna adición?" over a list whose
+    // first five rows were the mandatory flavors. The optional groups come
+    // back in full the moment the required one is satisfied (its options
+    // stop being offered at max_selections, see remainingModifiers).
+    const unmet = unmetGroup ?? this.unmetRequiredGroup(options);
+    const offered = unmet
+      ? options.filter((option) => option.group_id === unmet.groupId)
+      : options;
+    const shown = offered.slice(0, 9);
     // Name-plus-price routinely exceeds WhatsApp's 20-char button-title
     // limit ("Queso extra (+$ 3.000)" alone is 22) — buttons show the name
     // only, list rows carry the price (and running quantity, so a tenant can
@@ -2020,14 +2093,27 @@ export class CommercialFlowService {
     // an identical, unchanged message both times. The body itself now
     // acknowledges what was just added instead of relying on the
     // interactive alone.
-    const body = unmetGroup
-      ? this.copy(locale, "modifierMinRequired", {
-          needed: unmetGroup.needed,
-          group: unmetGroup.groupName,
-        })
-      : justAdded
-        ? this.copy(locale, "modifierAdded", { item: justAdded })
-        : this.copy(locale, "modifierChoice");
+    // Both signals matter and used to be mutually exclusive: what was just
+    // added (D-066 — a customer picking two extras in a row saw the same
+    // unchanged prompt twice and couldn't tell either had landed) and what
+    // is still required before the package can be finished. When both
+    // apply they are said in one sentence rather than one silencing the
+    // other.
+    const body =
+      unmet && justAdded
+        ? this.copy(locale, "modifierAddedMinRequired", {
+            item: justAdded,
+            needed: unmet.needed,
+            group: unmet.groupName,
+          })
+        : unmet
+          ? this.copy(locale, "modifierMinRequired", {
+              needed: unmet.needed,
+              group: unmet.groupName,
+            })
+          : justAdded
+            ? this.copy(locale, "modifierAdded", { item: justAdded })
+            : this.copy(locale, "modifierChoice");
     return {
       ...this.reply(body),
       responsePlan: {

@@ -167,8 +167,33 @@ export class DeterministicReplyService {
         score: normalize(`${row.name} ${row.category ?? ''}`).split(' ').filter((token) => inputTokens.has(token)).length,
       }));
       const bestScore = Math.max(0, ...scored.map(({ score }) => score));
-      const narrowed = bestScore > 0;
-      if (narrowed) rows = scored.filter(({ score }) => score === bestScore).map(({ row }) => row);
+      // A question about a whole category — "¿qué tacos tienen?", or the
+      // "Menú Tacos" row of the category picker itself — must list that
+      // category, not only the items that happen to repeat the category
+      // word in their own name. Found live on Santos Tacos' real menu:
+      // "Orden x 3 Tacos" and "Orden x 3 Tacos Birria de Camarón o
+      // Güerito" scored 2 (own name *and* category) against 1 for every
+      // individual taco, so 7 of the 9 tacos disappeared from the very
+      // category the customer had just tapped. Only applies when the
+      // message says nothing more specific than the category name: "¿tienen
+      // tacos de birria?" still narrows to the birria items, because
+      // "birria" matches an item name beyond the category's own words.
+      const categoryWords = (value: string | null) =>
+        normalize(value ?? '').split(' ').filter((token) => token.length > 2 && !ignored.has(token));
+      const askedCategory = rows.find((row) => {
+        const words = categoryWords(row.category);
+        return words.length > 0 && words.every((word) => inputTokens.has(word));
+      })?.category;
+      const askedWords = new Set(categoryWords(askedCategory ?? null));
+      const namedSomethingElse = rows.some((row) =>
+        normalize(row.name)
+          .split(' ')
+          .some((token) => inputTokens.has(token) && !askedWords.has(token)),
+      );
+      const byCategory = askedCategory !== undefined && askedCategory !== null && !namedSomethingElse;
+      const narrowed = byCategory || bestScore > 0;
+      if (byCategory) rows = rows.filter((row) => row.category === askedCategory);
+      else if (bestScore > 0) rows = scored.filter(({ score }) => score === bestScore).map(({ row }) => row);
       // A generic "ver menú" (no narrowing at all — the customer named
       // nothing specific) against a real catalog bigger than WhatsApp's
       // 10-row list cap used to fall all the way through to one plain-text
@@ -240,11 +265,24 @@ export class DeterministicReplyService {
             body: '',
             buttonLabel: copy.menuButtonLabel,
             options: [
-              ...rowInfo.slice(0, 9).map(({ row, price, variantLabel }) => ({
-                id: row.variant_id,
-                title: truncate(row.name, 24),
-                description: truncate(variantLabel ? `${variantLabel} · ${price}` : price, 72),
-              })),
+              ...rowInfo.slice(0, 9).map(({ row, price, variantLabel }) => {
+                const detail = variantLabel ? `${variantLabel} · ${price}` : price;
+                return {
+                  id: row.variant_id,
+                  title: truncate(row.name, 24),
+                  // Same rule as itemChoiceReply (D-101/D-102): a name too
+                  // long for the 24-char title must not lose the words that
+                  // tell it apart from a sibling row — "Sandwich de queso y
+                  // Sop…" and "Sandwich de queso y bir…" are otherwise the
+                  // same row to the customer. The description already
+                  // carries variant/price, so the full name goes in front of
+                  // it rather than replacing it.
+                  description: truncate(
+                    row.name.length > 24 ? `${row.name} · ${detail}` : detail,
+                    72,
+                  ),
+                };
+              }),
               { id: 'cart:view_catalog', title: copy.menuButtonLabel },
             ],
           }

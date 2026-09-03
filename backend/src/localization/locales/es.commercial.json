@@ -10,6 +10,7 @@
   "modifierChoice": "¿Quieres agregar alguna adición?",
   "modifierAdded": "Agregué {{item}}. ¿Quieres agregar otra adición?",
   "modifierMinRequired": "Elige {{needed}} más de \"{{group}}\" antes de continuar.",
+  "modifierAddedMinRequired": "Agregué {{item}}. Elige {{needed}} más de \"{{group}}\" antes de continuar.",
   "moreItems": "¿Quieres agregar algo más?",
   "moreItemsAnswer": "No entendí tu respuesta. Escribe el nombre de otro producto o elige una opción.",
   "emptyCart": "Tu pedido todavía está vacío.",

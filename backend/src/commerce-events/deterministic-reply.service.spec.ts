@@ -120,6 +120,38 @@ describe('DeterministicReplyService', () => {
     });
   });
 
+  it('keeps two long, near-identical product names apart in the menu list instead of truncating both to the same prefix (live finding)', async () => {
+    // Found live on Santos Tacos' real "Entradas" category: both rows
+    // rendered as "Sandwich de queso y Sop…"/"Sandwich de queso y bir…",
+    // dropping exactly the words that told them apart. Same rule
+    // itemChoiceReply already follows (D-101/D-102) — the full name goes in
+    // the 72-char description, ahead of the variant/price it already showed.
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValue({
+          rowCount: 2,
+          rows: [
+            { item_id: 'item-1', variant_id: 'variant-1', name: 'Sandwich de queso y Sopa MX', category: 'Entradas', variant_name: 'Unidad', price_minor: '2100000', currency: 'COP' },
+            { item_id: 'item-2', variant_id: 'variant-2', name: 'Sandwich de queso y birria y Sopa MX', category: 'Entradas', variant_name: 'Unidad', price_minor: '2800000', currency: 'COP' },
+          ],
+        }),
+    };
+    const reply = await new DeterministicReplyService().resolve(client as never, 'muéstrame el menú', {
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
+    });
+    expect(reply.interactive).toEqual({
+      type: 'list',
+      body: '',
+      buttonLabel: 'Ver opciones',
+      options: [
+        { id: 'variant-1', title: 'Sandwich de queso y Sop…', description: 'Sandwich de queso y Sopa MX · $ 21.000' },
+        { id: 'variant-2', title: 'Sandwich de queso y bir…', description: 'Sandwich de queso y birria y Sopa MX · $ 28.000' },
+        { id: 'cart:view_catalog', title: 'Ver opciones' },
+      ],
+    });
+  });
+
   it('does not repeat the tappable list items as text in the body (avoids duplication)', async () => {
     // The list itself already shows name, variant, and price per row —
     // repeating all of that as bullet lines in the body too is pure
@@ -186,6 +218,27 @@ describe('DeterministicReplyService', () => {
     expect(reply.body).toContain('Tacos de birria');
     expect(reply.body).not.toContain('Tacos al pastor');
     expect(reply.sources).toEqual(['catalog_item:item-2']);
+  });
+
+  it('lists a whole category when the question names only the category, not just the items repeating its word (live finding)', async () => {
+    // Found live tapping "Menú Tacos" on Santos Tacos' real menu: only the
+    // two "Orden x 3 Tacos ..." packages came back, because their names
+    // repeat the category word and outscored every individual taco.
+    const client = { query: jest.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValue({ rowCount: 3, rows: [
+        { item_id: 'item-1', variant_id: 'variant-1', name: 'Orden x 3 Tacos', category: 'Tacos', variant_name: 'Unidad', price_minor: '2550000', currency: 'COP' },
+        { item_id: 'item-2', variant_id: 'variant-2', name: 'Birria', category: 'Tacos', variant_name: 'Unidad', price_minor: '900000', currency: 'COP' },
+        { item_id: 'item-3', variant_id: 'variant-3', name: 'Agua fresca', category: 'Bebidas', variant_name: 'Vaso', price_minor: '700000', currency: 'COP' },
+      ] }) };
+    const reply = await new DeterministicReplyService().resolve(client as never, 'Menú Tacos', {
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
+    });
+    expect(reply.interactive?.options).toEqual([
+      expect.objectContaining({ title: 'Orden x 3 Tacos' }),
+      expect.objectContaining({ title: 'Birria' }),
+      { id: 'cart:view_catalog', title: 'Ver opciones' },
+    ]);
   });
 
   it('narrows a catalog question to the most specific matching offering', async () => {
