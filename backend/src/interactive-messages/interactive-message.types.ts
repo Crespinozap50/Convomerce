@@ -63,3 +63,13 @@ export function validateInteractiveMessage(message: InteractiveMessage): void {
 export function selectionAsNaturalText(selection: InboundInteractiveSelection): string {
   return selection.title.trim();
 }
+
+// Row/button titles and descriptions are capped by validateInteractiveMessage
+// above (24/20/72 chars) — this truncates a candidate title/description
+// before it gets there, keeping the ellipsis this file's own constraints
+// imply instead of throwing. Previously hand-copied identically in
+// deterministic-reply.service.ts, appointment-flow.service.ts and
+// commercial-flow.service.ts.
+export function truncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}

@@ -53,29 +53,29 @@ export class CommerceEventsWorker implements OnApplicationBootstrap, OnModuleDes
       await this.googleCalendar.syncAppointment(data.tenantId,data.appointmentId,action as 'confirmed'|'rescheduled'|'cancelled');
       return { duplicate: false };
     }
-    if (job.name !== 'message.received') {
-      if (job.name === 'message.send_requested') {
-        const data = job.data as Partial<{
-          eventId: string;
-          tenantId: string;
-          messageId: string;
-        }>;
-        if (!data.eventId || !data.tenantId || !data.messageId) {
-          throw new UnrecoverableError('Incomplete message.send_requested event');
-        }
-        return this.sendRequested.consume(data as {
-          eventId: string;
-          tenantId: string;
-          messageId: string;
-        });
+    if (job.name === 'message.send_requested') {
+      const data = job.data as Partial<{
+        eventId: string;
+        tenantId: string;
+        messageId: string;
+      }>;
+      if (!data.eventId || !data.tenantId || !data.messageId) {
+        throw new UnrecoverableError('Incomplete message.send_requested event');
       }
-      throw new UnrecoverableError(`Unsupported event type: ${job.name}`);
+      return this.sendRequested.consume(data as {
+        eventId: string;
+        tenantId: string;
+        messageId: string;
+      });
     }
-    const data = job.data as Partial<MessageReceivedEvent>;
-    if (!data.eventId || !data.tenantId || !data.messageId || !data.conversationId) {
-      throw new UnrecoverableError('Incomplete message.received event');
+    if (job.name === 'message.received') {
+      const data = job.data as Partial<MessageReceivedEvent>;
+      if (!data.eventId || !data.tenantId || !data.messageId || !data.conversationId) {
+        throw new UnrecoverableError('Incomplete message.received event');
+      }
+      return this.consumer.consume(data as MessageReceivedEvent);
     }
-    return this.consumer.consume(data as MessageReceivedEvent);
+    throw new UnrecoverableError(`Unsupported event type: ${job.name}`);
   }
 
   async readiness(): Promise<'up' | 'disabled'> {

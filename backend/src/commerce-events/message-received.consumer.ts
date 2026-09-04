@@ -6,7 +6,7 @@ import {
   MessageReceivedEvent,
 } from "./commerce-event.types";
 import { ConfigService } from "@nestjs/config";
-import { catalogFor, isPlausibleName } from "../localization/localization";
+import { catalogFor, isPlausibleName, normalizeForMatching } from "../localization/localization";
 import { ConversationLanguageService } from "../localization/conversation-language.service";
 import {
   CONVERSATION_UNDERSTANDING_PROVIDER,
@@ -113,35 +113,39 @@ export class MessageReceivedConsumer {
           );
         }
 
-        await client.query(
-          `insert into app.audit_events
-          (id, tenant_id, actor_type, action, subject_type, subject_id,
-           correlation_id, metadata)
-         values ($1, $2, 'service', 'message.processed', 'message', $3, $4,
-                 jsonb_build_object('consumer', 'message-received-v1', 'conversationId', ($5::uuid)::text))`,
-          [
-            uuidv7(),
-            event.tenantId,
-            event.messageId,
-            event.eventId,
-            event.conversationId,
-          ],
-        );
-
-        const botResult = await client.query<{
-          enabled: boolean;
-          assistant_name: string;
-          business_name: string;
-          locale: string;
-          welcome_message: string;
-          fallback_message: string;
-          handoff_keywords: string[];
-          timezone: string;
-        }>(
-          `select bot.enabled,bot.assistant_name,tenant.display_name as business_name,bot.locale,bot.welcome_message,bot.fallback_message,bot.handoff_keywords,tenant.timezone
-           from app.tenants tenant left join app.bot_configurations bot on bot.tenant_id=tenant.id
-          where tenant.id=app.current_tenant_id() limit 1`,
-        );
+        // Neither query depends on the other's result — issued together so
+        // node-postgres pipelines them on this connection instead of paying
+        // two sequential round trips on every inbound message.
+        const [, botResult] = await Promise.all([
+          client.query(
+            `insert into app.audit_events
+            (id, tenant_id, actor_type, action, subject_type, subject_id,
+             correlation_id, metadata)
+           values ($1, $2, 'service', 'message.processed', 'message', $3, $4,
+                   jsonb_build_object('consumer', 'message-received-v1', 'conversationId', ($5::uuid)::text))`,
+            [
+              uuidv7(),
+              event.tenantId,
+              event.messageId,
+              event.eventId,
+              event.conversationId,
+            ],
+          ),
+          client.query<{
+            enabled: boolean;
+            assistant_name: string;
+            business_name: string;
+            locale: string;
+            welcome_message: string;
+            fallback_message: string;
+            handoff_keywords: string[];
+            timezone: string;
+          }>(
+            `select bot.enabled,bot.assistant_name,tenant.display_name as business_name,bot.locale,bot.welcome_message,bot.fallback_message,bot.handoff_keywords,tenant.timezone
+             from app.tenants tenant left join app.bot_configurations bot on bot.tenant_id=tenant.id
+            where tenant.id=app.current_tenant_id() limit 1`,
+          ),
+        ]);
         const bot = botResult.rows[0];
         const temporaryEnabled =
           this.config.get<string>("WHATSAPP_AUTO_REPLY_ENABLED", "false") ===
@@ -209,14 +213,7 @@ export class MessageReceivedConsumer {
         // knowledge_entries match can still answer it (D-077, D-078). Only
         // log it as genuinely unresolved when nothing answered it either.
         if (decision.intent === "fallback" && decision.sources.length === 0) {
-          const normalizedQuestion = message.rows[0].body
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .toLowerCase()
-            .replace(/[^a-z0-9\s]/g, " ")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 500);
+          const normalizedQuestion = normalizeForMatching(message.rows[0].body).slice(0, 500);
           const contextResult = await client.query<{
             context_messages: unknown[];
           }>(

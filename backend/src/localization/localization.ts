@@ -82,6 +82,35 @@ export function interpolate(template: string, values: Record<string, string | nu
   return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(values[key] ?? `{{${key}}}`));
 }
 
+// Combining diacritical marks (U+0300-U+036F), built from code points
+// rather than a \uXXXX regex literal to keep this file free of invisible
+// combining characters in its own source.
+const COMBINING_MARKS = new RegExp(
+  `[${String.fromCharCode(0x300)}-${String.fromCharCode(0x36f)}]`,
+  'g',
+);
+
+// Shared normalization for rule/keyword matching (NOT for language
+// detection scoring — detectLanguageEvidence needs its own copy above since
+// it keeps spaces distinct from other punctuation before tokenizing).
+// Previously hand-copied in commercial-flow.service.ts, appointment-flow.service.ts,
+// requirement-loop.ts, deterministic-reply.service.ts, and message-received.consumer.ts.
+export function normalizeForMatching(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(COMBINING_MARKS, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Previously hand-copied in requirement-loop.ts and inlined in this file's
+// own stripLeadingGreeting().
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export function stripLeadingGreeting(value: string, locale?: string | null): string {
   const greetings=catalogFor(locale).intents.greeting.sort((left,right)=>right.length-left.length);
   for(const greeting of greetings){

@@ -2,20 +2,29 @@ import { Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { v7 as uuidv7 } from 'uuid';
 import { DeterministicReply } from './deterministic-reply.service';
-import { ConversationLocale, languageFor, normalizeLocale } from '../localization/localization';
+import {
+  ConversationLocale,
+  languageFor,
+  normalizeForMatching as normalize,
+  normalizeLocale,
+} from '../localization/localization';
 import { appointmentCopy, AppointmentCopyKey } from '../localization/conversation-copy';
 import { UnderstoodFlowInput } from './understood-flow-input';
 import { ResponsePlan } from '../response-composition/response-plan.types';
-import { InteractiveMessage } from '../interactive-messages/interactive-message.types';
+import { InteractiveMessage, truncate } from '../interactive-messages/interactive-message.types';
 import { unprocessable } from '../observability/http-errors';
 import { OperationalRequirementsService } from '../operational-requirements/operational-requirements.service';
 import {
+  applyRequirementValue,
+  describeLineItem,
   extractPendingRequirementValues,
   nextPendingStep,
   PendingRequirement,
   resolveBooleanRequirementValue,
+  singularize,
   validateRequirementValue,
 } from './requirement-loop';
+import { stepWorkflow } from './conversation-workflow';
 
 type Locale = ConversationLocale;
 type AppointmentWorkflow = {
@@ -51,17 +60,6 @@ type AppointmentSegment=
   | {kind:'line_break'};
 type PlannedContent={body:string;plan:Omit<Extract<ResponsePlan,{kind:'composite'}>,'segments'>&{segments:AppointmentSegment[]}};
 
-const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-  .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-// Naive Spanish singularizer so "cortes" matches a catalog service named
-// "Corte" in matchBookableItem's token scoring; see commercial-flow.service.ts.
-const singularize = (word: string) => {
-  if (word.length <= 3) return word;
-  if (/[aeiou]s$/.test(word)) return word.slice(0, -1);
-  if (/[^aeiou]es$/.test(word)) return word.slice(0, -2);
-  return word;
-};
-
 @Injectable()
 export class AppointmentFlowService {
   constructor(private readonly requirements: OperationalRequirementsService) {}
@@ -78,9 +76,16 @@ export class AppointmentFlowService {
     if(input.understanding.requestedAction==='view_appointment')return this.describeUpcomingAppointment(client,input);
     if(input.understanding.requestedAction==='reschedule')return this.startReschedule(client,input);
 
-    const item = await this.matchBookableItem(client, input);
+    // Checked before matchBookableItem() runs, not after: this resolve()
+    // fires on every inbound message for any appointments-enabled tenant,
+    // and matchBookableItem() is a full catalog scan+join — most messages
+    // (viewing cart, answering a prompt, confirming, a plain question) have
+    // no active workflow and no book_appointment/start_order intent, so the
+    // query was running and being discarded on the majority of turns.
     const wants = ['book_appointment','start_order'].includes(input.understanding.requestedAction??'');
-    if (!item || !wants) return null;
+    if (!wants) return null;
+    const item = await this.matchBookableItem(client, input);
+    if (!item) return null;
 
     // A reservable offering must never remain trapped in a product-order workflow.
     await client.query(
@@ -107,7 +112,7 @@ export class AppointmentFlowService {
       `insert into app.request_lines(id,tenant_id,commercial_request_id,item_variant_id,description_snapshot,
         unit_price_minor_snapshot,currency,quantity,line_total_minor)
        values($1,$2,$3,$4,$5,$6::bigint,$7,1,$6::bigint)`,
-      [uuidv7(),input.tenantId,requestId,item.variant_id,`${item.name} (${item.variant_name})`,item.price_minor,item.currency],
+      [uuidv7(),input.tenantId,requestId,item.variant_id,describeLineItem(item),item.price_minor,item.currency],
     );
     await client.query(
       `update app.commercial_requests set subtotal_minor=$2::bigint,total_minor=$2::bigint where id=$1`,
@@ -363,7 +368,7 @@ export class AppointmentFlowService {
   // WhatsApp list row titles are capped at 24 characters by Meta; resource
   // names in seed/tenant data routinely exceed that ("Laura — terapeuta de
   // bienestar", "Bahía 1 — motos y automóviles").
-  private truncate(value:string,max:number):string{return value.length>max?`${value.slice(0,max-1)}…`:value;}
+  private truncate(value:string,max:number):string{return truncate(value,max);}
   private resourcePrompt(resources:BookingResource[],requestedDate:string,locale:Locale):PlannedContent{
     const segments:AppointmentSegment[]=[
       {kind:'template',template:{namespace:'appointment',key:'resourceHeading'},values:{date:this.formatDate(requestedDate,locale)}},
@@ -396,7 +401,7 @@ export class AppointmentFlowService {
   private formatDate(value:string,locale:Locale){return new Intl.DateTimeFormat(normalizeLocale(locale),{weekday:'long',day:'numeric',month:'long',timeZone:'UTC'}).format(new Date(`${value}T12:00:00Z`));}
   private formatSlot(slot:Slot,locale:Locale){return new Intl.DateTimeFormat(normalizeLocale(locale),{weekday:'long',day:'numeric',month:'long',hour:'numeric',minute:'2-digit',timeZone:slot.timezone}).format(new Date(slot.starts_at));}
   private formatSlotTime(slot:Slot,locale:Locale){return new Intl.DateTimeFormat(normalizeLocale(locale),{hour:'numeric',minute:'2-digit',timeZone:slot.timezone}).format(new Date(slot.starts_at));}
-  private step(client:PoolClient,id:string,step:string,context:Record<string,unknown>){return client.query(`update app.conversation_workflows set step=$2,context=$3::jsonb,updated_at=now() where id=$1`,[id,step,JSON.stringify(context)]);}
+  private step(client:PoolClient,id:string,step:string,context:Record<string,unknown>){return stepWorkflow(client,id,step,context);}
   // Checks for a still-unanswered configured requirement (D-039/D-040) after
   // the slot is held, or after answering one such requirement. With no active
   // requirement rows seeded for operation_type='appointment' (see migration
@@ -407,18 +412,7 @@ export class AppointmentFlowService {
   private applyRequirementValue(
     requirement:PendingRequirement,value:string,context:Record<string,unknown>,
   ):Record<string,unknown>{
-    if(requirement.requiresConfirmation)
-      return{
-        ...context,
-        pendingConfirmations:{
-          ...((context.pendingConfirmations as Record<string,string>)??{}),
-          [requirement.fieldKey]:value,
-        },
-      };
-    return{
-      ...context,
-      values:{...((context.values as Record<string,string>)??{}),[requirement.fieldKey]:value},
-    };
+    return applyRequirementValue(requirement,value,context);
   }
   private confirmationPrompt(locale:Locale,requirement:PendingRequirement,value:string):DeterministicReply{
     return this.yesNoReply(locale,'requirementConfirm',{label:requirement.label??requirement.fieldKey,value});

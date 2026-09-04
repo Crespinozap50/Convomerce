@@ -3,7 +3,13 @@ import { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { DeterministicReply } from "./deterministic-reply.service";
 import { RecommendationService } from "../recommendations/recommendation.service";
-import { catalogFor, ConversationLocale, formatMoney, languageFor } from "../localization/localization";
+import {
+  catalogFor,
+  ConversationLocale,
+  formatMoney,
+  languageFor,
+  normalizeForMatching as norm,
+} from "../localization/localization";
 import {
   commercialCopy,
   CommercialCopyKey,
@@ -13,17 +19,21 @@ import {
 } from "../localization/conversation-copy";
 import { UnderstoodFlowInput } from "./understood-flow-input";
 import { ResponsePlan } from "../response-composition/response-plan.types";
-import { InteractiveMessage } from "../interactive-messages/interactive-message.types";
+import { InteractiveMessage, truncate } from "../interactive-messages/interactive-message.types";
 import { unprocessable } from "../observability/http-errors";
 import { OperationalRequirementsService } from "../operational-requirements/operational-requirements.service";
 import {
+  applyRequirementValue,
+  describeLineItem,
   extractPendingRequirementValues,
   isAddressDetailedEnough,
   nextPendingStep,
   PendingRequirement,
   resolveBooleanRequirementValue,
+  singularize,
   validateRequirementValue,
 } from "./requirement-loop";
+import { stepWorkflow } from "./conversation-workflow";
 export { isAddressDetailedEnough } from "./requirement-loop";
 
 type Locale = ConversationLocale;
@@ -99,15 +109,7 @@ type FlowCommand =
   | "change_address"
   | "change"
   | null;
-const norm = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-// The "informational" rule (saber/cu\u00e1l/cu\u00e1nto/precio/gluten/tiene/tienen...)
+// The "informational" rule (saber/cual/cuanto/precio/gluten/tiene/tienen...)
 // is a hand-picked keyword list \u2014 the same pattern that made D-078's shared
 // global vocabulary keep colliding with tenant-specific content, just here
 // for "is this a question" instead of "which FAQ". Any literal "?" is a far
@@ -118,15 +120,6 @@ const norm = (value: string) =>
 // cuesta la birria", common with real customers).
 const looksLikeQuestion = (rawBody: string) =>
   rawBody.includes("?") || matchesConversationRule(norm(rawBody), "informational");
-// Naive Spanish singularizer so "quesadillas" matches a catalog item named
-// "Quesadilla" in matchItem's token scoring; menu items are stored singular
-// but customers naturally order in plural ("quiero 2 quesadillas").
-const singularize = (word: string) => {
-  if (word.length <= 3) return word;
-  if (/[aeiou]s$/.test(word)) return word.slice(0, -1);
-  if (/[^aeiou]es$/.test(word)) return word.slice(0, -2);
-  return word;
-};
 export const classifyFlowCommand = (value: string): FlowCommand => {
   const text = norm(value);
   if (matchesConversationRule(text, "viewOrder")) return "view_order";
@@ -2292,7 +2285,7 @@ export class CommercialFlowService {
         [
           current.rows[0].id,
           item.variant_id,
-          `${item.name} (${item.variant_name})`,
+          describeLineItem(item),
           item.price_minor,
           item.currency,
           next,
@@ -2306,7 +2299,7 @@ export class CommercialFlowService {
           tenantId,
           requestId,
           item.variant_id,
-          `${item.name} (${item.variant_name})`,
+          describeLineItem(item),
           item.price_minor,
           item.currency,
           quantity,
@@ -2507,10 +2500,7 @@ export class CommercialFlowService {
     step: string,
     context: Record<string, unknown>,
   ) {
-    return client.query(
-      `update app.conversation_workflows set step=$2,context=$3::jsonb,updated_at=now() where id=$1`,
-      [id, step, JSON.stringify(context)],
-    );
+    return stepWorkflow(client, id, step, context);
   }
   // Looks up the currently-filled field keys from context, asks for the next
   // configured requirement for this fulfillment modality if any remain, or
@@ -2519,27 +2509,14 @@ export class CommercialFlowService {
   // when the tenant marked the field sensitive, merged straight into
   // context.values otherwise. Shared by the single-field answer path and the
   // D-040 multi-entity extraction path so requiresConfirmation is honored
-  // identically regardless of how the value was captured.
+  // identically regardless of how the value was captured. (Shared with
+  // AppointmentFlowService via requirement-loop.ts's applyRequirementValue.)
   private applyRequirementValue(
     requirement: PendingRequirement,
     value: string,
     context: Record<string, unknown>,
   ): Record<string, unknown> {
-    if (requirement.requiresConfirmation)
-      return {
-        ...context,
-        pendingConfirmations: {
-          ...((context.pendingConfirmations as Record<string, string>) ?? {}),
-          [requirement.fieldKey]: value,
-        },
-      };
-    return {
-      ...context,
-      values: {
-        ...((context.values as Record<string, string>) ?? {}),
-        [requirement.fieldKey]: value,
-      },
-    };
+    return applyRequirementValue(requirement, value, context);
   }
   private confirmationPrompt(
     locale: Locale,
@@ -3185,9 +3162,8 @@ export class CommercialFlowService {
   ) {
     return commercialCopy(locale, key, values);
   }
-  // WhatsApp list row titles are capped at 24 characters by Meta.
   private truncate(value: string, max: number): string {
-    return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+    return truncate(value, max);
   }
   // Offering "Domicilio" here regardless of the tenant's delivery capability
   // was live-tested against CrediCel Store (orders enabled, delivery

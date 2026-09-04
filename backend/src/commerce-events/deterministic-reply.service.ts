@@ -1,7 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
-import { InteractiveMessage } from '../interactive-messages/interactive-message.types';
-import { catalogFor, ConversationLocale, formatMoney, interpolate, languageFor, MessageIntentKey, stripLeadingGreeting } from '../localization/localization';
+import { InteractiveMessage, truncate } from '../interactive-messages/interactive-message.types';
+import {
+  catalogFor,
+  ConversationLocale,
+  formatMoney,
+  interpolate,
+  languageFor,
+  MessageIntentKey,
+  normalizeForMatching as normalize,
+  stripLeadingGreeting,
+} from '../localization/localization';
 import { ResponsePlan } from '../response-composition/response-plan.types';
 
 // vegetarian/spicy/allergens/pickup/preparation_time used to be fixed,
@@ -52,17 +61,7 @@ interface OfferingRow {
   currency: string;
 }
 
-const normalize = (value: string): string => value
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase()
-  .replace(/[^a-z0-9\s]/g, ' ')
-  .replace(/\s+/g, ' ')
-  .trim();
-
 const includesAny = (text: string, words: string[]): boolean => words.some((word) => text.includes(word));
-
-const truncate = (value: string, max: number): string => value.length > max ? `${value.slice(0, max - 1)}…` : value;
 
 export function classifyMessage(message: string, handoffKeywords: string[] = [], locale: ConversationLocale = 'es'): ReplyIntent {
   const text = normalize(message);

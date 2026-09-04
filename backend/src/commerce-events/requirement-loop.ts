@@ -4,6 +4,12 @@
 // service's state machine is modeled here on purpose: they build different
 // response segment types and decide what happens after the requirement loop
 // differently, so only the field-selection and validation logic is shared.
+//
+// Also holds a few smaller pure helpers (applyRequirementValue, singularize,
+// describeLineItem) that used to be byte-identical copies in both flow
+// services — consolidated here since both already import from this file.
+
+import { escapeRegExp, normalizeForMatching as normalize } from "../localization/localization";
 
 export type RequirementDataType =
   | "text"
@@ -83,17 +89,6 @@ export const nextPendingStep = (
 export type RequirementValueValidation =
   | { valid: true; value: string }
   | { valid: false };
-
-const normalize = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Shared by validateRequirementValue's select case and
 // extractPendingRequirementValues below, so a select answer is recognized
@@ -246,3 +241,45 @@ export const extractPendingRequirementValues = (
 
   return resolved;
 };
+
+// A requirement marked requires_confirmation always goes through an explicit
+// yes/no step before landing in context.values, regardless of extraction
+// confidence (D-040, golden rule 9) — a value en route to confirmation is
+// staged separately so it never gets treated as already-filled.
+export const applyRequirementValue = (
+  requirement: PendingRequirement,
+  value: string,
+  context: Record<string, unknown>,
+): Record<string, unknown> => {
+  if (requirement.requiresConfirmation)
+    return {
+      ...context,
+      pendingConfirmations: {
+        ...((context.pendingConfirmations as Record<string, string>) ?? {}),
+        [requirement.fieldKey]: value,
+      },
+    };
+  return {
+    ...context,
+    values: {
+      ...((context.values as Record<string, string>) ?? {}),
+      [requirement.fieldKey]: value,
+    },
+  };
+};
+
+// Naive Spanish singularizer so "quesadillas" matches a catalog item named
+// "Quesadilla" in token-based scoring; catalog items are stored singular but
+// customers naturally order in plural ("quiero 2 quesadillas").
+export const singularize = (word: string): string => {
+  if (word.length <= 3) return word;
+  if (/[aeiou]s$/.test(word)) return word.slice(0, -1);
+  if (/[^aeiou]es$/.test(word)) return word.slice(0, -2);
+  return word;
+};
+
+// The exact snapshot text frozen into request_lines.description_snapshot at
+// add time (D-110: name/variant_name already carry the customer's locale by
+// the time they reach here) — never re-derived per turn, see D-110.
+export const describeLineItem = (item: { name: string; variant_name: string }): string =>
+  `${item.name} (${item.variant_name})`;
