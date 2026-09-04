@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { v7 as uuidv7 } from 'uuid';
 import { DeterministicReply } from './deterministic-reply.service';
-import { ConversationLocale, normalizeLocale } from '../localization/localization';
+import { ConversationLocale, languageFor, normalizeLocale } from '../localization/localization';
 import { appointmentCopy, AppointmentCopyKey } from '../localization/conversation-copy';
 import { UnderstoodFlowInput } from './understood-flow-input';
 import { ResponsePlan } from '../response-composition/response-plan.types';
@@ -238,9 +238,12 @@ export class AppointmentFlowService {
     return null;
   }
 
-  private async upcoming(client:PoolClient,contactId:string){const result=await client.query<CancellableAppointment>(`select appointment.id,appointment.commercial_request_id,appointment.catalog_item_id,appointment.starts_at,appointment.ends_at,appointment.timezone,item.name item_name,resource.name resource_name from app.appointments appointment join app.catalog_items item on item.tenant_id=appointment.tenant_id and item.id=appointment.catalog_item_id left join app.booking_resources resource on resource.tenant_id=appointment.tenant_id and resource.id=appointment.resource_id where appointment.contact_id=$1 and appointment.status='confirmed' and appointment.ends_at>now() order by appointment.starts_at limit 1`,[contactId]);return result.rows[0]??null;}
-  private async describeUpcomingAppointment(client:PoolClient,input:{contactId:string;locale:Locale}){const appointment=await this.upcoming(client,input.contactId);if(!appointment)return this.localizedReply(input.locale,'noUpcoming');const slot={starts_at:appointment.starts_at,ends_at:appointment.ends_at!,timezone:appointment.timezone,resource_id:'',resource_name:appointment.resource_name??''};const resourceSuffix=appointment.resource_name?this.copy(input.locale,'resourceSuffix',{resource:appointment.resource_name}):'';return this.localizedReply(input.locale,'upcoming',{item:appointment.item_name??'',slot:this.formatSlot(slot,input.locale),resourceSuffix});}
-  private async startReschedule(client:PoolClient,input:{tenantId:string;conversationId:string;contactId:string;locale:Locale}){const appointment=await this.upcoming(client,input.contactId);if(!appointment)return this.localizedReply(input.locale,'noReschedulable');const workflowId=uuidv7();await client.query(`insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step,context) values($1,$2,$3,$4,$5,'appointment','awaiting_date',$6::jsonb)`,[workflowId,input.tenantId,input.conversationId,input.contactId,appointment.commercial_request_id,JSON.stringify({catalogItemId:appointment.catalog_item_id,itemName:appointment.item_name,rescheduleAppointmentId:appointment.id})]);return this.localizedReply(input.locale,'requestNewDate');}
+  // resource.name is always a person/space's proper name (e.g. "Mateo —
+  // barbero senior"), never translated — only item.name (the service) goes
+  // through catalog_item_localizations.
+  private async upcoming(client:PoolClient,contactId:string,locale:Locale){const result=await client.query<CancellableAppointment>(`select appointment.id,appointment.commercial_request_id,appointment.catalog_item_id,appointment.starts_at,appointment.ends_at,appointment.timezone,coalesce(item_loc.name,item.name) item_name,resource.name resource_name from app.appointments appointment join app.catalog_items item on item.tenant_id=appointment.tenant_id and item.id=appointment.catalog_item_id left join app.catalog_item_localizations item_loc on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$2 left join app.booking_resources resource on resource.tenant_id=appointment.tenant_id and resource.id=appointment.resource_id where appointment.contact_id=$1 and appointment.status='confirmed' and appointment.ends_at>now() order by appointment.starts_at limit 1`,[contactId,languageFor(locale)]);return result.rows[0]??null;}
+  private async describeUpcomingAppointment(client:PoolClient,input:{contactId:string;locale:Locale}){const appointment=await this.upcoming(client,input.contactId,input.locale);if(!appointment)return this.localizedReply(input.locale,'noUpcoming');const slot={starts_at:appointment.starts_at,ends_at:appointment.ends_at!,timezone:appointment.timezone,resource_id:'',resource_name:appointment.resource_name??''};const resourceSuffix=appointment.resource_name?this.copy(input.locale,'resourceSuffix',{resource:appointment.resource_name}):'';return this.localizedReply(input.locale,'upcoming',{item:appointment.item_name??'',slot:this.formatSlot(slot,input.locale),resourceSuffix});}
+  private async startReschedule(client:PoolClient,input:{tenantId:string;conversationId:string;contactId:string;locale:Locale}){const appointment=await this.upcoming(client,input.contactId,input.locale);if(!appointment)return this.localizedReply(input.locale,'noReschedulable');const workflowId=uuidv7();await client.query(`insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step,context) values($1,$2,$3,$4,$5,'appointment','awaiting_date',$6::jsonb)`,[workflowId,input.tenantId,input.conversationId,input.contactId,appointment.commercial_request_id,JSON.stringify({catalogItemId:appointment.catalog_item_id,itemName:appointment.item_name,rescheduleAppointmentId:appointment.id})]);return this.localizedReply(input.locale,'requestNewDate');}
 
   private async cancelUpcomingAppointment(client:PoolClient,input:{tenantId:string;contactId:string;locale:Locale}) {
     const result=await client.query<CancellableAppointment>(
@@ -250,17 +253,19 @@ export class AppointmentFlowService {
        left join app.booking_resources resource
          on resource.tenant_id=appointment.tenant_id and resource.id=appointment.resource_id
        left join lateral(
-         select catalog.name
+         select coalesce(catalog_loc.name,catalog.name) name
          from app.request_lines line
          join app.item_variants variant on variant.tenant_id=line.tenant_id and variant.id=line.item_variant_id
          join app.catalog_items catalog on catalog.tenant_id=variant.tenant_id and catalog.id=variant.catalog_item_id
+         left join app.catalog_item_localizations catalog_loc
+           on catalog_loc.tenant_id=catalog.tenant_id and catalog_loc.catalog_item_id=catalog.id and catalog_loc.locale=$2
          where line.commercial_request_id=appointment.commercial_request_id and line.status='active'
          order by line.created_at limit 1
        ) item on true
        where appointment.contact_id=$1 and appointment.status in('held','confirmed')
          and appointment.ends_at>now()
        order by appointment.starts_at limit 1 for update of appointment`,
-      [input.contactId],
+      [input.contactId, languageFor(input.locale)],
     );
     const appointment=result.rows[0];
     if(!appointment)return this.localizedReply(input.locale,'noCancellable');
@@ -289,12 +294,18 @@ export class AppointmentFlowService {
 
   private async matchBookableItem(client:PoolClient,input:UnderstoodFlowInput):Promise<BookableItem|null>{
     const result=await client.query<BookableItem>(
-      `select item.id item_id,variant.id variant_id,item.name,variant.name variant_name,
+      `select item.id item_id,variant.id variant_id,
+         coalesce(item_loc.name,item.name) name,coalesce(variant_loc.name,variant.name) variant_name,
         variant.price_minor::text,variant.currency,item.duration_minutes
        from app.catalog_items item join app.item_variants variant
          on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
+       left join app.catalog_item_localizations item_loc
+         on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$1
+       left join app.item_variant_localizations variant_loc
+         on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$1
        where item.status='active' and variant.status='active' and variant.availability_status='available'
          and (item.booking_required or item.offering_type='appointment') order by item.name`,
+      [languageFor(input.locale)],
     );
     const value=input.understanding.entities.searchTerms;
     const tokens=new Set((Array.isArray(value)?value.filter((term):term is string=>typeof term==='string'):[]).map(singularize));

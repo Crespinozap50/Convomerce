@@ -96,7 +96,7 @@ La meta económica original del MVP es operar por debajo de USD 30 mensuales. Es
 ### 4.2 Parcial o pendiente
 
 - Requisitos operativos configurables y tipados por tenant/capacidad/oferta: **resuelto** (D-039, migración 056+057, `OperationalRequirementsService`, panel admin). Extracción multi-entidad por mensaje: **resuelta** (D-040, `requirement-loop.ts`). Genericidad validada con una industria nueva (peluquería): **resuelta** (D-109). Ver §11.2 y `docs/operational-requirements.md`.
-- Catálogos, variantes y entradas de conocimiento requieren localizaciones administrables equivalentes a las del perfil del negocio (sigue pendiente).
+- Localizaciones administrables de catálogo, variantes y conocimiento: **resuelto** (D-086 + D-110 — ver §12).
 - n8n aún no contiene flujos operativos; solo se definió su frontera arquitectónica.
 - El token real de WhatsApp utilizado en pruebas recientes expiró o quedó inválido — **resuelto en D-093** (token permanente generado en Meta Business Settings); confirmar que sigue vigente antes de asumirlo.
 - Falta estrategia definitiva de despliegue, backups, secretos, métricas externas y alertas.
@@ -460,7 +460,7 @@ Reglas implementadas para conversación:
 
 Los catálogos de interfaz viven en `frontend/src/i18n/locales/en.ts` y `es.ts`. Los catálogos de respuestas del backend viven bajo `backend/src/localization`. No introducir texto visible directamente en servicios o componentes cuando deba traducirse.
 
-Pendiente: localización administrable de nombres/descripciones de catálogo, variantes, FAQ y requisitos operativos.
+Localización administrable de nombres/descripciones de catálogo, variantes y FAQ: **resuelta** (D-086, panel admin; D-110, el flujo real de pedidos/citas — no solo la respuesta informativa de menú — también usa la traducción aprobada, incluyendo categorías). Localización de etiquetas de requisitos operativos: esquema listo desde D-039, sin datos ni UI que lo pueblen todavía.
 
 ## 13. Pedidos, reservas y recomendaciones
 
@@ -707,9 +707,9 @@ Implementado en migraciones 056-057, `OperationalRequirementsService`, refactor 
 
 Peluquería Aurora (D-109) es el caso que realmente prueba la genericidad: los otros 5 tenants ya existían antes del modelo de requisitos configurables; este se configuró **solo con datos** (`database/seeds/006_peluqueria_aurora.sql`), sin tocar `backend/src`. De paso encontró y corrigió un bug de orden de seeds de la misma familia que D-082 (el backfill genérico de `operational_requirements` debía seguir siendo el archivo de seed con el número más alto; se renumeró de 005 a 007).
 
-### P1 — Localización completa del contenido
+### P1 — Localización completa del contenido (✅ resuelto, D-086 + D-110)
 
-Extender el patrón de `business_profile_localizations` a ofertas, variantes, categorías, FAQ, políticas y requisitos. Definir fallback explícito y revisión/aprobación de traducciones.
+D-086 (2026-09-02) extendió `business_profile_localizations` a ofertas, variantes y conocimiento (FAQ/políticas), con panel admin. D-110 (2026-09-04) cerró la brecha real que quedaba: ese trabajo solo cubría las respuestas informativas de solo lectura (`deterministic-reply.service.ts`); el flujo real de armar un pedido o una cita (`commercial-flow.service.ts`/`appointment-flow.service.ts`) nunca leía las traducciones, así que un cliente que escribe en inglés veía nombres en español durante todo el carrito. Corregido en las consultas de emparejamiento (`catalogItems()`, `cartItems()`, `matchBookableItem()`), de donde el nombre localizado se congela en `description_snapshot`/`context.itemName` — el mismo mecanismo de snapshot que hace que tocar solo la pantalla del carrito no hubiera bastado. Agregó también `app.catalog_category_localizations` (categorías, el único hueco que ni D-086 cubría). `app.tenant_policies` resultó ser una tabla sin usar (cero filas, ninguna referencia en código) — las políticas reales viven en `knowledge_entries`, ya cubiertas por D-086. Requisitos operativos ya tienen esquema de localización desde D-039, sin poblar. Deliberadamente no localizados: nombres de recursos (`booking_resources` — son nombres propios de personas/espacios) y de modificadores (`modifier_options`/`modifier_groups` — clase de entidad distinta, brecha conocida). Sin endpoint de escritura para categorías todavía — no hay pantalla admin que trate "categoría" como entidad, así que un endpoint sin UI habría sido superficie muerta.
 
 ### P1 — Comprensión multi-entidad (✅ resuelto, D-040)
 

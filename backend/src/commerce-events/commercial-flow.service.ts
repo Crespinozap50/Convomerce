@@ -3,7 +3,7 @@ import { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { DeterministicReply } from "./deterministic-reply.service";
 import { RecommendationService } from "../recommendations/recommendation.service";
-import { catalogFor, ConversationLocale, formatMoney } from "../localization/localization";
+import { catalogFor, ConversationLocale, formatMoney, languageFor } from "../localization/localization";
 import {
   commercialCopy,
   CommercialCopyKey,
@@ -295,7 +295,7 @@ export class CommercialFlowService {
     // carry real signal (a confident match or a genuine tie) — that's a
     // strong enough signal of ordering intent on its own, regardless of
     // what the rest of the message also mentions.
-    const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC");
+    const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC", input.locale);
     if (multi) {
       const requestId = uuidv7(),
         flowId = uuidv7();
@@ -415,7 +415,7 @@ export class CommercialFlowService {
       // nothing to list or it exceeds WhatsApp's 10-row limit (see
       // catalogChoiceReply).
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC"), key, values) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), key, values) ??
         this.catalogButtonReply(input.locale, key, values)
       );
     }
@@ -481,7 +481,7 @@ export class CommercialFlowService {
         returnToCart: true,
       });
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC")) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale)) ??
         this.localizedReply(input.locale, "item")
       );
     }
@@ -556,7 +556,7 @@ export class CommercialFlowService {
       // the wrong product. Ask which one first; a single-item cart has
       // nothing to disambiguate, so it goes straight to picking the
       // replacement like before.
-      const cartItems = await this.cartItems(client, flow.commercial_request_id);
+      const cartItems = await this.cartItems(client, flow.commercial_request_id, input.locale);
       if (cartItems.length > 1) {
         await this.step(client, flow.id, "selecting_replace_target", {
           replaceCandidates: cartItems,
@@ -569,7 +569,7 @@ export class CommercialFlowService {
       );
       await this.step(client, flow.id, "selecting_item", { replaceItem: true });
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC")) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale)) ??
         this.localizedReply(input.locale, "item")
       );
     }
@@ -660,7 +660,7 @@ export class CommercialFlowService {
       replaceItemId: match.variant_id,
     });
     return (
-      this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC")) ??
+      this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale)) ??
       this.localizedReply(input.locale, "item")
     );
   }
@@ -715,7 +715,7 @@ export class CommercialFlowService {
     // batch of new ones — multi-item extraction doesn't apply there.
     const multi =
       flow.context.replaceItem !== true
-        ? await this.matchItemMentions(client, input.body, input.timezone ?? "UTC")
+        ? await this.matchItemMentions(client, input.body, input.timezone ?? "UTC", input.locale)
         : null;
     if (multi) {
       for (const { item, quantity } of multi.matches) {
@@ -763,11 +763,11 @@ export class CommercialFlowService {
     if (affirmative) {
       await this.step(client, flow.id, "selecting_item", {});
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC")) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale)) ??
         this.localizedReply(input.locale, "item")
       );
     }
-    const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC");
+    const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC", input.locale);
     if (multi) {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, flow.commercial_request_id, item, quantity);
@@ -1024,7 +1024,7 @@ export class CommercialFlowService {
     // enough: nothing about the packaging line depends on being live
     // mid-build, only on being correct by the time the customer sees the
     // review and the moment the order is actually confirmed.
-    await this.syncPackagingFee(client, flow.commercial_request_id);
+    await this.syncPackagingFee(client, flow.commercial_request_id, input.locale);
     await this.recalculate(client, flow.commercial_request_id);
     return this.afterRequirementFilled(client, flow, input, context);
   }
@@ -1182,7 +1182,7 @@ export class CommercialFlowService {
       // added another item) after fulfillment was already chosen, so the
       // packaging line synced back in handleAwaitingFulfillment could be
       // stale by the time the customer actually confirms (D-104).
-      await this.syncPackagingFee(client, flow.commercial_request_id);
+      await this.syncPackagingFee(client, flow.commercial_request_id, input.locale);
       await this.recalculate(client, flow.commercial_request_id);
       await client.query(
         `update app.commercial_requests set status='ready',confirmed_at=now(),updated_at=now() where id=$1`,
@@ -1329,7 +1329,7 @@ export class CommercialFlowService {
     client: PoolClient,
     input: UnderstoodFlowInput,
   ): Promise<{ match: Item | null; tied: Item[] }> {
-    const rows = await this.catalogItems(client, input.timezone ?? "UTC");
+    const rows = await this.catalogItems(client, input.timezone ?? "UTC", input.locale);
     // Tapping a row from catalogChoiceReply()/the "Ver menú" list already
     // identifies one exact variant unambiguously (its id IS the
     // variant_id) — but the tap gets reprocessed as a normal inbound
@@ -1356,15 +1356,31 @@ export class CommercialFlowService {
   // customer asking for it gets the same "not found, here's what we do
   // have" reply as any other nonexistent product, always showing only what
   // the kitchen can actually make at this moment.
-  private async catalogItems(client: PoolClient, timezone: string): Promise<Item[]> {
+  // D-110: name/category/variant_name come back already coalesced against
+  // the customer's locale (D-086's item/variant tables, plus the
+  // category-value table added for this). Every caller — including the
+  // description_snapshot written by addItem()/addModifier() — gets the
+  // localized text for free by construction, never the tenant's raw
+  // base-language text, without needing its own separate localization pass.
+  private async catalogItems(client: PoolClient, timezone: string, locale: Locale): Promise<Item[]> {
     const result = await client.query<Item>(
-      `select item.id item_id,variant.id variant_id,item.name,item.category,variant.name variant_name,variant.price_minor::text,variant.currency
+      `select item.id item_id,variant.id variant_id,
+              coalesce(item_loc.name,item.name) name,
+              coalesce(cat_loc.label,item.category) category,
+              coalesce(variant_loc.name,variant.name) variant_name,
+              variant.price_minor::text,variant.currency
        from app.catalog_items item join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
+       left join app.catalog_item_localizations item_loc
+         on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$2
+       left join app.item_variant_localizations variant_loc
+         on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$2
+       left join app.catalog_category_localizations cat_loc
+         on cat_loc.tenant_id=item.tenant_id and cat_loc.category=item.category and cat_loc.locale=$2
        where item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
          and (item.available_from_time is null or item.available_until_time is null
               or (now() at time zone $1)::time between item.available_from_time and item.available_until_time)
        order by item.name`,
-      [timezone],
+      [timezone, languageFor(locale)],
     );
     return result.rows;
   }
@@ -1378,10 +1394,10 @@ export class CommercialFlowService {
     requestId: string,
     input: UnderstoodFlowInput,
   ): Promise<{ match: Item | null; tied: Item[] }> {
-    const rows = await this.cartItems(client, requestId);
+    const rows = await this.cartItems(client, requestId, input.locale);
     return this.scoreCandidates(rows, input);
   }
-  private async cartItems(client: PoolClient, requestId: string): Promise<Item[]> {
+  private async cartItems(client: PoolClient, requestId: string, locale: Locale): Promise<Item[]> {
     const result = await client.query<Item>(
       // A packaging-fee line (D-104) is derived from the cart, never chosen:
       // syncPackagingFee() recomputes its quantity on every fulfillment
@@ -1390,12 +1406,19 @@ export class CommercialFlowService {
       // overwritten back to the computed 2 one step later (found live), so
       // it is excluded from every cart picker and cart match — removing it
       // or changing its quantity by hand is never a real choice.
-      `select item.id item_id,variant.id variant_id,item.name,variant.name variant_name,variant.price_minor::text,variant.currency
+      `select item.id item_id,variant.id variant_id,
+              coalesce(item_loc.name,item.name) name,
+              coalesce(variant_loc.name,variant.name) variant_name,
+              variant.price_minor::text,variant.currency
        from app.request_lines line
        join app.item_variants variant on variant.tenant_id=line.tenant_id and variant.id=line.item_variant_id
        join app.catalog_items item on item.tenant_id=variant.tenant_id and item.id=variant.catalog_item_id
+       left join app.catalog_item_localizations item_loc
+         on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$2
+       left join app.item_variant_localizations variant_loc
+         on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$2
        where line.commercial_request_id=$1 and line.status='active' and item.is_packaging_fee=false`,
-      [requestId],
+      [requestId, languageFor(locale)],
     );
     return result.rows;
   }
@@ -1493,6 +1516,7 @@ export class CommercialFlowService {
     client: PoolClient,
     message: string,
     timezone: string,
+    locale: Locale,
   ): Promise<{
     matches: { item: Item; quantity: number }[];
     unmatched: string[];
@@ -1508,7 +1532,7 @@ export class CommercialFlowService {
   } | null> {
     const segments = this.splitItemMentions(message);
     if (segments.length < 2) return null;
-    const catalog = await this.catalogItems(client, timezone);
+    const catalog = await this.catalogItems(client, timezone, locale);
     const ignored = new Set(mergedLanguageTerms("itemStopWords"));
     const matches: { item: Item; quantity: number }[] = [];
     const unmatched: string[] = [];
@@ -1774,7 +1798,13 @@ export class CommercialFlowService {
     category: string,
   ): Promise<DeterministicReply | null> {
     const uncategorizedLabel = this.copy(locale, "categoryUncategorized");
-    const items = (await this.catalogItems(client, timezone)).filter(
+    // catalogItems() already coalesces category to the localized label for
+    // this same locale — categoryPickerReply() built the "category:{name}"
+    // id from that same coalesced value, so the exact-match filter below
+    // stays consistent as long as the locale hasn't changed between the two
+    // turns (same conservative assumption D-036's language-switching rule
+    // already makes everywhere else in this flow).
+    const items = (await this.catalogItems(client, timezone, locale)).filter(
       (item) => (item.category ?? uncategorizedLabel) === category,
     );
     if (items.length === 0 || items.length > 10) return null;
@@ -1854,19 +1884,26 @@ export class CommercialFlowService {
   // post-confirmation status — see commercial_requests' check constraint
   // tying it to confirmed_at) so an abandoned/cancelled draft never inflates
   // a variant's popularity.
-  private async mostOrderedItems(client: PoolClient, limit = 5): Promise<Item[]> {
+  private async mostOrderedItems(client: PoolClient, locale: Locale, limit = 5): Promise<Item[]> {
     const result = await client.query<Item>(
-      `select item.id item_id,variant.id variant_id,item.name,variant.name variant_name,variant.price_minor::text,variant.currency
+      `select item.id item_id,variant.id variant_id,
+              coalesce(item_loc.name,item.name) name,
+              coalesce(variant_loc.name,variant.name) variant_name,
+              variant.price_minor::text,variant.currency
        from app.request_lines line
        join app.commercial_requests request on request.tenant_id=line.tenant_id and request.id=line.commercial_request_id
        join app.item_variants variant on variant.tenant_id=line.tenant_id and variant.id=line.item_variant_id
        join app.catalog_items item on item.tenant_id=variant.tenant_id and item.id=variant.catalog_item_id
+       left join app.catalog_item_localizations item_loc
+         on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$2
+       left join app.item_variant_localizations variant_loc
+         on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$2
        where request.status='ready' and line.status='active'
          and item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
-       group by item.id,variant.id,item.name,variant.name,variant.price_minor,variant.currency
+       group by item.id,variant.id,item.name,variant.name,variant.price_minor,variant.currency,item_loc.name,variant_loc.name
        order by count(*) desc,item.name
        limit $1`,
-      [limit],
+      [limit, languageFor(locale)],
     );
     return result.rows;
   }
@@ -1879,7 +1916,7 @@ export class CommercialFlowService {
     client: PoolClient,
     locale: Locale,
   ): Promise<DeterministicReply> {
-    const items = await this.mostOrderedItems(client);
+    const items = await this.mostOrderedItems(client, locale);
     return (
       this.catalogChoiceReply(locale, items, "recommendationSuggestion") ??
       // Same "no quoted instruction, use the real button" rule D-095 set
@@ -1899,7 +1936,7 @@ export class CommercialFlowService {
     flow: Workflow,
     locale: Locale,
   ): Promise<DeterministicReply> {
-    const items = await this.cartItems(client, flow.commercial_request_id);
+    const items = await this.cartItems(client, flow.commercial_request_id, locale);
     const listable = items.length > 0 && items.length <= 10;
     // Persisting the exact lines offered means the tap that follows is
     // resolved by index (handleRemovingItem's tiedChoice branch) instead of
@@ -1932,7 +1969,7 @@ export class CommercialFlowService {
     flow: Workflow,
     locale: Locale,
   ): Promise<DeterministicReply> {
-    const items = await this.cartItems(client, flow.commercial_request_id);
+    const items = await this.cartItems(client, flow.commercial_request_id, locale);
     const listable = items.length > 0 && items.length <= 10;
     // Same tie-persisting reason as removeWhichReply above — found live
     // here first: tapping "Sopa MX" from this very list re-matched by name,
@@ -2343,7 +2380,7 @@ export class CommercialFlowService {
   // packaging_ratio/counts_toward_packaging), never hardcoded to one
   // product name or one tenant. A tenant with no packaging-fee item
   // configured is a no-op here, same as before this feature existed.
-  private async syncPackagingFee(client: PoolClient, requestId: string) {
+  private async syncPackagingFee(client: PoolClient, requestId: string, locale: Locale) {
     // One query for both the request's own fulfillment_type and its
     // tenant's packaging-fee config (left join — most tenants configure
     // none, so this stays a single round trip either way, not two).
@@ -2352,14 +2389,16 @@ export class CommercialFlowService {
       variant_id: string | null; item_name: string | null; price_minor: string | null; currency: string | null; ratio: number | null;
     }>(
       `select request.tenant_id,request.fulfillment_type,
-              variant.id as variant_id,item.name as item_name,variant.price_minor::text,variant.currency,item.packaging_ratio as ratio
+              variant.id as variant_id,coalesce(item_loc.name,item.name) as item_name,variant.price_minor::text,variant.currency,item.packaging_ratio as ratio
          from app.commercial_requests request
          left join app.catalog_items item
            on item.tenant_id=request.tenant_id and item.is_packaging_fee=true and item.status='active'
          left join app.item_variants variant
            on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id and variant.status='active'
+         left join app.catalog_item_localizations item_loc
+           on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$2
         where request.id=$1`,
-      [requestId],
+      [requestId, languageFor(locale)],
     );
     const requestRow = request.rows[0];
     if (!requestRow || !requestRow.variant_id) return;

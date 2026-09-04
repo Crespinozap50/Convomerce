@@ -138,7 +138,8 @@ export class DeterministicReplyService {
     // now.
     const result = await client.query<OfferingRow>(
       `select item.id::text as item_id,variant.id::text as variant_id,
-              coalesce(item_loc.name,item.name) as name,item.category,
+              coalesce(item_loc.name,item.name) as name,
+              coalesce(cat_loc.label,item.category) as category,
               coalesce(variant_loc.name,variant.name) as variant_name,
               variant.price_minor::text,variant.currency
          from app.catalog_items item
@@ -147,6 +148,8 @@ export class DeterministicReplyService {
            on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$1
          left join app.item_variant_localizations variant_loc
            on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$1
+         left join app.catalog_category_localizations cat_loc
+           on cat_loc.tenant_id=item.tenant_id and cat_loc.category=item.category and cat_loc.locale=$1
         where item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
           and variant.availability_status in ('available','unknown')
           and (item.available_from_time is null or item.available_until_time is null
