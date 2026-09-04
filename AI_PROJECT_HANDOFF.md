@@ -2,9 +2,12 @@
 
 > Documento maestro de contexto, arquitectura, estado y continuidad.
 >
-> **Actualizado:** 2026-08-30  
+> **Actualizado:** 2026-09-03  
 > **Repositorio local:** `/Users/carlosespinoza/Sites/Personal/whatsapp-commerce-ai`  
-> **Estado de Git:** repositorio inicializado, con trabajo local sin consolidar; por decisión del propietario no se deben crear commits ni configurar un remoto hasta recibir autorización explícita.  
+> **Estado de Git:** repositorio con remoto configurado (`origin` →
+> `github.com/Crespinozap50/Convomerce`, rama `main`). Se hacen commits y
+> push regularmente, siempre con confirmación explícita del propietario en
+> cada caso — nunca por iniciativa propia sin pedirlo primero.  
 > **Audiencia:** desarrolladores y agentes de IA que deban continuar el proyecto sin reconstruir su contexto desde cero.
 
 ## 1. Resumen ejecutivo
@@ -95,7 +98,6 @@ La meta económica original del MVP es operar por debajo de USD 30 mensuales. Es
 - Los requisitos operativos todavía están centrados en nombre, teléfono y dirección; falta un modelo administrable de campos tipados por operación.
 - Catálogos, variantes y entradas de conocimiento requieren localizaciones administrables equivalentes a las del perfil del negocio.
 - Un mensaje con múltiples entidades debe poder completar varios campos de manera segura.
-- El frontend funciona, pero `frontend/src/App.tsx` concentra demasiado código y debe modularizarse sin cambiar comportamiento.
 - n8n aún no contiene flujos operativos; solo se definió su frontera arquitectónica.
 - El token real de WhatsApp utilizado en pruebas recientes expiró o quedó inválido. La persistencia local funciona, pero Meta no enviará hasta renovar la credencial.
 - Falta estrategia definitiva de despliegue, backups, secretos, métricas externas y alertas.
@@ -182,11 +184,25 @@ whatsapp-commerce-ai/
 │   ├── evals/                  # evaluaciones conversacionales y revisión ciega
 │   ├── scripts/                # verificaciones operativas
 │   └── observability/          # configuración/artefactos de observabilidad
-├── frontend/                   # panel React + TypeScript + Vite
-│   ├── src/App.tsx             # composición actual del panel; candidato a dividir
-│   ├── src/api.ts              # cliente HTTP
-│   ├── src/i18n/               # catálogos de interfaz ES/EN
-│   └── src/styles.css          # estilos del panel
+├── frontend/                           # panel React + TypeScript + Vite
+│   ├── src/App.tsx                     # shell: sesión (App()) + ruteo/estado compartido (Dashboard()) — 746 líneas
+│   ├── src/types.ts                    # tipos compartidos entre módulos (los que Dashboard referencia directo)
+│   ├── src/api.ts                      # cliente HTTP
+│   ├── src/dashboard/                  # routing.ts (Page/KnowledgeSection, tablas de rutas), utils.ts (sonido, notificación, roleName)
+│   ├── src/components/                 # primitivas reutilizadas por 3+ dominios: AppSelect, ConfirmModal, FieldHelp, LanguageSwitcher
+│   ├── src/auth/                       # Login, ChangePassword
+│   ├── src/companies/                  # TenantSelector, Companies, CompanyModal, EditCompanyModal
+│   ├── src/tenant-metrics/             # TenantMetrics (+ MetricBar/SortableHeader/formatters locales)
+│   ├── src/team/                       # Team, InviteModal
+│   ├── src/connections/                # Connections, ConnectionModal
+│   ├── src/bot/                        # BotSettings
+│   ├── src/scheduling/                 # SchedulingSettings, ResourceModal
+│   ├── src/requests/                   # CommercialRequests
+│   ├── src/knowledge/                  # KnowledgeSettings, LearnedResponsesPanel, LearnedResponse, ExtrasPanel, OfferingModal, PublishedAnswer, LearningQuestion
+│   ├── src/conversations/              # ConversationInbox
+│   ├── src/operational-requirements/   # OperationalRequirementsPanel (precedente original de esta modularización)
+│   ├── src/i18n/                       # catálogos de interfaz ES/EN
+│   └── src/styles.css                  # estilos del panel
 ├── database/
 │   ├── sql/                    # migraciones 001..055 y plantilla de roles
 │   ├── seeds/                  # tenants y escenarios ficticios
@@ -286,7 +302,7 @@ Rutas principales:
 | `/knowledge/learned-responses` | Propuestas de respuesta, pendientes, aprobadas y rechazadas. |
 | Rutas bajo `/knowledge/...` | Perfil, fuentes, preguntas y subsecciones de conocimiento. |
 
-También existen vistas para equipo, conexiones, bot, agenda y administración de tenant. Las rutas exactas están centralizadas al inicio de `frontend/src/App.tsx`.
+También existen vistas para equipo, conexiones, bot, agenda y administración de tenant. Las rutas exactas están centralizadas en `frontend/src/dashboard/routing.ts` (`Page`, `KnowledgeSection`, tablas de rutas, `readDashboardPage`/`readDashboardRoute`).
 
 Mejoras visuales ya realizadas en conversaciones:
 
@@ -301,7 +317,34 @@ Mejoras visuales ya realizadas en conversaciones:
 - marcador para regresar al mensaje más reciente;
 - textos y estados traducidos.
 
-Deuda técnica principal: `App.tsx` es monolítico. La división futura debería separar layout, routing, páginas, componentes de conversación, hooks y tipos, manteniendo primero pruebas o snapshots de comportamiento.
+### 8.1 Modularización de `App.tsx` (resuelta)
+
+`App.tsx` era un único archivo de 6.230 líneas con ~40 componentes (páginas,
+modales, primitivas de UI y utilidades) todos declarados en el mismo módulo.
+Se dividió en 3 incrementos verificados independientemente (`tsc -b`,
+`eslint`, navegador real con sesión real) — código movido tal cual, sin
+cambiar comportamiento:
+
+| Incremento | Contenido | `App.tsx` después |
+| --- | --- | --- |
+| A | `types.ts`, `dashboard/routing.ts`, `dashboard/utils.ts`, `components/` (4 primitivas), `auth/` | 6.230 → 5.767 |
+| B | `companies/`, `tenant-metrics/`, `team/`, `connections/`, `bot/`, `scheduling/`, `requests/` | 5.767 → 3.452 |
+| C | `knowledge/` (7 archivos), `conversations/` | 3.452 → **746** |
+
+`App.tsx` quedó reducido a exactamente lo que su nombre sugiere: imports +
+`App()` (bootstrap de sesión) + `Dashboard()` (shell de ruteo y estado
+compartido — companies/members/connections/botConfig/knowledge/notices que
+los hijos reciben por props + callbacks `onX`, nunca por Context/Provider).
+Cada dominio nuevo sigue el patrón ya establecido por
+`operational-requirements/OperationalRequirementsPanel.tsx`: un componente
+autocontenido que recibe `tenant` (u otros ids/callbacks primitivos), hace
+su propio fetch/estado/error, sin path aliases (imports relativos, como el
+resto del proyecto).
+
+Deuda técnica restante, deliberadamente no incluida en esta modularización:
+partir el propio estado de `Dashboard` en hooks (`useCompanies`,
+`useConnections`, etc.) — eso es un refactor más profundo, no
+"modularizar", y no se hizo sin que se pida explícitamente.
 
 ## 9. Modelo de datos
 
@@ -697,18 +740,13 @@ Renovar el token, verificar phone number ID/cuenta, mantener secretos fuera de G
 
 Ampliar el conjunto de evaluaciones con saludos, correcciones, mensajes incompletos, cambios de idioma, negaciones, cancelaciones y conversación larga. Medir naturalidad, exactitud, conversiones, escalamiento, costo y latencia.
 
-### P2 — Modularizar el frontend
+### P2 — Modularizar el frontend (✅ resuelto)
 
-Extraer de `App.tsx`:
-
-- router y layout;
-- páginas por dominio;
-- componentes de conversación;
-- componentes de respuestas aprendidas;
-- hooks de carga/mutación;
-- tipos y formatters.
-
-Hacerlo por incrementos pequeños y verificables, no como una reescritura.
+`App.tsx` se dividió en 3 incrementos verificados (6.230 → 746 líneas) en
+`src/{types.ts,dashboard,components,auth,companies,tenant-metrics,team,
+connections,bot,scheduling,requests,knowledge,conversations}/`. Ver §8.1
+para el detalle completo. Deuda restante fuera de este alcance: partir el
+propio estado de `Dashboard` en hooks — no incluida a menos que se pida.
 
 ### P2 — Operación de producción
 
@@ -746,7 +784,6 @@ No es necesario introducir microservicios todavía. El monolito modular reduce c
 - Usar OpenAI en exceso puede romper la meta de costo; usarlo muy poco puede reducir naturalidad. El rollout y las variantes aprobadas equilibran ambos.
 - Una mala configuración de capacidades puede habilitar un flujo incorrecto; necesita validación y UI clara.
 - Los requisitos operativos rígidos son la principal amenaza actual a la versatilidad multiindustria.
-- `App.tsx` dificulta cambios visuales seguros y pruebas aisladas.
 - Los tokens temporales de Meta expiran; producción necesita gestión y rotación de secretos.
 - La base local contiene evidencia visual valiosa, pero no sustituye fixtures repetibles.
 - La documentación histórica puede quedar obsoleta; actualizar este handoff cuando cambie una frontera importante.
