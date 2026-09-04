@@ -692,6 +692,7 @@ Orden recomendado:
 11. `docs/internationalization.md` — idiomas y localización.
 12. `docs/nestjs-n8n-boundary.md` — límites de orquestación.
 13. `docs/roadmap.md` y `docs/requirements.md` — prioridades y requisitos trazables.
+14. `docs/production-deployment.md` — recomendación de proveedores para P2 (D-005), pendiente de aprobación del propietario.
 
 `PROJECT_CONTEXT.md` conserva el contexto inicial, pero algunos pendientes allí ya fueron implementados. Ante una contradicción, comprobar código, migraciones y este documento antes de asumir que sigue vigente.
 
@@ -734,6 +735,8 @@ propio estado de `Dashboard` en hooks — no incluida a menos que se pida.
 ### P2 — Operación de producción
 
 Definir hosting, TLS, secretos administrados, backups/restores, retención, observabilidad, alertas, CI/CD, migraciones, rollback, límites por tenant y plan de incidentes.
+
+**Hosting: recomendación documentada** (D-005, `docs/production-deployment.md`) — Railway + Neon + Upstash + Vercel (~$6-11/mes) recomendado para arrancar; VPS propio (~$5.50/mes fijo, reutilizando `docker-compose.yml`) como alternativa. Pendiente de aprobación y ejecución del propietario (cuentas, pago, verificación de negocio en Meta) — no delegable. Resto de la lista (TLS, secretos, backups, CI/CD, alertas, plan de incidentes) sigue sin definir.
 
 ### P3 — n8n e integraciones adicionales
 

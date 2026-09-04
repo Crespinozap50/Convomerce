@@ -28,8 +28,10 @@ Las decisiones se documentarán aquí con fecha, estado, contexto y consecuencia
 
 ## D-005 — Infraestructura del MVP
 
-- **Estado:** pendiente.
+- **Estado:** recomendación documentada (2026-09-04), pendiente de aprobación y ejecución del propietario — crear cuentas, ingresar método de pago y aprobar el proveedor final no es delegable a la IA que continúa este trabajo.
 - **Criterios:** costo total menor a USD 30 mensuales, operación sencilla, respaldo y posibilidad de crecimiento.
+- **Recomendación:** ver `docs/production-deployment.md`. Opción A (Railway + Neon + Upstash + Vercel, todo administrado, ~$6-11/mes con niveles gratuitos) recomendada para arrancar; Opción B (VPS único, ~$5.50/mes fijo, reutilizando `docker-compose.yml` tal cual) documentada como alternativa de menor costo fijo si el tráfico crece lo suficiente para justificar el trabajo operativo adicional.
+- **Pendiente antes de desplegar, sin importar el proveedor**: `Dockerfile` para backend y frontend (no existen hoy — solo Postgres/Redis están containerizados, para desarrollo local), pipeline de CI/CD, adaptar `database/scripts/backup.sh`/`migrate.sh` a un entorno sin `docker compose exec` local si se elige la Opción A.
 
 ## D-006 — Diferenciación centrada en resultados
 
