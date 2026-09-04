@@ -1,7 +1,7 @@
 # Requisitos operativos configurables y extracción multi-entidad
 
-> Estado: **diseño propuesto**, pendiente de revisión y aprobación antes de implementar.
-> Implementa D-039 y D-040 de `docs/decisions.md`.
+> Estado: **implementado y validado** (D-039, D-040, 2026-08-31; D-109, 2026-09-04 — genericidad probada con una industria nueva).
+> Implementa D-039, D-040 y D-109 de `docs/decisions.md`.
 
 ## 1. Problema
 
@@ -124,9 +124,9 @@ Si `ambiguous` tiene 2 o más entradas simultáneas, o el mensaje no permite sep
 2. ✅ Servicio `OperationalRequirementsService`: CRUD tenant-scoped (`backend/src/operational-requirements/`). Incluye `setOptionLocalization` (etiqueta por idioma de cada opción de un campo tipo "selección"), añadido durante la implementación del panel — no estaba en el diseño original.
 3. ✅ Refactor de `commercial-flow.service.ts`/`appointment-flow.service.ts`: los bloques `awaiting_name`/`awaiting_saved_address`/`awaiting_address`/`awaiting_address_consent` fueron reemplazados por un paso genérico `awaiting_requirement:{field_key}`, con `requirement-loop.ts` como capa de funciones puras compartidas (selección del siguiente pendiente, validación por tipo). Verificado con 193 pruebas de backend (incluye regresión explícita de los casos nombre+dirección y modalidad sin dirección) y la suite SQL.
 3.5. ✅ Panel admin en `frontend/src/operational-requirements/OperationalRequirementsPanel.tsx`, integrado en la navegación existente de "Conocimiento" sin reestructurar `App.tsx`. Probado en navegador real: crear, localizar, agregar opciones y activar un requisito nuevo funcionan de punta a punta.
-4. Extractor multi-entidad (D-040): primero para `date`/`select`/`number` (mayor confianza), luego `address`/`text` libre. No iniciado — depende de que el esquema (paso 1-3) esté estable en producción.
-5. Matriz de aceptación multiindustria (ya priorizada en el handoff) ejecutada contra este modelo: restaurante, spa, lavadero, tecnología, y al menos una industria nueva no contemplada hasta ahora (peluquería o taller) para validar que agregarla es solo configuración. No iniciado.
-6. Actualizar `docs/cross-industry-conversation-engine.md` marcando la brecha 1 y 3 como resueltas. Brecha 1 (requisitos configurables) resuelta para el caso base; brecha 3 (multi-entidad) sigue pendiente hasta el paso 4.
+4. ✅ Extractor multi-entidad (`backend/src/commerce-events/requirement-loop.ts`: `extractPendingRequirementValues`, `resolveBooleanRequirementValue`). Implementado 2026-08-31, ver D-040 en `docs/decisions.md`. Alcance real (más conservador que la redacción original de este documento): `select`/`boolean`/`number` se extraen automáticamente bajo condiciones de confianza; `text`/`address`/`phone` libres **nunca** se extraen automáticamente, ni siquiera como único campo pendiente — no hay forma confiable de acotar confianza sobre texto libre sin NLP real. 215 pruebas de backend en verde.
+5. ✅ Matriz de aceptación multiindustria: D-091 automatizó restaurante, tecnología, spa, barbería y lavadero (`backend/test/acceptance-matrix.integration-spec.ts`) — pero los 5 ya existían antes de este modelo. **D-109** cerró la brecha real: Peluquería Aurora, una industria nunca configurada antes, agregada solo con datos (`database/seeds/006_peluqueria_aurora.sql`) y verificada contra la misma matriz (25/25 pruebas en verde). De paso, encontró y corrigió un bug de orden de seeds de la misma familia que D-082 — ver D-109 y `docs/acceptance-matrix.md`.
+6. ✅ `docs/cross-industry-conversation-engine.md` actualizado marcando las brechas 1 y 3 como resueltas, con la brecha restante del paso 5 anotada explícitamente.
 
 ## 7. Riesgos y mitigaciones
 

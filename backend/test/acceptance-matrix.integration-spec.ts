@@ -96,7 +96,18 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
     channelId: '0194f001-0000-7000-8000-000000000005',
     capabilities: { orders: false, appointments: true },
   };
-  const allTenants = [restaurante, tecnologia, barberia, spa, lavadero];
+  // D-039/D-040 plan step 5 (docs/operational-requirements.md): the other
+  // four appointment/order tenants above already existed before the
+  // operational-requirements model was built. This one exists only to prove
+  // the model generalizes — added purely via
+  // database/seeds/006_peluqueria_aurora.sql, no code change anywhere.
+  const peluqueria: Tenant = {
+    slug: 'peluqueria-aurora',
+    tenantId: '0194f000-0000-7000-8000-000000000006',
+    channelId: '0194f001-0000-7000-8000-000000000006',
+    capabilities: { orders: false, appointments: true },
+  };
+  const allTenants = [restaurante, tecnologia, barberia, spa, lavadero, peluqueria];
 
   const createdConversations: { tenantId: string; conversationId: string }[] =
     [];
@@ -242,6 +253,11 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
         question: '¿Cuánto tarda el lavado?',
         entryId: '0194f007-0000-7000-8000-000000000052',
       },
+      {
+        tenant: peluqueria,
+        question: '¿Debo lavarme el cabello antes de venir?',
+        entryId: '0194f007-0000-7000-8000-000000000063',
+      },
     ])(
       '$tenant.slug: "$question" resuelve a su propia entrada de conocimiento',
       async ({ tenant, question, entryId }) => {
@@ -294,6 +310,11 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
         tenant: lavadero,
         question: '¿Cuánto cuesta el lavado?',
         itemId: '0194f005-0000-7000-8000-000000000052',
+      },
+      {
+        tenant: peluqueria,
+        question: '¿Cuál es el precio del corte de cabello?',
+        itemId: '0194f005-0000-7000-8000-000000000061',
       },
     ])(
       '$tenant.slug: "$question" incluye su propio catálogo',
@@ -358,6 +379,10 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
         tenant: lavadero,
         message: 'Quiero reservar Lavado completo de automóvil',
       },
+      {
+        tenant: peluqueria,
+        message: 'Quiero reservar un corte de cabello',
+      },
     ])('$tenant.slug: inicia una reserva real', async ({ tenant, message }) => {
       const reply = await sendTurn(
         tenant,
@@ -403,6 +428,7 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
     expect(counts['barberia-robledo']).toBe(0);
     expect(counts['spa-botanica']).toBe(0);
     expect(counts['lavadero-ruta-80']).toBe(0);
+    expect(counts['peluqueria-aurora']).toBe(0);
   });
 });
 

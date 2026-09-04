@@ -2,13 +2,22 @@
 
 -- database/sql/056_operational_requirements.sql backfills app.operational_requirements
 -- from app.customer_data_requirements *at migration time* — but every tenant's
--- customer_data_requirements rows are only ever inserted by seeds (001, 003),
--- which run after every migration (migrate.sh then seed.sh). On a freshly
--- migrated + seeded database, 056's backfill always finds an empty source
--- table and seeds nothing. Re-running the same backfill here, idempotently,
--- after every tenant-creating seed has run, closes that gap — for every
--- tenant, not just the ones seeded so far, so this stays correct as new
--- tenants are added.
+-- customer_data_requirements rows are only ever inserted by seeds (001, 003,
+-- 006...), which run after every migration (migrate.sh then seed.sh). On a
+-- freshly migrated + seeded database, 056's backfill always finds an empty
+-- source table and seeds nothing. Re-running the same backfill here,
+-- idempotently, after every tenant-creating seed has run, closes that gap.
+--
+-- This file was originally numbered 005 and its own comment claimed that
+-- stayed correct "as new tenants are added" — false: adding
+-- 006_peluqueria_aurora.sql (docs/operational-requirements.md plan step 5)
+-- silently broke it, because 005 ran BEFORE 006 and never saw its
+-- customer_data_requirements rows on a single fresh `seed.sh` pass (the
+-- same failure class as D-082, just in seed ordering instead of migration
+-- ordering). Renumbered to 007 to fix it. THIS FILE MUST STAY THE
+-- HIGHEST-NUMBERED FILE IN database/seeds/ — any new tenant-creating seed
+-- must sort before it, or it silently gets zero operational_requirements
+-- rows on a fresh install.
 begin;
 set local role commerce_owner;
 

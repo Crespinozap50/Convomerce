@@ -2,7 +2,7 @@
 
 > Documento maestro de contexto, arquitectura, estado y continuidad.
 >
-> **Actualizado:** 2026-09-03  
+> **Actualizado:** 2026-09-04  
 > **Repositorio local:** `/Users/carlosespinoza/Sites/Personal/whatsapp-commerce-ai`  
 > **Estado de Git:** repositorio con remoto configurado (`origin` →
 > `github.com/Crespinozap50/Convomerce`, rama `main`). Se hacen commits y
@@ -95,13 +95,13 @@ La meta económica original del MVP es operar por debajo de USD 30 mensuales. Es
 
 ### 4.2 Parcial o pendiente
 
-- Los requisitos operativos todavía están centrados en nombre, teléfono y dirección; falta un modelo administrable de campos tipados por operación.
-- Catálogos, variantes y entradas de conocimiento requieren localizaciones administrables equivalentes a las del perfil del negocio.
-- Un mensaje con múltiples entidades debe poder completar varios campos de manera segura.
+- Requisitos operativos configurables y tipados por tenant/capacidad/oferta: **resuelto** (D-039, migración 056+057, `OperationalRequirementsService`, panel admin). Extracción multi-entidad por mensaje: **resuelta** (D-040, `requirement-loop.ts`). Genericidad validada con una industria nueva (peluquería): **resuelta** (D-109). Ver §11.2 y `docs/operational-requirements.md`.
+- Catálogos, variantes y entradas de conocimiento requieren localizaciones administrables equivalentes a las del perfil del negocio (sigue pendiente).
 - n8n aún no contiene flujos operativos; solo se definió su frontera arquitectónica.
-- El token real de WhatsApp utilizado en pruebas recientes expiró o quedó inválido. La persistencia local funciona, pero Meta no enviará hasta renovar la credencial.
+- El token real de WhatsApp utilizado en pruebas recientes expiró o quedó inválido — **resuelto en D-093** (token permanente generado en Meta Business Settings); confirmar que sigue vigente antes de asumirlo.
 - Falta estrategia definitiva de despliegue, backups, secretos, métricas externas y alertas.
-- Falta una matriz completa de aceptación multiindustria ejecutable.
+- Matriz de aceptación multiindustria ejecutable: **resuelta** (D-091 para los 5 tenants existentes; D-109 agregó una sexta industria genuinamente nueva — peluquería — solo con datos, cerrando la brecha de genericidad).
+- Comparación de calidad/conversión/latencia/costo por tenant: **resuelta** (D-092, panel "Métricas").
 - Las pruebas de costos y carga todavía son de MVP/local, no de producción.
 
 ## 5. Arquitectura de alto nivel
@@ -432,16 +432,16 @@ El vocabulario del dominio es transversal:
 - Los nombres de productos concretos existen en seeds o datos, no en el motor.
 - Existen pruebas cruzadas de FAQ de spa y tiempos de lavadero.
 
-### 11.2 Brecha estructural prioritaria
+### 11.2 Brecha estructural prioritaria (✅ resuelta)
 
-Debe implementarse un modelo de **requisitos operativos configurables y tipados**. Ejemplos:
+Se implementó un modelo de **requisitos operativos configurables y tipados** por tenant/capacidad/oferta (D-039, migración 056+057, `OperationalRequirementsService`, panel admin), con extracción multi-entidad por mensaje (D-040, `requirement-loop.ts`). Detalle completo en `docs/operational-requirements.md`. Ejemplos ya soportados sin tocar código:
 
 - restaurante: dirección, modalidad, observaciones;
 - spa: servicio, profesional opcional, restricciones declaradas, fecha;
 - lavadero: tipo/tamaño de vehículo, ubicación, servicio;
 - tecnología: variante, dirección, facturación o entrega.
 
-La solución correcta es definir requisitos por capacidad/oferta/tenant, con tipo, obligatoriedad, validación, sensibilidad, traducciones y reglas de confirmación. No crear columnas o condiciones específicas para cada industria.
+Cada requisito declara tipo, obligatoriedad, validación, sensibilidad, traducciones y reglas de confirmación; agregar un campo nuevo es una fila de configuración, no un cambio de código. **Genericidad validada (D-109):** además de restaurante, spa, lavadero, tecnología y barbería (D-091, ya existían antes del modelo), se configuró Peluquería Aurora — una industria genuinamente nueva — solo con datos (`database/seeds/006_peluqueria_aurora.sql`), verificada de punta a punta contra la matriz de aceptación sin ningún cambio de código.
 
 ## 12. Idiomas y localización
 
@@ -684,6 +684,7 @@ Orden recomendado:
 4. `database/README.md` y `database/physical-schema.md` — modelo físico y operación.
 5. `docs/conversation-engine.md` — evolución del motor.
 6. `docs/cross-industry-conversation-engine.md` — regla multiindustria y brechas.
+6.5. `docs/operational-requirements.md` y `docs/acceptance-matrix.md` — requisitos configurables, extracción multi-entidad (D-039/D-040) y matriz de aceptación (D-091), ya implementados.
 7. `docs/conversation-understanding.md` — contrato de comprensión.
 8. `docs/conversation-decision-engine.md` — puerta de decisiones.
 9. `docs/natural-response-rewriting.md` — uso controlado de OpenAI.
@@ -696,45 +697,27 @@ Orden recomendado:
 
 ## 21. Próximos pasos recomendados
 
-### P0 — Generalizar requisitos operativos
+### P0 — Generalizar requisitos operativos (✅ resuelto, D-039/D-040)
 
-Diseñar e implementar campos configurables por tenant/capacidad/oferta:
+Implementado en migraciones 056-057, `OperationalRequirementsService`, refactor de `commercial-flow.service.ts`/`appointment-flow.service.ts` a un bucle genérico de requisitos, panel admin y extracción multi-entidad (`requirement-loop.ts`). 215 pruebas de backend en verde. Detalle completo en `docs/operational-requirements.md` y D-039/D-040 en `docs/decisions.md`.
 
-- tipos: texto, número, selección, fecha, hora, dirección, teléfono, booleano;
-- obligatoriedad y orden;
-- validación declarativa;
-- sensibilidad y retención;
-- etiquetas/preguntas localizadas;
-- confirmación requerida;
-- extracción de múltiples campos desde un mensaje;
-- fallback a humano cuando el dato sea ambiguo o sensible.
+### P0 — Matriz de aceptación multiindustria (✅ resuelto, D-091 + D-109)
 
-Entregable: ADR/decisión, migración 056+, servicios genéricos, endpoints administrativos, interfaz y pruebas para restaurante, spa, lavadero y tecnología.
+`backend/test/acceptance-matrix.integration-spec.ts` cubre restaurante, tecnología, spa, barbería, lavadero (D-091) y peluquería (D-109) — pedido/variante/recomendación, servicio reservable/disponibilidad, tipo de vehículo/cita, conocimiento con colisión de vocabulario real, aislamiento entre tenants. 25/25 pruebas en verde. Ver `docs/acceptance-matrix.md`.
 
-### P0 — Matriz de aceptación multiindustria
-
-Crear fixtures y pruebas ejecutables para, al menos:
-
-- restaurante: pedido, variante, recomendación, domicilio;
-- spa: servicio reservable, profesional/recurso, fecha, disponibilidad;
-- lavadero: tipo de vehículo, servicio, bahía y cita;
-- tecnología: producto, variante, stock, complemento y entrega;
-- FAQ/política en ES y EN para cada caso;
-- handoff ante ambigüedad, acción sensible o incapacidad deshabilitada.
-
-La misma ruta de código debe resolver todos los casos con datos distintos.
+Peluquería Aurora (D-109) es el caso que realmente prueba la genericidad: los otros 5 tenants ya existían antes del modelo de requisitos configurables; este se configuró **solo con datos** (`database/seeds/006_peluqueria_aurora.sql`), sin tocar `backend/src`. De paso encontró y corrigió un bug de orden de seeds de la misma familia que D-082 (el backfill genérico de `operational_requirements` debía seguir siendo el archivo de seed con el número más alto; se renumeró de 005 a 007).
 
 ### P1 — Localización completa del contenido
 
 Extender el patrón de `business_profile_localizations` a ofertas, variantes, categorías, FAQ, políticas y requisitos. Definir fallback explícito y revisión/aprobación de traducciones.
 
-### P1 — Comprensión multi-entidad
+### P1 — Comprensión multi-entidad (✅ resuelto, D-040)
 
-Permitir que “quiero lavado premium para una camioneta mañana a las 3” produzca varias entidades verificables y avance varios pasos sin saltarse confirmaciones.
+Implementado en `requirement-loop.ts` (`extractPendingRequirementValues`). Alcance real, con matices documentados en D-040: `select`/`boolean`/`number` se extraen automáticamente bajo condiciones de confianza; `text`/`address`/`phone` libres nunca se extraen automáticamente por diseño (no hay forma confiable de acotar confianza sobre texto libre sin NLP real). Fallback conservador a una pregunta por campo cuando hay ambigüedad, sin excepción a la confirmación explícita.
 
-### P1 — Renovar y verificar Meta
+### P1 — Renovar y verificar Meta (✅ resuelto en D-093; confirmar vigencia antes de asumirlo)
 
-Renovar el token, verificar phone number ID/cuenta, mantener secretos fuera de Git y ejecutar una prueba real end-to-end. Separar claramente fallos de cuota OpenAI, motor y transporte WhatsApp.
+D-093 generó un token permanente en Meta Business Settings y confirmó la conexión real de Santos Tacos con mensajes genuinos (ver evidencia en D-092). No verificado de nuevo desde entonces — confirmar que el token sigue vigente antes de depender de él para pruebas en vivo.
 
 ### P1 — Consolidar evaluación de naturalidad
 

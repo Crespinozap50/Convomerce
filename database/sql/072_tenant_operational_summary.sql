@@ -13,7 +13,7 @@
 -- SECURITY (D-013), así que en vez de bajar force RLS (invasivo para un
 -- reporte de solo lectura), la función itera los tenants y hace
 -- set_config('app.tenant_id', ...) antes de agregar cada uno — mismo
--- mecanismo ya usado en database/seeds/005_operational_requirements_backfill.sql
+-- mecanismo ya usado en database/seeds/007_operational_requirements_backfill.sql
 -- para lecturas cross-tenant.
 set role commerce_owner;
 

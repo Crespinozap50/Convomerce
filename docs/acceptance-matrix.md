@@ -12,18 +12,27 @@ limpiando todos los datos de prueba al terminar (ver `docs/decisions.md`, D-060)
 
 ## Resultado
 
-| Dimensión | Santos Tacos (restaurante) | CrediCel Store (tecnología) | Distrito Barbería | Botánica Spa | Ruta 80 Car Wash |
-|---|---|---|---|---|---|
-| **Catálogo** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Pedidos** | ✅ | ✅ | N/A (`orders` deshabilitado) | N/A | N/A |
-| **Citas** | N/A (`appointments` deshabilitado) | N/A | ✅ | ✅ | ✅ |
-| **Recursos** (asignación de profesional/bahía + disponibilidad) | N/A | N/A | ✅ | ✅ (no reprobado en esta ronda; validado en D-075 y por diseño compartido con barbería) | ✅ |
-| **Conocimiento** (FAQ) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Recomendaciones** | ✅ | N/A (sin reglas configuradas) | N/A | N/A | N/A |
+| Dimensión | Santos Tacos (restaurante) | CrediCel Store (tecnología) | Distrito Barbería | Botánica Spa | Ruta 80 Car Wash | Peluquería Aurora |
+|---|---|---|---|---|---|---|
+| **Catálogo** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Pedidos** | ✅ | ✅ | N/A (`orders` deshabilitado) | N/A | N/A | N/A |
+| **Citas** | N/A (`appointments` deshabilitado) | N/A | ✅ | ✅ | ✅ | ✅ |
+| **Recursos** (asignación de profesional/bahía + disponibilidad) | N/A | N/A | ✅ | ✅ (no reprobado en esta ronda; validado en D-075 y por diseño compartido con barbería) | ✅ | ✅ |
+| **Conocimiento** (FAQ) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Recomendaciones** | ✅ | N/A (sin reglas configuradas) | N/A | N/A | N/A | N/A |
 
 N/A = la capacidad no está habilitada para ese tenant, o no tiene reglas
 configuradas — no es un hueco, es una diferencia de configuración deliberada
 que la propia matriz existe para confirmar (ver la fila de "Aislamiento").
+
+**Peluquería Aurora** (D-109) es distinta de los otros cinco: no es un tenant
+"de siempre", es el caso que faltaba explícitamente en el plan de D-039/D-040
+(`docs/operational-requirements.md`, paso 5) — un rubro que nunca existió
+antes del modelo de requisitos configurables, agregado únicamente vía
+`database/seeds/006_peluqueria_aurora.sql`, sin tocar `backend/src`. Que las
+25 pruebas de `acceptance-matrix.integration-spec.ts` pasen con este tenant
+incluido es la prueba real de que el modelo generaliza — los otros cinco
+tenants solo prueban que sigue funcionando, no que es genérico.
 
 ## Aislamiento y ausencia de lógica específica por comercio
 
@@ -60,6 +69,19 @@ barbería encontró un cuarto bug real:
 Los cuatro quedaron corregidos y verificados con una instalación 100% fresca
 antes de completar esta matriz — ver el detalle técnico completo de cada uno
 en [decisions.md](decisions.md).
+
+Al agregar Peluquería Aurora como sexto tenant (D-109) apareció un quinto
+bug de la misma familia, esta vez en el propio mecanismo que D-082 dejó
+como solución: `005_operational_requirements_backfill.sql` asumía que
+seguiría siendo el archivo con el número más alto de `database/seeds/`
+indefinidamente. Nombrar el nuevo tenant `006_peluqueria_aurora.sql` lo hizo
+correr *después* del backfill, así que en una instalación 100% fresca de un
+solo paso la peluquería quedaba con cero filas en
+`app.operational_requirements` — exactamente el mismo síntoma que D-082,
+causado esta vez por orden de archivos de seed, no de migraciones. Corregido
+renumerando el backfill a `007_operational_requirements_backfill.sql` (ver
+su propio encabezado, que ahora deja explícito que debe seguir siendo el
+número más alto) y reverificado con una pasada única de `seed.sh`.
 
 ## Qué no cubre esta ronda
 
