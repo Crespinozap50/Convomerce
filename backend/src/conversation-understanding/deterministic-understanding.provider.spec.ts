@@ -191,6 +191,36 @@ describe("DeterministicUnderstandingProvider", () => {
     });
   });
 
+  // Found writing the naturalness eval suite (D-111): "delivery" only
+  // appears here to decline it — fulfillmentDelivery matched on bare
+  // keyword presence and won before fulfillmentPickup was even checked,
+  // the opposite of what the customer asked for.
+  it("does not read a declined delivery mention as a delivery request when pickup is named instead", async () => {
+    const english = await provider.understand({
+      ...base,
+      message: "No delivery please, I will pick it up instead",
+    });
+    expect(english).toMatchObject({ intent: "order", requestedAction: "fulfillment.pickup" });
+    const spanish = await provider.understand({
+      ...base,
+      configuredLocale: "es-CO",
+      message: "No quiero domicilio, prefiero recogerlo en el local",
+    });
+    expect(spanish).toMatchObject({ intent: "order", requestedAction: "fulfillment.pickup" });
+  });
+
+  // Found in the same session: the imperative "Agrega una bebida" (how a
+  // customer actually phrases it) didn't match addItem, only the infinitive
+  // "agregar" did — fell through to fallback instead of add_item.
+  it("recognizes the imperative form of 'add an item' in Spanish, not only the infinitive", async () => {
+    const result = await provider.understand({
+      ...base,
+      configuredLocale: "es-CO",
+      message: "Agrega también una bebida",
+    });
+    expect(result).toMatchObject({ intent: "order", requestedAction: "add_item" });
+  });
+
   it("extracts selection and catalog-search entities before domain routing", async () => {
     const selection = await provider.understand({ ...base, message: "3" });
     const product = await provider.understand({

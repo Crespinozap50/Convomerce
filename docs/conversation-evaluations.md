@@ -6,7 +6,7 @@ Los cambios de reglas, catálogos, prompts o providers deben demostrar que mejor
 
 ## Suite inicial
 
-`backend/evals/conversation-understanding.json` y `backend/evals/conversation-multiturn.json` contienen 48 turnos equilibrados entre español e inglés. La segunda suite organiza los turnos como recorridos completos de pedido, entrega, cita, corrección de carrito, recomendación y handoff. Cubren:
+`backend/evals/conversation-understanding.json` y `backend/evals/conversation-multiturn.json` contienen 74 turnos equilibrados entre español e inglés (D-111 amplió de 48 a 74). La segunda suite organiza los turnos como recorridos completos de pedido, entrega, cita, corrección de carrito, recomendación y handoff. Cubren:
 
 - intención de compra y cantidades;
 - catálogo, precio y resumen del pedido;
@@ -15,7 +15,11 @@ Los cambios de reglas, catálogos, prompts o providers deben demostrar que mejor
 - crear, consultar, cancelar y reprogramar citas;
 - solicitud de atención humana;
 - confirmaciones, rechazos y selecciones numéricas;
-- búsqueda de productos y selección indiferente de recursos.
+- búsqueda de productos y selección indiferente de recursos;
+- saludos, corrección de producto, mensaje incompleto ("Quiero" sin nombrar nada), negación que redirige la modalidad de entrega, cancelación completa de un pedido (D-111);
+- una conversación larga de 12 turnos que combina varias de las categorías anteriores en una sola sesión realista (D-111).
+
+"Cambios de idioma" (también pedido por el roadmap) no vive en este arnés: `run-conversation-understanding.ts` llama directamente al proveedor de comprensión con un `configuredLocale` fijo, nunca a `ConversationLanguageService` — el componente real que decide y persiste el idioma. Esa cobertura vive en `backend/src/localization/conversation-language.service.spec.ts` (detección inicial, estabilidad ante mensajes ambiguos, regla de dos mensajes consecutivos para cambiar, y desde D-111 también la prioridad de la preferencia conocida del contacto).
 
 Cada caso declara resultados observables: intención, acción solicitada, entidades, términos de búsqueda y necesidad de intervención humana. No evalúa ni almacena razonamiento interno.
 

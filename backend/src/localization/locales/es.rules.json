@@ -1,7 +1,7 @@
 {
   "patterns": {
     "viewOrder": ["\\b(ver|mostrar|muestrame|resumen)\\b.*\\b(pedido|carrito|orden)\\b"],
-    "addItem": ["\\b(agregar|anadir|otro|otra)\\b.*\\b(producto|articulo|item|plato|bebida)\\b"],
+    "addItem": ["\\b(agregar|agrega|agregame|anadir|anade|anademe|otro|otra)\\b.*\\b(producto|articulo|item|plato|bebida)\\b"],
     "removeItem": ["\\b(quitar|eliminar|remover)\\b"],
     "changeQuantity": ["\\b(cambiar|cambia|cambiame|ajustar|ajusta|modificar|modifica)\\b.*\\b(cantidad|unidades)\\b"],
     "finishItems": ["^(listo|terminar|finalizar|continuar|eso es todo|nada mas)\\b"],
@@ -18,7 +18,8 @@
     "directDesire": ["\\bquiero\\b"],
     "informational": ["\\b(saber|cual|cuanto|precio|gluten|tiene|tienen)\\b"],
     "fulfillmentDelivery": ["\\b(domicilio|envio)\\b"],
-    "fulfillmentPickup": ["\\b(recoger|recogida)\\b"],
+    "fulfillmentDeliveryDeclined": ["\\b(no|sin)\\b.{0,20}\\b(domicilio|envio)\\b"],
+    "fulfillmentPickup": ["\\b(recoger\\w*|recogida)\\b"],
     "fulfillmentOnSite": ["\\b(local|sitio|restaurante)\\b"],
     "appointmentWant": ["\\b(reservar|agendar|agenda)\\b", "\\b(quiero|necesito)\\b.*\\bcita\\b"],
     "appointmentQuestion": ["\\b(cuando|donde|hora|consultar|ver)\\b"],

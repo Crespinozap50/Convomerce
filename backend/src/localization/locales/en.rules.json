@@ -18,6 +18,7 @@
     "directDesire": ["\\bi want\\b"],
     "informational": ["\\b(know|which|how much|price|gluten|has|do you have)\\b"],
     "fulfillmentDelivery": ["\\b(delivery|shipping)\\b"],
+    "fulfillmentDeliveryDeclined": ["\\b(no|not)\\b.{0,20}\\b(delivery|shipping)\\b"],
     "fulfillmentPickup": ["\\b(pickup|pick(?:\\s+[a-z]+)?\\s+up)\\b"],
     "fulfillmentOnSite": ["\\b(on site|restaurant|store)\\b"],
     "appointmentWant": ["\\b(book|schedule)\\b", "\\b(want|need)\\b.*\\bappointment\\b"],

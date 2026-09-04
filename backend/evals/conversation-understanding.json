@@ -25,6 +25,16 @@
     {"id":"en-cancel-booking","locale":"en","message":"Cancel my appointment please","expected":{"intent":"appointment","requestedAction":"cancel_appointment","requiresHuman":false}},
     {"id":"en-human","locale":"en","message":"I need to speak with a human","expected":{"intent":"order","requestedAction":"handoff","requiresHuman":true}},
     {"id":"en-negative","locale":"en","message":"No, thank you","expected":{"intent":"fallback","requestedAction":null,"entities":{"response":"negative"},"requiresHuman":false}},
-    {"id":"en-any-resource","locale":"en","message":"Anyone available is fine","expected":{"intent":"fallback","requestedAction":null,"entities":{"anyResource":true},"requiresHuman":false}}
+    {"id":"en-any-resource","locale":"en","message":"Anyone available is fine","expected":{"intent":"fallback","requestedAction":null,"entities":{"anyResource":true},"requiresHuman":false}},
+    {"id":"es-greeting","locale":"es","message":"Hola, buenas tardes","expected":{"intent":"greeting","requestedAction":"greeting","entities":{"hasGreeting":true},"requiresHuman":false}},
+    {"id":"en-greeting","locale":"en","message":"Hi there, good morning","expected":{"intent":"greeting","requestedAction":"greeting","entities":{"hasGreeting":true},"requiresHuman":false}},
+    {"id":"es-cancel-order","locale":"es","message":"Cancela mi pedido por favor","expected":{"intent":"order","requestedAction":"cancel","requiresHuman":false}},
+    {"id":"en-cancel-order","locale":"en","message":"Please cancel my order","expected":{"intent":"order","requestedAction":"cancel","requiresHuman":false}},
+    {"id":"es-incomplete-desire","locale":"es","message":"Quiero","expected":{"intent":"order","requestedAction":"start_order","requiresHuman":false}},
+    {"id":"en-incomplete-desire","locale":"en","message":"I want","expected":{"intent":"order","requestedAction":"start_order","requiresHuman":false}},
+    {"id":"es-correction-product","locale":"es","message":"Mejor quiero cambiar el producto","expected":{"intent":"order","requestedAction":"change_product","requiresHuman":false}},
+    {"id":"en-correction-product","locale":"en","message":"Actually, I want to change the product","expected":{"intent":"order","requestedAction":"change_product","requiresHuman":false}},
+    {"id":"es-negation-redirects-fulfillment","locale":"es","message":"No quiero domicilio, prefiero recogerlo en el local","expected":{"intent":"order","requestedAction":"fulfillment.pickup","requiresHuman":false}},
+    {"id":"en-negation-redirects-fulfillment","locale":"en","message":"No delivery please, I will pick it up instead","expected":{"intent":"order","requestedAction":"fulfillment.pickup","requiresHuman":false}}
   ]
 }

@@ -152,7 +152,17 @@ export class DeterministicUnderstandingProvider implements ConversationUnderstan
   }
 
   private fulfillmentAction(text: string): string | null {
-    if (matchesConversationRule(text, "fulfillmentDelivery"))
+    // Found writing the naturalness eval suite: "no delivery, I'll pick it
+    // up instead" (or "no quiero domicilio, prefiero recogerlo") mentions
+    // the delivery word only to decline it, but fulfillmentDelivery matched
+    // on bare keyword presence and won before fulfillmentPickup ever got
+    // checked — the exact opposite of what the customer asked for.
+    // fulfillmentDeliveryDeclined narrowly excludes just that negated case;
+    // it does not attempt general negation handling elsewhere in this file.
+    if (
+      !matchesConversationRule(text, "fulfillmentDeliveryDeclined") &&
+      matchesConversationRule(text, "fulfillmentDelivery")
+    )
       return "fulfillment.delivery";
     if (matchesConversationRule(text, "fulfillmentPickup"))
       return "fulfillment.pickup";

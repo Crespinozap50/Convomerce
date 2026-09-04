@@ -52,6 +52,40 @@ describe('ConversationLanguageService', () => {
     expect(client.query).toHaveBeenCalledTimes(1);
   });
 
+  // Rule 4 (docs/internationalization.md): a contact's known language
+  // preference takes precedence at conversation start — read from the code
+  // (contactLocale ?? evidence ?? tenantLocale) but never exercised by a
+  // test: contact_locale was null in every case above. Here the contact's
+  // preference is English while the very first message is clearly Spanish
+  // — the contact preference must still win over the detected evidence.
+  it('prefers a known contact-language preference over the first message\'s own detected language', async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              language_locale: null,
+              language_source: null,
+              language_candidate_locale: null,
+              language_candidate_count: 0,
+              contact_locale: 'en',
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }),
+    };
+
+    await expect(
+      service.resolve(
+        client as never,
+        'conversation-1',
+        'Hola, quiero hacer un pedido por favor',
+        'es',
+      ),
+    ).resolves.toEqual({ locale: 'en', source: 'contact_preference' });
+  });
+
   it('requires two consecutive clear messages before changing language', async () => {
     const firstClient = {
       query: jest

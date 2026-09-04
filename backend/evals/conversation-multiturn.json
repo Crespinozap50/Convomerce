@@ -61,6 +61,34 @@
         {"id":"view","message":"Show my order summary","expected":{"intent":"order","requestedAction":"view_order","requiresHuman":false}},
         {"id":"help","message":"I need an agent","expected":{"intent":"order","requestedAction":"handoff","requiresHuman":true}}
       ]
+    },
+    {
+      "id": "es-cambio-fulfillment-y-cancelacion",
+      "locale": "es",
+      "turns": [
+        {"id":"start","message":"Hola, quiero pedir dos tacos de birria","expected":{"intent":"order","requestedAction":"start_order","entities":{"quantity":2},"requiresHuman":false}},
+        {"id":"finish","message":"Nada más, gracias","expected":{"intent":"order","requestedAction":"finish_items","requiresHuman":false}},
+        {"id":"delivery-declined","message":"No quiero domicilio, prefiero recogerlo en el local","expected":{"intent":"order","requestedAction":"fulfillment.pickup","requiresHuman":false}},
+        {"id":"cancel-instead","message":"Mejor cancela todo el pedido","expected":{"intent":"order","requestedAction":"cancel","requiresHuman":false}}
+      ]
+    },
+    {
+      "id": "es-conversacion-larga-santos-tacos",
+      "locale": "es",
+      "turns": [
+        {"id":"greeting","message":"Hola, buenas tardes","expected":{"intent":"greeting","requestedAction":"greeting","entities":{"hasGreeting":true},"requiresHuman":false}},
+        {"id":"catalog","message":"¿Qué tienen en el menú?","expected":{"intent":"order","requestedAction":"catalog","requiresHuman":false}},
+        {"id":"start","message":"Quiero dos tacos de birria","expected":{"intent":"order","requestedAction":"start_order","entities":{"quantity":2},"requiresHuman":false}},
+        {"id":"add-more","message":"Agrega también una bebida","expected":{"intent":"order","requestedAction":"add_item","requiresHuman":false}},
+        {"id":"view","message":"Muéstrame el resumen de mi pedido","expected":{"intent":"order","requestedAction":"view_order","requiresHuman":false}},
+        {"id":"change-quantity","message":"Cambia la cantidad a tres unidades","expected":{"intent":"order","requestedAction":"change_quantity","entities":{"quantity":3},"requiresHuman":false}},
+        {"id":"finish","message":"Eso es todo","expected":{"intent":"order","requestedAction":"finish_items","requiresHuman":false}},
+        {"id":"delivery-declined","message":"No quiero domicilio, prefiero recogerlo en el local","expected":{"intent":"order","requestedAction":"fulfillment.pickup","requiresHuman":false}},
+        {"id":"confirm","message":"Sí, confirmo","expected":{"intent":"fallback","requestedAction":null,"entities":{"response":"affirmative"},"requiresHuman":false}},
+        {"id":"unrelated-appointment","message":"Aparte, quiero agendar una cita para corte y barba","expected":{"intent":"appointment","requestedAction":"book_appointment","searchTerms":["corte","barba"],"requiresHuman":false}},
+        {"id":"date","message":"Mañana","expected":{"intent":"fallback","requestedAction":null,"requiredEntities":["requestedDate"],"requiresHuman":false}},
+        {"id":"human","message":"Mejor necesito hablar con un asesor","expected":{"intent":"order","requestedAction":"handoff","requiresHuman":true}}
+      ]
     }
   ]
 }

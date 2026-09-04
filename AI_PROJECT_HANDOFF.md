@@ -715,13 +715,13 @@ D-086 (2026-09-02) extendió `business_profile_localizations` a ofertas, variant
 
 Implementado en `requirement-loop.ts` (`extractPendingRequirementValues`). Alcance real, con matices documentados en D-040: `select`/`boolean`/`number` se extraen automáticamente bajo condiciones de confianza; `text`/`address`/`phone` libres nunca se extraen automáticamente por diseño (no hay forma confiable de acotar confianza sobre texto libre sin NLP real). Fallback conservador a una pregunta por campo cuando hay ambigüedad, sin excepción a la confirmación explícita.
 
-### P1 — Renovar y verificar Meta (✅ resuelto en D-093; confirmar vigencia antes de asumirlo)
+### P1 — Renovar y verificar Meta (✅ resuelto en D-093, revalidado 2026-09-04)
 
-D-093 generó un token permanente en Meta Business Settings y confirmó la conexión real de Santos Tacos con mensajes genuinos (ver evidencia en D-092). No verificado de nuevo desde entonces — confirmar que el token sigue vigente antes de depender de él para pruebas en vivo.
+D-093 generó un token permanente en Meta Business Settings. Revalidado en vivo el 2026-09-04: llamada directa a la Graph API con el token real desencriptado confirmó `HTTP 200` contra el número de Santos Tacos (`display_phone_number`/`verified_name` reales), registrado en `channel_connections.last_validated_at` con el mismo mecanismo que usa el endpoint de prueba del panel.
 
-### P1 — Consolidar evaluación de naturalidad
+### P1 — Consolidar evaluación de naturalidad (✅ resuelto, D-111)
 
-Ampliar el conjunto de evaluaciones con saludos, correcciones, mensajes incompletos, cambios de idioma, negaciones, cancelaciones y conversación larga. Medir naturalidad, exactitud, conversiones, escalamiento, costo y latencia.
+`backend/evals/conversation-understanding.json`/`conversation-multiturn.json` ampliados de 48 a 74 turnos: saludos, corrección de producto, mensaje incompleto, negación que redirige fulfillment, cancelación completa de pedido, y una conversación larga de 12 turnos. Encontró y corrigió 3 bugs reales de clasificación en el camino (negación de domicilio mal interpretada como domicilio, imperativo "Agrega X" no reconocido, "recogerlo" con clítico no matcheaba pickup) — protegidos también como pruebas TypeScript permanentes en `deterministic-understanding.provider.spec.ts`. "Cambios de idioma" vive en `conversation-language.service.spec.ts` (D-111 agregó ahí la prioridad de preferencia del contacto, código correcto pero nunca antes ejercitado). Conversiones/escalamiento/costo/latencia por tenant ya los mide el panel "Métricas" (D-092) — no duplicado aquí. Pendiente explícito, no bloqueante: ampliar el golden set de revisión ciega de naturalidad (`response-review.golden.json`, 8 escenarios) con casos de las categorías nuevas.
 
 ### P2 — Modularizar el frontend (✅ resuelto)
 
