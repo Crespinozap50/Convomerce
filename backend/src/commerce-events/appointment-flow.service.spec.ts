@@ -24,6 +24,22 @@ describe('AppointmentFlowService',()=>{
     expect(client.query.mock.calls.some(([sql])=>String(sql).includes("'order','draft'"))).toBe(false);
   });
 
+  it('defers to the knowledge capability for a menu-pagination tap instead of matching it against an active appointment step (D-115, same class of bug found live on the order-flow side for D-115)',async()=>{
+    // deterministic-reply.service.ts's "Siguiente"/"Anterior" rows
+    // (D-114, id "menu:<category>:page:<n>") have no meaning to this file —
+    // returns null before even checking for an active workflow, so a
+    // customer mid-booking who taps a menu pagination row still gets the
+    // pagination reply, not this file's own step matching misfiring on it.
+    const client={query:jest.fn()};
+    const reply=await new AppointmentFlowService({ getPendingRequirements: jest.fn().mockResolvedValue([]) } as never).resolve(client as never,{
+      tenantId:'0194f000-0000-7000-8000-000000000003',conversationId:'0194f003-0000-7000-8000-000000000003',contactId:'0194f002-0000-7000-8000-000000000003',body:'Siguiente',locale:'es',displayName:'Carlos',
+      interactiveSelectionId:'menu:Tacos:page:2',
+      understanding:await understand('Siguiente','menu:Tacos:page:2'),
+    });
+    expect(reply).toBeNull();
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
   it('does not match an unrelated service through a shared preposition like "para" (regression)',async()=>{
     // "Quiero una manicura para mañana" has no real keyword overlap with any
     // catalog item, but before itemStopWords included "para", the word

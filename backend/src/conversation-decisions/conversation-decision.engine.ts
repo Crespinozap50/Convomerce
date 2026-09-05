@@ -24,7 +24,7 @@ export class ConversationDecisionEngine {
       const commercial=await this.commerce.resolve(client,input);
       if(commercial)return this.toDecision('commerce','commercial_flow_matched',commercial,input);
     }
-    const knowledge=await this.knowledge.resolve(client,input.body,bot);
+    const knowledge=await this.knowledge.resolve(client,input.body,bot,input.interactiveSelectionId);
     // 'fallback' alone doesn't mean unanswered — it can still be genuinely
     // answered via a knowledge_entries match on title/keywords (D-077,
     // D-078). Only report "no domain capability matched" when it's truly

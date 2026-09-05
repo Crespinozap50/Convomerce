@@ -76,10 +76,24 @@ export function classifyMessage(message: string, handoffKeywords: string[] = [],
 
 @Injectable()
 export class DeterministicReplyService {
-  async resolve(client: PoolClient, message: string, bot: BotCopy): Promise<DeterministicReply> {
-    const intent = classifyMessage(message, bot.handoffKeywords, bot.locale);
+  async resolve(client: PoolClient, message: string, bot: BotCopy, interactiveSelectionId?: string): Promise<DeterministicReply> {
     const localeCatalog=catalogFor(bot.locale);
     const copy = localeCatalog.bot;
+    // D-114: a tap on a pagination row ("Siguiente"/"Anterior" within an
+    // oversized category) carries category+page in its id, not its title —
+    // a WhatsApp row title is capped at 24 characters, nowhere near enough
+    // to hold a (possibly long) category name and a page marker reliably.
+    // Routed straight to offeringReply, bypassing classifyMessage/the
+    // specific-FAQ check entirely: this is a structured navigation tap, not
+    // a natural-language question, so there's nothing to (mis)classify.
+    const pageSelection = interactiveSelectionId?.match(/^menu:(.+):page:(\d+)$/);
+    if (pageSelection) {
+      return this.offeringReply(client, message, 'menu', copy, bot.locale, bot.timezone, {
+        category: pageSelection[1],
+        page: Number(pageSelection[2]),
+      });
+    }
+    const intent = classifyMessage(message, bot.handoffKeywords, bot.locale);
     if (intent === 'handoff') {
       return { intent, handoff: true, sources: [], body: copy.handoff };
     }
@@ -125,9 +139,11 @@ export class DeterministicReplyService {
     copy: {
       menuUnavailable: string; productQuestion: string; menuHeading: string; priceHeading: string; menuButtonLabel: string;
       menuCategoriesHeading: string; menuCategoryPrefix: string; menuUncategorized: string;
+      nextPageLabel: string; previousPageLabel: string;
     },
     locale: ConversationLocale,
     timezone: string,
+    pageSelection?: { category: string; page: number },
   ): Promise<DeterministicReply> {
     // Same time-window rule as CommercialFlowService.catalogItems() (D-097)
     // — an item outside its daily window (e.g. a lunch-only dish asked
@@ -161,41 +177,66 @@ export class DeterministicReplyService {
     }
 
     let rows = result.rows;
+    // Tracks the full narrowed set for `sources` below, independent of
+    // pagination slicing `rows` down to just the current page's items
+    // (D-114) — a reply should still cite every item it consulted, not
+    // only the ones that happened to fit on the page shown.
+    let sourceRows = rows;
+    // The escape-hatch row shown alongside every menu list — D-104's
+    // pattern. Replaced with prev/next+escape rows below when a narrowed
+    // category needs pagination (D-114).
+    let navRows: { id: string; title: string }[] = [
+      { id: 'cart:view_catalog', title: copy.menuButtonLabel },
+    ];
     if (intent === 'menu') {
       const ignored = new Set(catalogFor(locale).stopWords.map(normalize));
-      const inputTokens = new Set(normalize(message).split(' ').filter((token) => token.length > 2 && !ignored.has(token)));
-      const scored = rows.map((row) => ({
-        row,
-        score: normalize(`${row.name} ${row.category ?? ''}`).split(' ').filter((token) => inputTokens.has(token)).length,
-      }));
-      const bestScore = Math.max(0, ...scored.map(({ score }) => score));
-      // A question about a whole category — "¿qué tacos tienen?", or the
-      // "Menú Tacos" row of the category picker itself — must list that
-      // category, not only the items that happen to repeat the category
-      // word in their own name. Found live on Santos Tacos' real menu:
-      // "Orden x 3 Tacos" and "Orden x 3 Tacos Birria de Camarón o
-      // Güerito" scored 2 (own name *and* category) against 1 for every
-      // individual taco, so 7 of the 9 tacos disappeared from the very
-      // category the customer had just tapped. Only applies when the
-      // message says nothing more specific than the category name: "¿tienen
-      // tacos de birria?" still narrows to the birria items, because
-      // "birria" matches an item name beyond the category's own words.
       const categoryWords = (value: string | null) =>
         normalize(value ?? '').split(' ').filter((token) => token.length > 2 && !ignored.has(token));
-      const askedCategory = rows.find((row) => {
-        const words = categoryWords(row.category);
-        return words.length > 0 && words.every((word) => inputTokens.has(word));
-      })?.category;
-      const askedWords = new Set(categoryWords(askedCategory ?? null));
-      const namedSomethingElse = rows.some((row) =>
-        normalize(row.name)
-          .split(' ')
-          .some((token) => inputTokens.has(token) && !askedWords.has(token)),
-      );
-      const byCategory = askedCategory !== undefined && askedCategory !== null && !namedSomethingElse;
+      let askedCategory: string | null | undefined;
+      let byCategory: boolean;
+      let bestScore = 0;
+      // D-114: a pagination-row tap (Siguiente/Anterior) already tells us
+      // the exact category via pageSelection — trust it directly instead of
+      // re-deriving it from the row's title text (which the tap's message
+      // body would otherwise have to carry, and doesn't).
+      if (pageSelection && rows.some((row) => row.category === pageSelection.category)) {
+        askedCategory = pageSelection.category;
+        byCategory = true;
+        rows = rows.filter((row) => row.category === askedCategory);
+      } else {
+        const inputTokens = new Set(normalize(message).split(' ').filter((token) => token.length > 2 && !ignored.has(token)));
+        const scored = rows.map((row) => ({
+          row,
+          score: normalize(`${row.name} ${row.category ?? ''}`).split(' ').filter((token) => inputTokens.has(token)).length,
+        }));
+        bestScore = Math.max(0, ...scored.map(({ score }) => score));
+        // A question about a whole category — "¿qué tacos tienen?", or the
+        // "Menú Tacos" row of the category picker itself — must list that
+        // category, not only the items that happen to repeat the category
+        // word in their own name. Found live on Santos Tacos' real menu:
+        // "Orden x 3 Tacos" and "Orden x 3 Tacos Birria de Camarón o
+        // Güerito" scored 2 (own name *and* category) against 1 for every
+        // individual taco, so 7 of the 9 tacos disappeared from the very
+        // category the customer had just tapped. Only applies when the
+        // message says nothing more specific than the category name: "¿tienen
+        // tacos de birria?" still narrows to the birria items, because
+        // "birria" matches an item name beyond the category's own words.
+        askedCategory = rows.find((row) => {
+          const words = categoryWords(row.category);
+          return words.length > 0 && words.every((word) => inputTokens.has(word));
+        })?.category;
+        const askedWords = new Set(categoryWords(askedCategory ?? null));
+        const namedSomethingElse = rows.some((row) =>
+          normalize(row.name)
+            .split(' ')
+            .some((token) => inputTokens.has(token) && !askedWords.has(token)),
+        );
+        byCategory = askedCategory !== undefined && askedCategory !== null && !namedSomethingElse;
+        if (byCategory) rows = rows.filter((row) => row.category === askedCategory);
+        else if (bestScore > 0) rows = scored.filter(({ score }) => score === bestScore).map(({ row }) => row);
+      }
       const narrowed = byCategory || bestScore > 0;
-      if (byCategory) rows = rows.filter((row) => row.category === askedCategory);
-      else if (bestScore > 0) rows = scored.filter(({ score }) => score === bestScore).map(({ row }) => row);
+      sourceRows = rows;
       // A generic "ver menú" (no narrowing at all — the customer named
       // nothing specific) against a real catalog bigger than WhatsApp's
       // 10-row list cap used to fall all the way through to one plain-text
@@ -207,10 +248,42 @@ export class DeterministicReplyService {
       // up-front as a tappable list instead of requiring the customer to
       // already know to ask it that way. Only kicks in for the *unnarrowed*
       // case: once a category (or product) has already been picked, the
-      // normal listing/plain-text fallback below runs exactly as before,
-      // so tapping a category can never loop back into another category
-      // picker.
+      // normal listing below runs instead — so tapping a category can never
+      // loop back into another category picker.
       if (!narrowed && rows.length > 10) return this.menuCategoriesReply(rows, copy);
+      // D-113/D-114, three attempts before this one, all found live on
+      // Santos Tacos: "Menú Tacos" narrows to the Tacos category
+      // (byCategory=true, so the >10 check above never fires), but that
+      // category alone still has 13 items — over WhatsApp's 10-row cap.
+      // Attempt 1: fell through unhandled to the plain-text branch below —
+      // a 13-line wall with nothing tappable.
+      // Attempt 2: a bounce-back button ("too many options, tap to browse
+      // categories") — tappable, but showed zero products and looped
+      // straight back into the same dead end if tapped again.
+      // Attempt 3 (D-113 as shipped): showed the first 9 real, tappable
+      // items — real progress, but silently dropped every item past the
+      // 9th with no way to reach them; a category with 20-30 items would
+      // lose most of it, not just Santos Tacos' 4 extra tacos.
+      // D-114: real pagination. 7 items/page (not 9) leaves room for up to
+      // 3 nav rows (Anterior, Siguiente, Ver opciones) on a middle page
+      // without ever exceeding WhatsApp's 10-row cap.
+      if (byCategory && askedCategory && rows.length > 9) {
+        const ITEMS_PER_PAGE = 7;
+        const totalPages = Math.ceil(rows.length / ITEMS_PER_PAGE);
+        const requestedPage = pageSelection && pageSelection.category === askedCategory ? pageSelection.page : 1;
+        const currentPage = Math.min(Math.max(requestedPage, 1), totalPages);
+        const category = askedCategory;
+        rows = rows.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+        navRows = [
+          ...(currentPage > 1
+            ? [{ id: `menu:${category}:page:${currentPage - 1}`, title: copy.previousPageLabel }]
+            : []),
+          ...(currentPage < totalPages
+            ? [{ id: `menu:${category}:page:${currentPage + 1}`, title: copy.nextPageLabel }]
+            : []),
+          { id: 'cart:view_catalog', title: copy.menuButtonLabel },
+        ];
+      }
     }
     if (intent === 'price') {
       const ignored = new Set(catalogFor(locale).stopWords.map(normalize));
@@ -221,12 +294,11 @@ export class DeterministicReplyService {
       }));
       const bestScore = Math.max(0, ...scored.map(({ score }) => score));
       const matches = scored.filter(({ score }) => score === bestScore && score > 0).map(({ row }) => row);
-      if (matches.length > 0) rows = matches;
       // Same "no quoted instruction, real button instead" rule
       // commercial-flow.service.ts's catalogButtonReply already follows
       // (D-095) — this used to say '...también puedes escribir "ver
       // catálogo"' as plain quoted text.
-      else
+      if (matches.length === 0)
         return {
           intent,
           handoff: false,
@@ -234,6 +306,8 @@ export class DeterministicReplyService {
           body: copy.productQuestion,
           interactive: { type: 'buttons', body: '', options: [{ id: 'cart:view_catalog', title: copy.menuButtonLabel }] },
         };
+      rows = matches;
+      sourceRows = rows;
     }
 
     const labels = catalogFor(locale).labels;
@@ -250,24 +324,23 @@ export class DeterministicReplyService {
     // tap (the row title becomes the next inbound message, which the order
     // flow's bare-name matching then resolves — see commercial-flow.service
     // itemChoiceReply for the same title-as-command pattern). Skipped for
-    // "price" (usually a single filtered row, nothing to pick) and for a
-    // menu larger than WhatsApp's 10-row list limit.
-    // Same escape-hatch reasoning as catalogChoiceReply (D-104): a narrowed
-    // category can land on very few items (even just one), with nothing
-    // tappable to back out of it. Reusing the exact same id/copy
-    // (cart:view_catalog / menuButtonLabel) a bare "ver menú" already uses
-    // means tapping it here just re-runs this same reply unnarrowed —
-    // back to the category picker for a catalog over 10 items, or the full
-    // flat list otherwise. Capped to 9 real rows so this extra one never
-    // pushes a full list past WhatsApp's 10-row cap.
+    // "price" (usually a single filtered row, nothing to pick).
+    // No upper bound on rowInfo.length here (D-113/D-114): the only way to
+    // reach this point with more than 10 rows total is a *narrowed*
+    // category still over WhatsApp's list cap (an unnarrowed catalog that
+    // big already returned via menuCategoriesReply above) — already sliced
+    // to one page by the pagination block above, with `navRows` carrying
+    // its Anterior/Siguiente/Ver opciones rows instead of the single
+    // escape-hatch row every other case gets. `10 - navRows.length` keeps
+    // item rows + nav rows within WhatsApp's 10-row cap either way.
     const interactive: InteractiveMessage | undefined =
-      intent === 'menu' && rowInfo.length > 0 && rowInfo.length <= 10
+      intent === 'menu' && rowInfo.length > 0
         ? {
             type: 'list',
             body: '',
             buttonLabel: copy.menuButtonLabel,
             options: [
-              ...rowInfo.slice(0, 9).map(({ row, price, variantLabel }) => {
+              ...rowInfo.slice(0, 10 - navRows.length).map(({ row, price, variantLabel }) => {
                 const detail = variantLabel ? `${variantLabel} · ${price}` : price;
                 return {
                   id: row.variant_id,
@@ -285,7 +358,7 @@ export class DeterministicReplyService {
                   ),
                 };
               }),
-              { id: 'cart:view_catalog', title: copy.menuButtonLabel },
+              ...navRows,
             ],
           }
         : undefined;
@@ -298,7 +371,7 @@ export class DeterministicReplyService {
     return {
       intent,
       handoff: false,
-      sources: [...new Set(rows.map((row) => `catalog_item:${row.item_id}`))],
+      sources: [...new Set(sourceRows.map((row) => `catalog_item:${row.item_id}`))],
       body,
       ...(interactive ? { interactive } : {}),
     };

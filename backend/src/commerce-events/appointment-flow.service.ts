@@ -65,6 +65,13 @@ export class AppointmentFlowService {
   constructor(private readonly requirements: OperationalRequirementsService) {}
 
   async resolve(client: PoolClient, input:UnderstoodFlowInput): Promise<DeterministicReply | null> {
+    // Same reasoning as commercial-flow.service.ts's identical check
+    // (D-115, found live on the order-flow side): a menu pagination row
+    // tap (deterministic-reply.service.ts's "Siguiente"/"Anterior", D-114)
+    // has no meaning here and must never be swallowed by an active
+    // appointment workflow's own step matching — this file doesn't own
+    // menu browsing/pagination, it only needs to get out of the way.
+    if (input.interactiveSelectionId?.startsWith("menu:")) return null;
     const active = await client.query<AppointmentWorkflow>(
       `select id,commercial_request_id,step,context from app.conversation_workflows
        where conversation_id=$1 and operation_type='appointment' and status='active'`,

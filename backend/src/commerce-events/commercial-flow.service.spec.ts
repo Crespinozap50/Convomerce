@@ -1193,6 +1193,27 @@ describe("CommercialFlowService", () => {
     expect(client.query).toHaveBeenCalledTimes(1);
   });
 
+  it("defers to the knowledge capability's own reply for a menu-pagination tap instead of matching it as a cart item (D-115, found live on Wendy Muñoz's conversation)", async () => {
+    // deterministic-reply.service.ts's "Siguiente"/"Anterior" rows
+    // (D-114, id "menu:<category>:page:<n>") only make sense to the
+    // knowledge capability's own pagination logic. With an active cart
+    // (e.g. right after "Otro producto"), this file's selecting_item step
+    // used to try matching the tapped title ("Siguiente") against catalog
+    // items, find nothing, and answer "No encontré ese producto" — the
+    // pagination reply the customer actually wanted never ran. No query
+    // should even happen: this returns null before checking for an active
+    // workflow at all, the same way the "category:" id check above does.
+    const client = { query: jest.fn() };
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Siguiente",
+      interactiveSelectionId: "menu:Tacos:page:2",
+      understanding: await understand("Siguiente"),
+    });
+    expect(reply).toBeNull();
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
   it("answers an explicit recommendation request with the tenant's best sellers instead of failing item-matching", async () => {
     const bestSellers = {
       rows: [

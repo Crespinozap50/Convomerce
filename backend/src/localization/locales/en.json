@@ -12,6 +12,8 @@
     "menuCategoriesHeading": "We have several categories, pick one to see the options:",
     "menuCategoryPrefix": "Menu",
     "menuUncategorized": "Other",
+    "nextPageLabel": "Next",
+    "previousPageLabel": "Previous",
     "priceHeading": "Price found:",
     "recommendation": "Would you like to add {{item}} for {{price}}?",
     "recommendationAccept": "Yes, add it",
@@ -25,7 +27,7 @@
     "location": ["location", "address", "where are you", "directions"],
     "payments": ["pay", "payment", "cash", "transfer", "card"],
     "price": ["price", "how much", "cost", "value"],
-    "menu": ["menu", "catalog", "products", "product", "services", "service", "what do you offer"],
+    "menu": ["menu", "catalog", "options", "products", "product", "services", "service", "what do you offer"],
     "greeting": ["hello", "hi", "good morning", "good afternoon", "good evening"]
   },
   "stopWords": ["a", "an", "and", "are", "do", "for", "how", "i", "is", "me", "of", "show", "the", "to", "what", "which", "you"]

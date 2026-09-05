@@ -12,6 +12,8 @@
     "menuCategoriesHeading": "Tenemos varias categorías, elige una para ver las opciones:",
     "menuCategoryPrefix": "Menú",
     "menuUncategorized": "Otros",
+    "nextPageLabel": "Siguiente",
+    "previousPageLabel": "Anterior",
     "priceHeading": "Precio encontrado:",
     "recommendation": "¿Te agrego {{item}} por {{price}} para acompañar tu compra?",
     "recommendationAccept": "Sí, agregar",
@@ -25,7 +27,7 @@
     "location": ["ubicacion", "direccion", "donde quedan", "donde estan", "como llego"],
     "payments": ["pagar", "pago", "efectivo", "transferencia", "tarjeta", "datafono"],
     "price": ["precio", "cuanto cuesta", "cuando cuesta", "cuanto cuestan", "cuando cuestan", "cuanto vale", "valor"],
-    "menu": ["menu", "carta", "catalogo", "productos", "producto", "servicios", "servicio", "que tienen", "que venden", "que ofrecen", "que manejan", "tacos tienen"],
+    "menu": ["menu", "carta", "catalogo", "opciones", "productos", "producto", "servicios", "servicio", "que tienen", "que venden", "que ofrecen", "que manejan", "tacos tienen"],
     "greeting": ["hola", "buenos dias", "buenas tardes", "buenas noches", "buenas"]
   },
   "stopWords": ["al", "cual", "cuales", "cuanto", "de", "el", "en", "es", "la", "las", "lo", "los", "me", "mostrar", "no", "que", "quiero", "saber", "se", "sin", "tiene", "tienen", "un", "una", "ver"]

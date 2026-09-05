@@ -218,6 +218,18 @@ export class CommercialFlowService {
       const reply = await this.categoryItemsReply(client, input.locale, input.timezone ?? "UTC", category);
       if (reply) return reply;
     }
+    // Found live (Wendy Muñoz, D-115): a pagination row tap
+    // (deterministic-reply.service.ts's "Siguiente"/"Anterior", D-114) has
+    // no meaning here and must never reach the active-workflow matching
+    // below — with a cart already open, "Siguiente" doesn't match any
+    // command or catalog item, so selecting_item's item-name matching
+    // swallowed it as a failed product search ("No encontré ese
+    // producto"), and the pagination reply this session actually wanted
+    // never ran. Same reasoning as the "category:" check above and as
+    // `command === "catalog"` returning null below (line ~260) — this file
+    // doesn't own menu browsing/pagination, it only needs to get out of the
+    // way so the knowledge capability's own reply runs instead.
+    if (input.interactiveSelectionId?.startsWith("menu:")) return null;
     const active = await client.query<Workflow>(
       `select id,commercial_request_id,step,context from app.conversation_workflows where conversation_id=$1 and status='active'`,
       [input.conversationId],

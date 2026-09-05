@@ -8,6 +8,17 @@ describe('DeterministicReplyService', () => {
     ['¿Qué ofrecen?', 'menu'],
     ['What services do you offer?', 'menu'],
     ['Hola, ¿qué tacos tienen?', 'menu'],
+    // D-113: this is the exact title of the "menu"/"price" no-match fallback
+    // button (copy.menuButtonLabel) — tapping it reconstructs as this text,
+    // which must itself be recognized as a menu request or the tap dead-ends
+    // at the tenant's generic fallback message instead of showing the menu.
+    // Found live on Santos Tacos: classifyFlowCommand's separate "catalog"
+    // rule already matched "opciones"/"options" (used to route the order
+    // flow), but this classifier's own menu keyword list didn't, so the
+    // fallback capability — the one that actually answers when there's no
+    // active order — never recognized its own button being tapped.
+    ['Ver opciones', 'menu'],
+    ['View options', 'menu'],
     ['¿Cuánto cuesta la birria?', 'price'],
     ['¿Cuando cuesta la birria?', 'price'],
     ['¿A qué hora cierran?', 'hours'],
@@ -68,29 +79,113 @@ describe('DeterministicReplyService', () => {
     expect(reply.sources).toEqual([]);
   });
 
-  it('falls back to the full text listing when a category question that already narrowed still matches more than 10 items (D-102)', async () => {
-    // The category picker only ever applies to a *generic* "ver menú" with
-    // no narrowing at all — a customer who already asked about a specific
+  describe('a narrowed category still over 10 items paginates instead of dropping items or dead-ending (D-113/D-114)', () => {
+    // The category picker only ever applies to a *generic* "ver menu" with
+    // no narrowing at all -- a customer who already asked about a specific
     // (unusually large) category gets that category's own items, not
     // another picker (which would show one lone category and loop back
-    // into itself).
-    const tacos = Array.from({ length: 12 }, (_, index) => ({
-      item_id: `taco-${index}`, name: `Taco ${index}`, category: 'Tacos',
+    // into itself). Found live on Santos Tacos, whose real "Tacos" category
+    // has 13 items -- over WhatsApp's 10-row list cap. Three rejected fixes
+    // before this one, in order:
+    // 1. Unbounded plain text (nothing tappable -- the "quoted instruction"
+    //    anti-pattern D-095/D-104 already closed for the order flow).
+    // 2. A bounce-back button to the category picker -- tappable, but showed
+    //    zero products and looped straight back into the same dead end.
+    // 3. (D-113 as first shipped) The first 9 items, no more -- real
+    //    progress, but silently dropped the rest with no way to reach them.
+    //    A 20-30 item category (not hypothetical -- just needs a bigger
+    //    tenant than Santos Tacos) would lose most of itself this way.
+    // D-114 is real pagination: 7 items/page, leaving room for up to 3 nav
+    // rows (Anterior/Siguiente/Ver opciones) without exceeding WhatsApp's
+    // 10-row cap. Page state travels in the tapped row's id
+    // (menu:<category>:page:<n>), not its title -- a 24-character title has
+    // nowhere near enough room to carry both reliably.
+    const tacos = Array.from({ length: 13 }, (_, index) => ({
+      item_id: `taco-${index}`, variant_id: `taco-variant-${index}`, name: `Taco ${index}`, category: 'Tacos',
       variant_name: 'Unidad', price_minor: '950000', currency: 'COP',
     }));
-    const client = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [] })
-        .mockResolvedValue({ rowCount: 12, rows: tacos }),
-    };
-    const reply = await new DeterministicReplyService().resolve(client as never, '¿Qué tacos tienen?', {
-      locale: 'es',
-      welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
+
+    it('page 1: shows the first 7 items plus Siguiente, not a truncated 9', async () => {
+      const client = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [] })
+          .mockResolvedValue({ rowCount: tacos.length, rows: tacos }),
+      };
+      const reply = await new DeterministicReplyService().resolve(client as never, '¿Qué tacos tienen?', {
+        locale: 'es',
+        welcomeMessage: 'Hola', fallbackMessage: 'No se', handoffKeywords: [], timezone: 'UTC',
+      });
+      expect(reply.intent).toBe('menu');
+      expect(reply.body).toBe('Esta es nuestra oferta disponible:');
+      expect(reply.interactive).toEqual({
+        type: 'list',
+        body: '',
+        buttonLabel: 'Ver opciones',
+        options: [
+          ...Array.from({ length: 7 }, (_, index) => ({
+            id: `taco-variant-${index}`, title: `Taco ${index}`, description: '$ 9.500',
+          })),
+          { id: 'menu:Tacos:page:2', title: 'Siguiente' },
+          { id: 'cart:view_catalog', title: 'Ver opciones' },
+        ],
+      });
+      expect(reply.sources).toHaveLength(13);
     });
-    expect(reply.intent).toBe('menu');
-    expect(reply.interactive).toBeUndefined();
-    expect(reply.body).toContain('Taco 0');
-    expect(reply.body).toContain('Taco 11');
+
+    it('page 2 (last page, reached by tapping Siguiente): shows the remaining items plus Anterior, no Siguiente', async () => {
+      // A pagination tap is routed straight to offeringReply's own catalog
+      // query (skipping the specific-FAQ check) — only one query happens,
+      // unlike the other tests here.
+      const client = {
+        query: jest.fn().mockResolvedValue({ rowCount: tacos.length, rows: tacos }),
+      };
+      const reply = await new DeterministicReplyService().resolve(
+        client as never, 'Siguiente',
+        { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No se', handoffKeywords: [], timezone: 'UTC' },
+        'menu:Tacos:page:2',
+      );
+      expect(reply.interactive).toEqual({
+        type: 'list',
+        body: '',
+        buttonLabel: 'Ver opciones',
+        options: [
+          ...Array.from({ length: 6 }, (_, index) => ({
+            id: `taco-variant-${index + 7}`, title: `Taco ${index + 7}`, description: '$ 9.500',
+          })),
+          { id: 'menu:Tacos:page:1', title: 'Anterior' },
+          { id: 'cart:view_catalog', title: 'Ver opciones' },
+        ],
+      });
+    });
+
+    it('a middle page of a genuinely large category (30 items) shows both Anterior and Siguiente, proving this scales beyond Santos Tacos', async () => {
+      const bigCategory = Array.from({ length: 30 }, (_, index) => ({
+        item_id: `item-${index}`, variant_id: `variant-${index}`, name: `Item ${index}`, category: 'Grande',
+        variant_name: 'Unidad', price_minor: '100000', currency: 'COP',
+      }));
+      const client = {
+        query: jest.fn().mockResolvedValue({ rowCount: bigCategory.length, rows: bigCategory }),
+      };
+      // Page 2 of ceil(30/7)=5: items 7-13, both directions available.
+      const reply = await new DeterministicReplyService().resolve(
+        client as never, 'Siguiente',
+        { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No se', handoffKeywords: [], timezone: 'UTC' },
+        'menu:Grande:page:2',
+      );
+      expect(reply.interactive).toEqual({
+        type: 'list',
+        body: '',
+        buttonLabel: 'Ver opciones',
+        options: [
+          ...Array.from({ length: 7 }, (_, index) => ({
+            id: `variant-${index + 7}`, title: `Item ${index + 7}`, description: '$ 1.000',
+          })),
+          { id: 'menu:Grande:page:1', title: 'Anterior' },
+          { id: 'menu:Grande:page:3', title: 'Siguiente' },
+          { id: 'cart:view_catalog', title: 'Ver opciones' },
+        ],
+      });
+    });
   });
 
   it('attaches a tappable list of the menu items alongside the text', async () => {
