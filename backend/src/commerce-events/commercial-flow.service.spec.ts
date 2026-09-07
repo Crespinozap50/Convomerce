@@ -24,6 +24,20 @@ describe("CommercialFlowService", () => {
     helpText: null,
     options: [],
   };
+  const nameRequirement: PendingRequirement = {
+    id: "req-name",
+    fieldKey: "name",
+    dataType: "text",
+    isRequired: true,
+    displayOrder: 0,
+    validationRule: {},
+    sensitivity: "none",
+    requiresConfirmation: false,
+    reuseFromContactMemory: false,
+    label: null,
+    helpText: null,
+    options: [],
+  };
   const service = (
     pending: PendingRequirement[] = [],
     requirementsOverride?: { getPendingRequirements: jest.Mock },
@@ -3186,6 +3200,142 @@ describe("CommercialFlowService", () => {
         String(sql).includes("status='cancelled'"),
       ),
     ).toBe(true);
+  });
+
+  it("asks a lightweight yes/no confirmation instead of the open name question when the opening message already introduced a name (D-118)", async () => {
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+            ],
+          };
+        if (sql.includes("exists(select 1 from app.request_lines"))
+          return { rows: [{ exists: true }] };
+        if (sql.includes("from app.messages where conversation_id"))
+          return { rows: [{ body: "Hola, soy Carlos, quiero 2 tacos al pastor" }] };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service([nameRequirement]).resolve(client as never, {
+      ...input,
+      displayName: null,
+      body: "Listo",
+      understanding: await understand("Listo"),
+    });
+
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "localized_template",
+      template: { namespace: "commercial", key: "confirmName" },
+      values: { name: "Carlos" },
+    });
+    const step = queries.find(({ sql }) => sql.includes("update app.conversation_workflows"));
+    expect(step?.params).toEqual([
+      "workflow-1",
+      "awaiting_requirement:name:confirm_candidate",
+      expect.stringContaining("Carlos"),
+    ]);
+  });
+
+  it("still asks the open name question when the opening message has no self-introduction (D-118 stays conservative)", async () => {
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+            ],
+          };
+        if (sql.includes("exists(select 1 from app.request_lines"))
+          return { rows: [{ exists: true }] };
+        if (sql.includes("from app.messages where conversation_id"))
+          return { rows: [{ body: "Quiero 2 tacos al pastor" }] };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service([nameRequirement]).resolve(client as never, {
+      ...input,
+      displayName: null,
+      body: "Listo",
+      understanding: await understand("Listo"),
+    });
+
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "localized_template",
+      template: { namespace: "commercial", key: "name" },
+    });
+  });
+
+  it("saves the confirmed candidate name and continues the flow on 'Sí' (D-118)", async () => {
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: "request-1",
+                step: "awaiting_requirement:name:confirm_candidate",
+                context: { nameCandidate: "Carlos" },
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+
+    await service([]).resolve(client as never, {
+      ...input,
+      body: "Sí",
+      understanding: await understand("Sí"),
+    });
+
+    const update = queries.find(({ sql }) => sql.includes("update app.contacts set display_name"));
+    expect(update?.params).toEqual(["0194f002-0000-7000-8000-000000000001", "Carlos"]);
+  });
+
+  it("falls back to the open name question on 'No' without saving anything (D-118)", async () => {
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: "request-1",
+                step: "awaiting_requirement:name:confirm_candidate",
+                context: { nameCandidate: "Carlos" },
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service([]).resolve(client as never, {
+      ...input,
+      body: "No",
+      understanding: await understand("No"),
+    });
+
+    expect(
+      queries.some(({ sql }) => sql.includes("update app.contacts set display_name")),
+    ).toBe(false);
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "localized_template",
+      template: { namespace: "commercial", key: "name" },
+    });
+    const step = queries.find(({ sql }) => sql.includes("update app.conversation_workflows"));
+    expect(step?.params).toEqual(["workflow-1", "awaiting_requirement:name", expect.stringContaining("Carlos")]);
   });
 
   it("asks for the fulfillment modality after the name is answered, instead of skipping straight to confirmation (regression)", async () => {

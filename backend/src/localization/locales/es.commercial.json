@@ -24,6 +24,7 @@
   "fulfillmentNoDelivery": "¿Lo deseas para recogida o atención en el local?",
   "address": "¿Cuál es la dirección del domicilio?",
   "saveAddress": "¿Quieres que guardemos esta dirección para tus próximos pedidos?",
+  "confirmName": "¿Registramos el pedido a nombre de {{name}}?",
   "yesNo": "Por favor responde sí o no.",
   "help": "Puedes elegir cualquiera de estas opciones:",
   "nothingToCancel": "No tienes un proceso activo para cancelar.",

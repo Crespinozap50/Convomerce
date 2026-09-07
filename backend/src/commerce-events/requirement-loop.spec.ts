@@ -1,5 +1,6 @@
 import {
   extractPendingRequirementValues,
+  extractSelfIntroducedName,
   isAddressDetailedEnough,
   nextPendingStep,
   PendingRequirement,
@@ -226,5 +227,37 @@ describe("isAddressDetailedEnough", () => {
   it("still rejects a colombian_urban address with only one number group", () => {
     expect(isAddressDetailedEnough("Calle 33 Robledo")).toBe(false);
     expect(isAddressDetailedEnough("Calle 33 Robledo puerta azul")).toBe(false);
+  });
+});
+
+describe("extractSelfIntroducedName (D-118)", () => {
+  it("extracts a name from each of the recognized self-introduction phrases", () => {
+    expect(extractSelfIntroducedName("Hola, soy Carlos")).toBe("Carlos");
+    expect(extractSelfIntroducedName("me llamo Andrea")).toBe("Andrea");
+    expect(extractSelfIntroducedName("mi nombre es Wendy")).toBe("Wendy");
+    expect(extractSelfIntroducedName("Hi, my name is John")).toBe("John");
+  });
+
+  it("stops at the name and ignores the rest of a mixed message", () => {
+    // Regression: the capture must not swallow the next clause of the
+    // sentence — "Carlos y quiero" would corrupt app.contacts.display_name.
+    expect(
+      extractSelfIntroducedName("Hola, soy Carlos, quiero 2 tacos al pastor"),
+    ).toBe("Carlos");
+  });
+
+  it("returns null when no self-introduction phrase is present", () => {
+    expect(extractSelfIntroducedName("Quiero 2 tacos al pastor")).toBeNull();
+    expect(extractSelfIntroducedName("Domicilio")).toBeNull();
+  });
+
+  it("rejects the common false positives the stoplist targets", () => {
+    expect(extractSelfIntroducedName("soy nuevo por aquí")).toBeNull();
+    expect(extractSelfIntroducedName("soy un cliente nuevo")).toBeNull();
+    expect(extractSelfIntroducedName("soy de Medellín")).toBeNull();
+  });
+
+  it("is case-insensitive on the trigger phrase", () => {
+    expect(extractSelfIntroducedName("SOY Carlos")).toBe("Carlos");
   });
 });

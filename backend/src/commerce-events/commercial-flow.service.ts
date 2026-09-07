@@ -26,6 +26,7 @@ import {
   applyRequirementValue,
   describeLineItem,
   extractPendingRequirementValues,
+  extractSelfIntroducedName,
   isAddressDetailedEnough,
   nextPendingStep,
   PendingRequirement,
@@ -625,6 +626,27 @@ export class CommercialFlowService {
       );
       const next = nextPendingStep(pending, alreadyFilled);
       if (next) {
+        // D-118: the customer may have already introduced themselves in
+        // the conversation's opening message ("Hola, soy Carlos, quiero 2
+        // tacos") well before this "finish items" turn ever ran. Check for
+        // that once, only when we're actually about to ask for a name and
+        // no WhatsApp profile name already covered it. Never trust the
+        // extracted candidate directly — route it through a yes/no confirm
+        // (below) so a bad match ("soy nuevo" slipping past the stoplist)
+        // can be corrected in one tap instead of silently persisting to
+        // app.contacts.display_name.
+        if (next.fieldKey === "name" && !input.displayName) {
+          const candidate = await this.findSelfIntroducedName(client, input.conversationId);
+          if (candidate) {
+            await this.step(
+              client,
+              flow.id,
+              "awaiting_requirement:name:confirm_candidate",
+              { nameCandidate: candidate },
+            );
+            return this.yesNoReply(input.locale, "confirmName", { name: candidate });
+          }
+        }
         await this.step(client, flow.id, `awaiting_requirement:${next.fieldKey}`, {});
         return this.requirementPrompt(input.locale, next);
       }
@@ -1075,6 +1097,23 @@ export class CommercialFlowService {
     negative: boolean,
   ): Promise<DeterministicReply | null> {
     const [, fieldKey, subStep] = flow.step.split(":");
+    // D-118: must be checked before the generic 'name' branch below —
+    // that branch has no subStep check and would otherwise save the
+    // literal "Sí"/"No" tap as the customer's display_name.
+    if (fieldKey === "name" && subStep === "confirm_candidate") {
+      if (affirmative) {
+        await client.query(
+          `update app.contacts set display_name=$2,updated_at=now() where id=$1`,
+          [input.contactId, String(flow.context.nameCandidate)],
+        );
+        return this.afterRequirementFilled(client, flow, input, flow.context);
+      }
+      if (negative) {
+        await this.step(client, flow.id, "awaiting_requirement:name", flow.context);
+        return this.localizedReply(input.locale, "name");
+      }
+      return this.yesNoReply(input.locale, "yesNo");
+    }
     if (fieldKey === "name") {
       const name = input.body.trim().slice(0, 120);
       if (name.length < 2) return this.localizedReply(input.locale, "name");
@@ -2725,6 +2764,22 @@ export class CommercialFlowService {
   // getPendingRequirements and never exercise the real SQL null-handling).
   private fulfillmentTypeOf(context: Record<string, unknown>): string | null {
     return typeof context.fulfillment === "string" ? context.fulfillment : null;
+  }
+  // D-118: looks only at the conversation's very first inbound message —
+  // "initial greeting", per the audit finding this implements, not a scan
+  // of the whole history. A self-intro mentioned deeper into the
+  // conversation is out of scope here; the customer still gets asked
+  // normally in that case, exactly like before this change.
+  private async findSelfIntroducedName(
+    client: PoolClient,
+    conversationId: string,
+  ): Promise<string | null> {
+    const first = await client.query<{ body: string | null }>(
+      `select content->>'body' as body from app.messages where conversation_id=$1 and direction='inbound' order by occurred_at asc,id asc limit 1`,
+      [conversationId],
+    );
+    const body = first.rows[0]?.body;
+    return body ? extractSelfIntroducedName(body) : null;
   }
   private async findRequirement(
     client: PoolClient,

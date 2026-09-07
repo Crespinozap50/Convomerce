@@ -9,7 +9,11 @@
 // describeLineItem) that used to be byte-identical copies in both flow
 // services — consolidated here since both already import from this file.
 
-import { escapeRegExp, normalizeForMatching as normalize } from "../localization/localization";
+import {
+  escapeRegExp,
+  isPlausibleName,
+  normalizeForMatching as normalize,
+} from "../localization/localization";
 
 export type RequirementDataType =
   | "text"
@@ -73,6 +77,31 @@ export const isAddressDetailedEnough = (
     hasStructure
   );
 };
+
+// D-118: deliberately narrow — only a handful of explicit self-introduction
+// phrases ("soy X", "me llamo X", "mi nombre es X", "my name is X"), single
+// word only (no attempt to capture compound names, which would risk
+// swallowing the next clause of the sentence — "soy Carlos y quiero 2
+// tacos" must not capture "Carlos y quiero"). D-040 explicitly excluded
+// 'name' from the generic multi-entity extractor because free text has no
+// structural signal to bound confidence against (unlike an address, which
+// has length/word-count/number-pattern to check); this stays safe despite
+// that by never writing straight to app.contacts.display_name — callers
+// must route the result through a yes/no confirmation, never accept it
+// silently.
+const SELF_INTRODUCED_NAME_STOPWORDS = new Set([
+  "un", "una", "el", "la", "de", "que", "quien", "nuevo", "nueva", "aqui",
+  "así", "asi", "yo", "cliente",
+]);
+export function extractSelfIntroducedName(text: string): string | null {
+  const match = /\b(?:soy|me llamo|mi nombre es|my name is)\s+([\p{L}][\p{L}'’-]{1,29})\b/iu.exec(
+    text,
+  );
+  if (!match) return null;
+  const candidate = match[1];
+  if (SELF_INTRODUCED_NAME_STOPWORDS.has(candidate.toLowerCase())) return null;
+  return isPlausibleName(candidate) ? candidate : null;
+}
 
 // Selects the first still-unfilled requirement in display order. Requirements
 // are expected to already be filtered to is_active/is_required by the caller

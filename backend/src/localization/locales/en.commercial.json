@@ -24,6 +24,7 @@
   "fulfillmentNoDelivery": "Would you like pickup, or on-site service?",
   "address": "What is the delivery address?",
   "saveAddress": "Save this address for future orders?",
+  "confirmName": "Should we register the order under the name {{name}}?",
   "yesNo": "Please answer yes or no.",
   "help": "You can choose any of these options:",
   "nothingToCancel": "There is no active process to cancel.",
