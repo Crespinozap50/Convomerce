@@ -2818,6 +2818,74 @@ describe("CommercialFlowService", () => {
     ).toBe(true);
   });
 
+  it("skips straight to the save-address question when the delivery message already contains a valid address (D-117)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_fulfillment",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    const reply = await service([addressRequirement]).resolve(client as never, {
+      ...input,
+      body: "Domicilio, envíenlo a la calle 45 #12-30",
+      understanding: fulfillmentUnderstanding("fulfillment.delivery"),
+    });
+
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "localized_template",
+      template: { namespace: "commercial", key: "saveAddress" },
+      values: {},
+    });
+    const step = client.query.mock.calls.find(
+      ([sql]) => String(sql).includes("update app.conversation_workflows"),
+    );
+    expect(step?.[1]).toEqual([
+      "workflow-1",
+      "awaiting_requirement:delivery_address:consent",
+      expect.stringContaining("Domicilio, envíenlo a la calle 45 #12-30"),
+    ]);
+  });
+
+  it("still asks for the address next turn when a delivery message names a place but not a real address (D-117 stays conservative)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_fulfillment",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    const reply = await service([addressRequirement]).resolve(client as never, {
+      ...input,
+      body: "Domicilio por favor",
+      understanding: fulfillmentUnderstanding("fulfillment.delivery"),
+    });
+
+    expect(reply?.responsePlan).toEqual({
+      kind: "localized_template",
+      template: { namespace: "commercial", key: "address" },
+      values: {},
+    });
+  });
+
   it("adds an automatic packaging line (1 per N food items, rounded up) once pickup is chosen, when the tenant has one configured (D-104)", async () => {
     const queries: { sql: string; params: unknown[] }[] = [];
     const client = {

@@ -1031,6 +1031,39 @@ export class CommercialFlowService {
     // review and the moment the order is actually confirmed.
     await this.syncPackagingFee(client, flow.commercial_request_id, input.locale);
     await this.recalculate(client, flow.commercial_request_id);
+    // D-117: a customer who names delivery AND the address in the same
+    // message ("Domicilio, envíenlo a la calle 45 #12-30") shouldn't be
+    // asked for the address again next turn. Reuse the SAME validator the
+    // delivery_address:value sub-step applies below — if this message
+    // already clears the tenant's own address bar, skip straight to that
+    // sub-step's next question (consent to save) instead of re-asking.
+    // Deliberately conservative: a bare "Domicilio" (no number groups, <3
+    // words) never passes isAddressDetailedEnough's defaults, so the common
+    // case falls through unchanged to the normal ask-then-validate flow.
+    if (fulfillment === "delivery") {
+      const requirement = await this.findRequirement(
+        client,
+        input,
+        fulfillment,
+        "delivery_address",
+      );
+      if (
+        requirement &&
+        isAddressDetailedEnough(input.body, requirement.validationRule)
+      ) {
+        const addressContext = {
+          ...context,
+          address: input.body.trim().slice(0, 500),
+        };
+        await this.step(
+          client,
+          flow.id,
+          "awaiting_requirement:delivery_address:consent",
+          addressContext,
+        );
+        return this.yesNoReply(input.locale, "saveAddress");
+      }
+    }
     return this.afterRequirementFilled(client, flow, input, context);
   }
 
