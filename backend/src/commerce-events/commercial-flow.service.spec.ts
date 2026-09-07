@@ -3529,7 +3529,7 @@ describe("CommercialFlowService", () => {
     });
 
     expect(reject).toHaveBeenCalledWith(client, eventId);
-    expect(reply?.body).toBe("Perfecto, no la agregaré. ¿Quieres agregar algo más?");
+    expect(reply?.body).toBe("Perfecto, no la agregaré. ¿Quieres agregar algo más? Escribe el producto o elige una opción.");
     expect(
       reply?.responsePlan?.kind === "localized_template" && reply.responsePlan.interactive,
     ).toEqual({
