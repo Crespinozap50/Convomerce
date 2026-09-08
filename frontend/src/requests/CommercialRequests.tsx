@@ -98,12 +98,20 @@ export function CommercialRequests({
         ? ["ready", "accepted", "in_progress"].includes(row.status)
         : row.status === filter),
   );
+  // Mirrors CommercialRequestsService.changeStatus's own `transitions`
+  // table exactly (backend/src/commercial-requests/commercial-requests.
+  // service.ts) — that table already allows the full ready→accepted→
+  // in_progress→completed lifecycle plus reject, but this map used to
+  // only ever wire up "cancelled" for every status, so a real order
+  // placed via WhatsApp had no way to progress past "ready" from the
+  // panel — nothing else in the backend ever advances it automatically.
+  // Found live: real Santos Tacos orders stuck in "ready" forever.
   const actions: Record<string, string[]> = {
     draft: ["cancelled"],
-    awaiting_confirmation: ["cancelled"],
-    ready: ["cancelled"],
-    accepted: ["cancelled"],
-    in_progress: ["cancelled"],
+    awaiting_confirmation: ["cancelled", "rejected"],
+    ready: ["accepted", "rejected", "cancelled"],
+    accepted: ["in_progress", "cancelled"],
+    in_progress: ["completed", "cancelled"],
   };
   const money = (value: number, currency: string) =>
     new Intl.NumberFormat(undefined, {

@@ -144,9 +144,8 @@ export default {
         no_show: "No-show",
       },
     },
-    nextAction: "Exception actions",
-    nextActionHelp:
-      "The operation advances automatically. Intervene only when necessary.",
+    nextAction: "Next step",
+    nextActionHelp: "Update the status as you progress with the request.",
     statusUpdated: "Request status updated",
     filters: {
       active: "Active",

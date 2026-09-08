@@ -145,9 +145,8 @@ export default {
         no_show: "No asistió",
       },
     },
-    nextAction: "Acciones excepcionales",
-    nextActionHelp:
-      "La operación avanza automáticamente. Intervén solo cuando sea necesario.",
+    nextAction: "Siguiente paso",
+    nextActionHelp: "Actualiza el estado a medida que avanzas con la solicitud.",
     statusUpdated: "Estado de la solicitud actualizado",
     filters: {
       active: "Activas",
