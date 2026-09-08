@@ -73,6 +73,7 @@ describe('inbound message flow', () => {
   let outboxEventId: string;
   let sendMessageId: string;
   let sendOutboxEventId: string;
+  let replyMessageId: string | undefined;
 
   afterAll(async () => {
     await worker.onModuleDestroy();
@@ -95,6 +96,14 @@ describe('inbound message flow', () => {
         "delete from app.processing_events where tenant_id = $1 and source = 'development_harness' and external_event_id = $2",
         [tenantId, externalEventId],
       );
+    }
+    if (replyMessageId) {
+      await inspectionPool.query(
+        "delete from app.outbox_events where aggregate_type = 'message' and aggregate_id = $1",
+        [replyMessageId],
+      );
+      await inspectionPool.query('delete from app.audit_events where subject_id = $1', [replyMessageId]);
+      await inspectionPool.query('delete from app.messages where id = $1', [replyMessageId]);
     }
     if (sendMessageId) {
       await inspectionPool.query('delete from app.audit_events where subject_id = $1', [sendMessageId]);
@@ -159,6 +168,21 @@ describe('inbound message flow', () => {
       [messageId],
     );
     expect(audits.rowCount).toBe(1);
+
+    // D-121: MessageReceivedConsumer.consume() writes its own outbound
+    // reply (app.messages, direction='outbound') plus a
+    // message.send_requested app.outbox_events row for it — a completely
+    // separate pair from messageId/outboxEventId above, which only cover
+    // the inbound side. Left uncleaned for who knows how long, this test
+    // silently leaked one new outbound message into Santos Tacos' REAL
+    // tenant data (a fixed fixture conversation, reused every run) on
+    // every single test:integration run — found live as 82 accumulated
+    // rows over 5 days. Captured here so afterAll can remove it.
+    const reply = await inspectionPool.query<{ id: string }>(
+      "select id from app.messages where conversation_id = $1 and direction = 'outbound' order by occurred_at desc, id desc limit 1",
+      [first.conversationId],
+    );
+    replyMessageId = reply.rows[0]?.id;
 
     await expect(consumer.consume(job!.data)).resolves.toEqual({ duplicate: true });
     const auditsAfterDuplicate = await inspectionPool.query(
