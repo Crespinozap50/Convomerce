@@ -1601,14 +1601,17 @@ describe("CommercialFlowService", () => {
           ],
         }) // active workflow lookup
         .mockResolvedValueOnce({ rows: [{ exists: true }] }) // cart has an active line
-        .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_fulfillment
+        // D-124: askOrAutoSelectFulfillment checks capabilities before
+        // deciding to ask or auto-select — this query now runs before
+        // step(), not after.
         .mockResolvedValueOnce({
           rows: [
             { capability: "delivery", enabled: true },
             { capability: "pickup", enabled: true },
             { capability: "on_site", enabled: true },
           ],
-        }), // fulfillmentReply: all three capabilities (D-119)
+        }) // askOrAutoSelectFulfillment: all three capabilities (D-119)
+        .mockResolvedValueOnce({ rows: [] }), // step() -> awaiting_fulfillment
     };
 
     await service().resolve(client as never, {
@@ -1617,7 +1620,7 @@ describe("CommercialFlowService", () => {
       understanding: await understand("Ninguno"),
     });
 
-    const [sql, params] = client.query.mock.calls[3];
+    const [sql, params] = client.query.mock.calls[2];
     expect(String(sql)).toContain("join app.commercial_requests request");
     expect(String(sql)).toContain("request.tenant_id=capability.tenant_id");
     expect(String(sql)).toContain("request.id=$1");
@@ -3529,8 +3532,12 @@ describe("CommercialFlowService", () => {
           ],
         })
         .mockResolvedValueOnce({ rows: [] }) // update contacts.display_name
+        // D-124: askOrAutoSelectFulfillment checks capabilities before
+        // deciding to ask or auto-select — this query now runs before
+        // step(). Only meaningful here for the multi-option (>=2 enabled)
+        // case, which still asks normally.
+        .mockResolvedValueOnce({ rows: capabilityRows }) // askOrAutoSelectFulfillment capabilities
         .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_fulfillment
-        .mockResolvedValueOnce({ rows: capabilityRows }) // fulfillmentReply capabilities
         .mockResolvedValue({ rows: [] }),
     };
     return service().resolve(client as never, {
@@ -3561,22 +3568,56 @@ describe("CommercialFlowService", () => {
     );
   });
 
-  it("shows only pickup for a pickup-only tenant (CrediCel Store-style, D-119)", async () => {
-    const reply = await askFulfillment([
-      { capability: "delivery", enabled: false },
-      { capability: "pickup", enabled: true },
-      { capability: "on_site", enabled: false },
-    ]);
-
-    expect(reply?.responsePlan).toEqual(
-      expect.objectContaining({
-        kind: "localized_template",
-        template: { namespace: "commercial", key: "fulfillmentGeneric" },
-        interactive: expect.objectContaining({
-          options: [expect.objectContaining({ id: "fulfillment:pickup" })],
-        }),
+  it("auto-selects pickup without asking for a pickup-only tenant, instead of a one-button question (CrediCel Store-style, D-124)", async () => {
+    // D-124: a single enabled modality has no real choice to present —
+    // askOrAutoSelectFulfillment skips the question entirely and applies
+    // it directly, the same side effects handleAwaitingFulfillment would
+    // run for an explicit answer.
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: "request-1",
+                step: "awaiting_requirement:name",
+                context: {},
+              },
+            ],
+          };
+        if (sql.includes("from app.tenant_capabilities"))
+          return {
+            rows: [
+              { capability: "delivery", enabled: false },
+              { capability: "pickup", enabled: true },
+              { capability: "on_site", enabled: false },
+            ],
+          };
+        return { rows: [] };
       }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Carlos Ramírez",
+      understanding: fulfillmentUnderstanding(null as never),
+    });
+
+    const fulfillmentUpdate = queries.find(({ sql }) =>
+      sql.includes("update app.commercial_requests set fulfillment_type"),
     );
+    expect(fulfillmentUpdate?.params).toEqual(["request-1", "pickup"]);
+    expect(
+      queries.some(
+        ({ sql, params }) =>
+          sql.includes("update app.conversation_workflows") &&
+          (params as unknown[])[1] === "awaiting_fulfillment",
+      ),
+    ).toBe(false);
+    expect(reply?.body).not.toMatch(/¿Lo deseas para|¿Cómo prefieres recibir/i);
   });
 
   it("fails open and offers all three modalities when every one is disabled, instead of a dead-end empty button list (D-119)", async () => {

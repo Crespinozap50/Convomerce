@@ -262,9 +262,16 @@ describe('D-108 — the delivery option offered is the asking tenant\'s own capa
       'fulfillment:on_site',
     ]);
     // tecnologia-demo (D-119, 004_credicel_store.sql): pickup is the only
-    // capability enabled — delivery and on_site are both off, so only the
-    // pickup button should appear, not just "no domicilio in the body".
+    // capability enabled — delivery and on_site are both off. D-124: with
+    // exactly one modality enabled there is no real choice to present, so
+    // it gets applied directly the moment the name is answered — no
+    // fulfillment question at all, not even a one-button one.
     expect(afterNameB.rows[0]?.body).not.toContain('domicilio');
-    expect(afterNameB.rows[0]?.interactive?.options.map((o) => o.id)).toEqual(['fulfillment:pickup']);
+    expect(afterNameB.rows[0]?.body).not.toMatch(/¿Lo deseas para|¿Cómo prefieres recibir/i);
+    const fulfillmentTypeB = await pool.query<{ fulfillment_type: string }>(
+      `select fulfillment_type from app.commercial_requests where conversation_id = $1`,
+      [b1.conversationId],
+    );
+    expect(fulfillmentTypeB.rows[0]?.fulfillment_type).toBe('pickup');
   });
 });

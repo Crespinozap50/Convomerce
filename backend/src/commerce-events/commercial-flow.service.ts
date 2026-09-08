@@ -669,8 +669,7 @@ export class CommercialFlowService {
         await this.step(client, flow.id, `awaiting_requirement:${next.fieldKey}`, {});
         return this.requirementPrompt(input.locale, next);
       }
-      await this.step(client, flow.id, "awaiting_fulfillment", {});
-      return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
+      return this.askOrAutoSelectFulfillment(client, input, flow, {});
     }
     return undefined;
   }
@@ -1051,7 +1050,20 @@ export class CommercialFlowService {
             ? "on_site"
             : null;
     if (!fulfillment) return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
-    const context: Record<string, unknown> = { ...flow.context, fulfillment };
+    return this.applyFulfillment(client, input, flow, flow.context, fulfillment);
+  }
+  // Shared by handleAwaitingFulfillment (the customer answered the
+  // question) and askOrAutoSelectFulfillment (D-124: the question was
+  // never asked because only one modality is enabled) — same side effects
+  // and same D-117/D-123 fast path either way, just reached differently.
+  private async applyFulfillment(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+    flow: Workflow,
+    baseContext: Record<string, unknown>,
+    fulfillment: "delivery" | "pickup" | "on_site",
+  ): Promise<DeterministicReply> {
+    const context: Record<string, unknown> = { ...baseContext, fulfillment };
     await client.query(
       `update app.commercial_requests set fulfillment_type=$2,updated_at=now() where id=$1`,
       [flow.commercial_request_id, fulfillment],
@@ -1081,6 +1093,9 @@ export class CommercialFlowService {
     // Deliberately conservative: a bare "Domicilio" (no number groups, <3
     // words) never passes isAddressDetailedEnough's defaults, so the common
     // case falls through unchanged to the normal ask-then-validate flow.
+    // Naturally inert when fulfillment was auto-selected (askOrAutoSelect
+    // FulfillmentReply): input.body is whatever unrelated message triggered
+    // that turn, which never passes isAddressDetailedEnough either.
     if (fulfillment === "delivery") {
       const requirement = await this.findRequirement(
         client,
@@ -1117,6 +1132,29 @@ export class CommercialFlowService {
       }
     }
     return this.afterRequirementFilled(client, flow, input, context);
+  }
+  // D-124: skips the fulfillment question entirely when the tenant has
+  // exactly one modality enabled (e.g. CrediCel Store, pickup-only since
+  // D-119) — there is no real choice to present, so asking it is a pure,
+  // avoidable turn. Every one of fulfillmentReply's own call sites that
+  // represents a *first-time* ask now routes through here instead; explicit
+  // "Cambiar entrega"/"Volver" navigation still asks normally even with a
+  // single option, since the customer deliberately asked to revisit it.
+  private async askOrAutoSelectFulfillment(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+    flow: Workflow,
+    context: Record<string, unknown>,
+  ): Promise<DeterministicReply> {
+    const enabled = await this.fulfillmentCapabilitiesEnabled(client, flow.commercial_request_id);
+    const enabledList = (["delivery", "pickup", "on_site"] as const).filter(
+      (modality) => enabled[modality],
+    );
+    if (enabledList.length === 1) {
+      return this.applyFulfillment(client, input, flow, context, enabledList[0]);
+    }
+    await this.step(client, flow.id, "awaiting_fulfillment", context);
+    return this.fulfillmentReply(client, flow.commercial_request_id, input.locale, enabled);
   }
 
   private async handleAwaitingRequirement(
@@ -2718,8 +2756,7 @@ export class CommercialFlowService {
     // caught this because the mocked getPendingRequirements never reflected
     // what a real fulfillment_type=null query actually returns.
     if (typeof context.fulfillment !== "string") {
-      await this.step(client, flow.id, "awaiting_fulfillment", context);
-      return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
+      return this.askOrAutoSelectFulfillment(client, input, flow, context);
     }
     const filledKeys = ["name", ...Object.keys((context.values as Record<string, string>) ?? {})];
     if (context.address) filledKeys.push("delivery_address");
@@ -3321,12 +3358,17 @@ export class CommercialFlowService {
     client: PoolClient,
     requestId: string,
     locale: Locale,
+    // D-124: askOrAutoSelectFulfillment already fetches this to decide
+    // whether to auto-select — passed through here so the "ask normally"
+    // path doesn't run the same query twice.
+    precomputedCapabilities?: { delivery: boolean; pickup: boolean; on_site: boolean },
   ): Promise<DeterministicReply> {
     // D-119: pickup/on_site used to be hardcoded as always offered — only
     // delivery was ever gated against real tenant config. Now all three
     // read the same app.tenant_capabilities table via one query instead of
     // three, same join/no-filter fix D-108 already applied to delivery.
-    const enabledByCapability = await this.fulfillmentCapabilitiesEnabled(client, requestId);
+    const enabledByCapability =
+      precomputedCapabilities ?? (await this.fulfillmentCapabilitiesEnabled(client, requestId));
     let deliveryEnabled = enabledByCapability.delivery;
     let pickupEnabled = enabledByCapability.pickup;
     let onSiteEnabled = enabledByCapability.on_site;

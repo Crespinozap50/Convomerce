@@ -227,23 +227,17 @@ describe('D-104 / D-106 — automatic packaging fee stays in sync and out of the
     // Fresh contact, so the wildcard 'name' requirement is still pending —
     // answered before the fulfillment question even appears.
     expect(finishAfterAdd.body).toContain('nombre');
-    const afterName = await send(providerSubject, `Cliente Prueba ${shortSuffix}`);
     // tecnologia-demo (D-119 seed comment, 004_credicel_store.sql): only
     // pickup is enabled in app.tenant_capabilities — delivery and on_site
     // are both off, "pickup-only fulfillment for this tenant is
-    // deliberate". fulfillmentReply() now gates all three the same way, so
-    // only the pickup button should appear, not a body phrase naming it.
-    expect(afterName.interactive).toMatchObject({
-      options: [{ id: 'fulfillment:pickup' }],
-    });
-
-    const afterPickup = await send(providerSubject, 'Recogida', {
-      type: 'button',
-      id: 'fulfillment:pickup',
-      title: 'Recogida',
-    });
+    // deliberate". D-124: with exactly one modality enabled there is no
+    // real choice to present, so askOrAutoSelectFulfillment applies pickup
+    // directly the moment the name is answered — no fulfillment question,
+    // no separate button tap, straight to the order summary.
+    const afterName = await send(providerSubject, `Cliente Prueba ${shortSuffix}`);
+    expect(afterName.body).not.toMatch(/¿Lo deseas para|¿Cómo prefieres recibir/i);
     // 3 food units at ratio 2 -> ceil(3/2) = 2 packaging units.
-    let lines = await activeLines(afterPickup.conversationId);
+    let lines = await activeLines(afterName.conversationId);
     expect(lines).toEqual(
       expect.arrayContaining([
         { description_snapshot: `${productName} (Unidad)`, quantity: '3.000' },
@@ -279,17 +273,17 @@ describe('D-104 / D-106 — automatic packaging fee stays in sync and out of the
     expect(picked.body).toBe(`¿Cuántas unidades de ${productName} quieres?`);
     await send(providerSubject, '5');
 
-    // Re-choosing fulfillment (the flow always re-asks it after any
+    // Re-choosing fulfillment (the flow always resets it after any
     // correction) is the next point syncPackagingFee() runs — proving the
     // packaging line tracks a cart change made *after* it was first added,
-    // not just its initial value.
-    await send(providerSubject, 'Listo', { type: 'button', id: 'cart:finish_items', title: 'Listo' });
-    const afterSecondPickup = await send(providerSubject, 'Recogida', {
+    // not just its initial value. D-124: pickup-only, so this re-selection
+    // is auto-applied by the same "Listo" turn instead of a separate tap.
+    const afterSecondFinish = await send(providerSubject, 'Listo', {
       type: 'button',
-      id: 'fulfillment:pickup',
-      title: 'Recogida',
+      id: 'cart:finish_items',
+      title: 'Listo',
     });
-    lines = await activeLines(afterSecondPickup.conversationId);
+    lines = await activeLines(afterSecondFinish.conversationId);
     // 5 food units at ratio 2 -> ceil(5/2) = 3 packaging units.
     expect(lines).toEqual(
       expect.arrayContaining([
