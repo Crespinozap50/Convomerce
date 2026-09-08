@@ -348,119 +348,18 @@ describe("NaturalResponseRewriter", () => {
       ]);
     });
 
-    it("does not fail fact preservation over a non-breaking space vs. a plain space (D-043 finding)", async () => {
-      // formatMoney renders currency with a non-breaking space (U+00A0)
-      // between symbol and amount; a model asked to reproduce it verbatim
-      // reliably types a plain space instead — invisible in any diff, but
-      // a byte-level mismatch that must not trip fact_mismatch on its own.
-      const plan = {
-        kind: "composite" as const,
-        rewriteKey: "commercial.orderConfirmation",
-        segments: [
-          {
-            kind: "template" as const,
-            template: { namespace: "commercial" as const, key: "cartHeading" as const },
-          },
-          { kind: "line_break" as const },
-          {
-            kind: "verified_text" as const,
-            text: "• 2 × Tacos al pastor: $ 24.000",
-          },
-        ],
-      };
-      const responseWithNbsp = {
-        locale: "es" as const,
-        body: "Tu pedido\n• 2 × Tacos al pastor: $ 24.000",
-        composition: "composite" as const,
-      };
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: jest.fn().mockResolvedValue({
-          output_text: JSON.stringify({
-            body: "¡Aquí tienes tu pedido! Llevas 2 Tacos al pastor por $ 24.000.",
-          }),
-        }),
-      }) as never;
-      const service = new NaturalResponseRewriter(
-        {
-          get: jest.fn((key: string, fallback: unknown) =>
-            key === "OPENAI_RESPONSE_REWRITING_ENABLED"
-              ? "true"
-              : key === "OPENAI_API_KEY"
-                ? "test-key"
-                : fallback,
-          ),
-        } as never,
-        budgets as never,
-      );
-      await expect(
-        service.rewrite(plan, responseWithNbsp, context),
-      ).resolves.toMatchObject({ mode: "openai" });
-    });
-
-    it("accepts a rewrite that rephrases the connective wording but keeps every real fact (D-043 calibration fix)", async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: jest.fn().mockResolvedValue({
-          output_text: JSON.stringify({
-            body:
-              "¡Aquí tienes tu pedido! Llevas 2 Tacos al pastor por $24.000 y 1 Coca-Cola por $4.000. Total: $28.000",
-          }),
-        }),
-      }) as never;
-      const service = new NaturalResponseRewriter(
-        {
-          get: jest.fn((key: string, fallback: unknown) =>
-            key === "OPENAI_RESPONSE_REWRITING_ENABLED"
-              ? "true"
-              : key === "OPENAI_API_KEY"
-                ? "test-key"
-                : fallback,
-          ),
-        } as never,
-        budgets as never,
-      );
-      await expect(
-        service.rewrite(compositePlan, compositeResponse, context),
-      ).resolves.toMatchObject({ mode: "openai" });
-    });
-
-    it("rewrites the order confirmation when every line survives verbatim", async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: jest.fn().mockResolvedValue({
-          output_text: JSON.stringify({
-            body:
-              "¡Aquí tienes tu pedido!\n• 2 × Tacos al pastor: $24.000\n• 1 × Coca-Cola: $4.000\nTotal: $28.000",
-          }),
-        }),
-      }) as never;
-      const service = new NaturalResponseRewriter(
-        {
-          get: jest.fn((key: string, fallback: unknown) =>
-            key === "OPENAI_RESPONSE_REWRITING_ENABLED"
-              ? "true"
-              : key === "OPENAI_API_KEY"
-                ? "test-key"
-                : fallback,
-          ),
-        } as never,
-        budgets as never,
-      );
-      await expect(
-        service.rewrite(compositePlan, compositeResponse, context),
-      ).resolves.toMatchObject({ mode: "openai" });
-    });
-
-    it("falls back when a rewrite drops a cart line", async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: jest.fn().mockResolvedValue({
-          output_text: JSON.stringify({
-            body: "¡Aquí tienes tu pedido!\n• 2 × Tacos al pastor: $24.000\nTotal: $28.000",
-          }),
-        }),
-      }) as never;
+    it("never sends the order confirmation to OpenAI — excluded outright, not just fact-checked (D-125 security hardening)", async () => {
+      // D-125: commercial.orderConfirmation embeds context.address verbatim
+      // (the customer's own free-text delivery address) — a security audit
+      // found this non-exploitable (strict json_schema output, protectedFacts
+      // below already caught any altered fact), but excluded it anyway for
+      // the simpler invariant "no client-authored text ever reaches the
+      // model" rather than relying on fact-checking to catch every case
+      // forever. This must resolve to policy_excluded without ever calling
+      // fetch — proves the exclusion happens before any network call, not
+      // just before trusting the result.
+      const fetchSpy = jest.fn();
+      global.fetch = fetchSpy as never;
       const service = new NaturalResponseRewriter(
         {
           get: jest.fn((key: string, fallback: unknown) =>
@@ -477,38 +376,9 @@ describe("NaturalResponseRewriter", () => {
         service.rewrite(compositePlan, compositeResponse, context),
       ).resolves.toMatchObject({
         mode: "deterministic",
-        fallbackReason: "fact_mismatch",
+        fallbackReason: "policy_excluded",
       });
-    });
-
-    it("falls back when a rewrite reorders cart lines", async () => {
-      global.fetch = jest.fn().mockResolvedValue({
-        ok: true,
-        json: jest.fn().mockResolvedValue({
-          output_text: JSON.stringify({
-            body:
-              "¡Aquí tienes tu pedido!\n• 1 × Coca-Cola: $4.000\n• 2 × Tacos al pastor: $24.000\nTotal: $28.000",
-          }),
-        }),
-      }) as never;
-      const service = new NaturalResponseRewriter(
-        {
-          get: jest.fn((key: string, fallback: unknown) =>
-            key === "OPENAI_RESPONSE_REWRITING_ENABLED"
-              ? "true"
-              : key === "OPENAI_API_KEY"
-                ? "test-key"
-                : fallback,
-          ),
-        } as never,
-        budgets as never,
-      );
-      await expect(
-        service.rewrite(compositePlan, compositeResponse, context),
-      ).resolves.toMatchObject({
-        mode: "deterministic",
-        fallbackReason: "fact_mismatch",
-      });
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 

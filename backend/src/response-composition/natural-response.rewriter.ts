@@ -61,11 +61,12 @@ export class NaturalResponseRewriter {
     )
       return this.fallback(response, "disabled");
     // Carrying `interactive` (buttons/list) no longer disqualifies a plan on
-    // its own — only the yes/no confirmation templates/composites below
-    // (confirmHold, confirmReschedule, commercial.orderConfirmation) ever
-    // combine eligibility with interactive, so this stays scoped to exactly
-    // those without a separate allowlist. Rewriting only ever touches
-    // `body`/`interactive.body` (see withRewrittenBody below) — the button
+    // its own — only the yes/no confirmation templates below (confirmHold,
+    // confirmReschedule; commercial.orderConfirmation was the equivalent
+    // composite until D-125 excluded it) ever combine eligibility with
+    // interactive, so this stays scoped to exactly those without a
+    // separate allowlist. Rewriting only ever touches `body`/
+    // `interactive.body` (see withRewrittenBody below) — the button
     // options themselves are never touched by the model.
     if (plan.kind === "localized_template") {
       if (!this.isEligibleTemplate(plan.template.namespace, plan.template.key))
@@ -363,8 +364,24 @@ export class NaturalResponseRewriter {
   // (see ResponsePlan in response-plan.types.ts), so eligibility is keyed by
   // the rewriteKey the flow service opts a specific composite into — a flat
   // set rather than folding into isEligibleTemplate's Record.
+  //
+  // D-125: commercial.orderConfirmation used to be the one entry here — it
+  // embeds context.address verbatim (the customer's own free-text delivery
+  // address, D-117/D-123) into response.body before this ever reaches
+  // OpenAI. Already non-exploitable in practice (fixed instructions never
+  // echoed, strict json_schema forces text-only output, protectedFacts()
+  // below verifies every real fact including the address survives
+  // untouched and falls back to the safe deterministic text otherwise) —
+  // this exclusion is defense-in-depth on top of that, not a fix for a
+  // found vulnerability: a security audit confirmed no exploitable path,
+  // but removing the one composite that ever carried raw customer text
+  // gives the simpler invariant "no client-authored text reaches the model"
+  // instead of relying on protectedFacts staying correct forever. Left as
+  // an empty (extensible) set rather than short-circuiting this method,
+  // so a future composite that never carries free text can opt back in
+  // explicitly and visibly.
   private isEligibleComposite(rewriteKey: string): boolean {
-    const eligibleComposites = new Set<string>(["commercial.orderConfirmation"]);
+    const eligibleComposites = new Set<string>([]);
     return eligibleComposites.has(rewriteKey);
   }
 
