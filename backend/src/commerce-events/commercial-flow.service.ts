@@ -603,6 +603,24 @@ export class CommercialFlowService {
         ["awaiting_more_items", "selecting_item"].includes(flow.step)) ||
       (["awaiting_more_items", "selecting_item"].includes(flow.step) && negative)
     ) {
+      // D-122: "Listo" is also the global finish_items command — reaching
+      // here while flow.step is "selecting_item" because of an unresolved
+      // tie (flow.context.tiedItems, set by matchItemCandidates when a
+      // mention matched more than one catalog row) used to fall straight
+      // into the logic below and silently drop the ambiguous item with no
+      // acknowledgment at all. Found live auditing a fresh order: "un Agua
+      // fresca" tied 3 ways, "Listo" right after made the water vanish
+      // from the cart while the flow moved straight on to asking for the
+      // name, as if nothing had been requested. Never guesses which tied
+      // option was meant — acknowledges the drop and stays at the same
+      // "anything else?" moment instead.
+      if (flow.step === "selecting_item" && flow.context.tiedItems) {
+        const context = { ...flow.context };
+        delete context.tiedItems;
+        delete context.pendingQuantity;
+        await this.step(client, flow.id, "awaiting_more_items", context);
+        return this.moreItemsReply(input.locale, "itemDroppedAmbiguous");
+      }
       const lines = await client.query<{ exists: boolean }>(
         `select exists(select 1 from app.request_lines where commercial_request_id=$1 and status='active') as exists`,
         [flow.commercial_request_id],

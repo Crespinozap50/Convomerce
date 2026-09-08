@@ -13,6 +13,7 @@
   "modifierAddedMinRequired": "Agregué {{item}}. Elige {{needed}} más de \"{{group}}\" antes de continuar.",
   "moreItems": "¿Quieres agregar algo más? Escribe el producto o elige una opción.",
   "moreItemsAnswer": "No entendí tu respuesta. Escribe el nombre de otro producto o elige una opción.",
+  "itemDroppedAmbiguous": "No agregué ese producto porque no elegiste cuál de las opciones preferías. ¿Quieres agregar algo más?",
   "emptyCart": "Tu pedido todavía está vacío.",
   "emptyCartContinue": "Tu pedido está vacío. Agrega al menos un producto para continuar.",
   "removeWhich": "¿Qué producto deseas quitar del pedido?",

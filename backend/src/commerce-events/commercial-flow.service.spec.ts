@@ -2758,6 +2758,55 @@ describe("CommercialFlowService", () => {
     expect(insertCall?.[1][7]).toBe(1);
   });
 
+  it("acknowledges and drops a pending ambiguous item instead of silently discarding it when 'Listo' arrives (D-122)", async () => {
+    // Found live auditing a fresh order end to end: "un Agua fresca" tied 3
+    // ways (two sizes plus a differently-named "Aguas Frescas" item), and
+    // replying "Listo" — also the global finish_items command — fell
+    // straight into the "customer is done adding items" branch below,
+    // silently dropping the tied item from the order with zero
+    // acknowledgment. The cart moved on to asking for the name as if
+    // nothing had been requested at all.
+    const tiedItems = [
+      { item_id: "agua", variant_id: "agua-12", name: "Agua fresca", variant_name: "Vaso de 12 oz", price_minor: "700000", currency: "COP" },
+      { item_id: "agua", variant_id: "agua-16", name: "Agua fresca", variant_name: "Vaso de 16 oz", price_minor: "900000", currency: "COP" },
+      { item_id: "aguas-frescas", variant_id: "aguas-frescas-unidad", name: "Aguas Frescas", variant_name: "Unidad", price_minor: "700000", currency: "COP" },
+    ];
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_item",
+              context: { tiedItems, pendingQuantity: 1 },
+            },
+          ],
+        })
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Listo",
+      understanding: await understand("Listo"),
+    });
+
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "localized_template",
+      template: { namespace: "commercial", key: "itemDroppedAmbiguous" },
+    });
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(false);
+    const step = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.conversation_workflows"),
+    );
+    expect(step?.[1][1]).toBe("awaiting_more_items");
+    expect(step?.[1][2]).not.toContain("tiedItems");
+  });
+
   it("cancels an active process from any workflow step", async () => {
     const client = {
       query: jest

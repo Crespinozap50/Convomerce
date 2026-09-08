@@ -13,6 +13,7 @@
   "modifierAddedMinRequired": "Added {{item}}. Choose {{needed}} more from \"{{group}}\" before continuing.",
   "moreItems": "Would you like to add anything else? Type the product or choose an option.",
   "moreItemsAnswer": "I did not understand your answer. Type another product's name or choose an option.",
+  "itemDroppedAmbiguous": "I did not add that product since you did not pick which option you wanted. Would you like to add anything else?",
   "emptyCart": "Your order is still empty.",
   "emptyCartContinue": "Your order is empty. Add at least one product to continue.",
   "removeWhich": "Which product would you like to remove?",
