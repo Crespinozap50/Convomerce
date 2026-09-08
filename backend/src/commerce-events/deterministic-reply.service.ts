@@ -168,7 +168,17 @@ export class DeterministicReplyService {
         where item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
           and variant.availability_status in ('available','unknown')
           and (item.available_from_time is null or item.available_until_time is null
-               or (now() at time zone $2)::time between item.available_from_time and item.available_until_time)
+               or (item.available_from_time<=item.available_until_time
+                   and (now() at time zone $2)::time between item.available_from_time and item.available_until_time)
+               -- D-120: a window that spans midnight (e.g. 22:00-02:00) has
+               -- from_time > until_time — plain BETWEEN can never be true
+               -- for it (Postgres doesn't wrap), silently hiding the item
+               -- all night. Found live: a real Bogotá run at 23:33 hit
+               -- exactly this case. Handled as its own disjunct instead of
+               -- reusing BETWEEN, which cannot express "outside [b,a]".
+               or (item.available_from_time>item.available_until_time
+                   and ((now() at time zone $2)::time>=item.available_from_time
+                        or (now() at time zone $2)::time<=item.available_until_time)))
         order by item.category,item.name,variant.price_minor`,
       [languageFor(locale), timezone],
     );

@@ -58,12 +58,15 @@ describe('D-097 — catalog items restricted to a daily time window', () => {
   const inWindowVariantId = uuidv7();
   const outOfWindowItemId = uuidv7();
   const outOfWindowVariantId = uuidv7();
+  const wrapsMidnightItemId = uuidv7();
+  const wrapsMidnightVariantId = uuidv7();
   // catalogChoiceReply() truncates row titles to WhatsApp's 24-char list
   // limit — kept short enough here to never truncate, so the title
   // comparison below is exact.
   const shortSuffix = suffix.slice(-6);
   const inWindowName = `PruebaDisp${shortSuffix}`;
   const outOfWindowName = `PruebaFuera${shortSuffix}`;
+  const wrapsMidnightName = `PruebaCruza${shortSuffix}`;
   const conversationIds: string[] = [];
 
   beforeAll(async () => {
@@ -95,6 +98,26 @@ describe('D-097 — catalog items restricted to a daily time window', () => {
       `insert into app.item_variants(id,tenant_id,catalog_item_id,name,status,price_minor,currency,availability_status)
        values ($1,$2,$3,'Unidad','active',100000,'COP','available')`,
       [inWindowVariantId, tenantId, inWindowItemId],
+    );
+    // D-120 regression: [from=now+2min, until=now+1min] always has
+    // from_time > until_time as a time-of-day value (except within 2
+    // minutes of midnight itself), forcing a window that wraps past
+    // midnight no matter what time this actually runs — unlike
+    // inWindowItemId above, which only happened to catch the wraparound
+    // bug because this specific run landed near midnight in Bogotá. The
+    // "unavailable" slice is (until,from) = (now+1min, now+2min), a sliver
+    // strictly in the future — "now" itself sits outside it, i.e. inside
+    // the wrapped "available" region, so it must be found under correct
+    // wraparound-aware logic.
+    await pool.query(
+      `insert into app.catalog_items(id,tenant_id,catalog_id,name,status,category,offering_type,available_from_time,available_until_time)
+       values ($1,$2,$3,$4,'active','prueba','product', ($5::time + interval '2 minutes')::time, ($5::time + interval '1 minute')::time)`,
+      [wrapsMidnightItemId, tenantId, catalogId, wrapsMidnightName, nowBogota],
+    );
+    await pool.query(
+      `insert into app.item_variants(id,tenant_id,catalog_item_id,name,status,price_minor,currency,availability_status)
+       values ($1,$2,$3,'Unidad','active',100000,'COP','available')`,
+      [wrapsMidnightVariantId, tenantId, wrapsMidnightItemId],
     );
   });
 
@@ -141,10 +164,10 @@ describe('D-097 — catalog items restricted to a daily time window', () => {
       }
     }
     await pool.query('delete from app.item_variants where id = any($1::uuid[])', [
-      [inWindowVariantId, outOfWindowVariantId],
+      [inWindowVariantId, outOfWindowVariantId, wrapsMidnightVariantId],
     ]);
     await pool.query('delete from app.catalog_items where id = any($1::uuid[])', [
-      [inWindowItemId, outOfWindowItemId],
+      [inWindowItemId, outOfWindowItemId, wrapsMidnightItemId],
     ]);
     await database.onModuleDestroy();
     await pool.end();
@@ -157,11 +180,14 @@ describe('D-097 — catalog items restricted to a daily time window', () => {
   // item directly exercises the time-window filter itself, independent of
   // how many other items the catalog happens to have.
   it.each([
-    ['a product whose window includes the current time', () => inWindowName, true],
-    ['a product whose window has already passed for today', () => outOfWindowName, false],
-  ])('asking the price of %s', async (_label, getName, shouldBeFound) => {
+    ['a product whose window includes the current time', () => inWindowName, true, 'in'],
+    ['a product whose window has already passed for today', () => outOfWindowName, false, 'out'],
+    // D-120 regression: a window that spans midnight must still be found —
+    // plain SQL BETWEEN cannot express this (see beforeAll above).
+    ['a product whose window spans midnight and includes the current time', () => wrapsMidnightName, true, 'wraps'],
+  ])('asking the price of %s', async (_label, getName, shouldBeFound, subjectTag) => {
     const name = getName();
-    const providerSubject = `time-window-${suffix}-${shouldBeFound}`;
+    const providerSubject = `time-window-${suffix}-${subjectTag}`;
     const id = uuidv7();
     const result = await messages.receive({
       tenantId,

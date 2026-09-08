@@ -1455,7 +1455,14 @@ export class CommercialFlowService {
          on cat_loc.tenant_id=item.tenant_id and cat_loc.category=item.category and cat_loc.locale=$2
        where item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
          and (item.available_from_time is null or item.available_until_time is null
-              or (now() at time zone $1)::time between item.available_from_time and item.available_until_time)
+              or (item.available_from_time<=item.available_until_time
+                  and (now() at time zone $1)::time between item.available_from_time and item.available_until_time)
+              -- D-120: see deterministic-reply.service.ts's offeringReply()
+              -- for why plain BETWEEN silently hides a window that spans
+              -- midnight (from_time > until_time) — same fix, same reason.
+              or (item.available_from_time>item.available_until_time
+                  and ((now() at time zone $1)::time>=item.available_from_time
+                       or (now() at time zone $1)::time<=item.available_until_time)))
        order by item.name`,
       [timezone, languageFor(locale)],
     );
