@@ -551,8 +551,16 @@ export default {
         help: "Offer time slots using one or more schedules.",
       },
       delivery: {
-        title: "Service and delivery",
-        help: "Manage on-site service, pickup, delivery, or shipping.",
+        title: "Delivery",
+        help: "Offer home/shipping delivery as a fulfillment option.",
+      },
+      pickup: {
+        title: "Pickup",
+        help: "Let customers pick up their order at the business.",
+      },
+      on_site: {
+        title: "On-site service",
+        help: "Offer service or consumption at the business's physical location.",
       },
     },
     offeringTypes: {

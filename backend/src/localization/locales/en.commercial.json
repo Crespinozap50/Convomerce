@@ -22,6 +22,7 @@
   "name": "What name should we use for the order?",
   "fulfillment": "Would you like delivery, pickup, or on-site service?",
   "fulfillmentNoDelivery": "Would you like pickup, or on-site service?",
+  "fulfillmentGeneric": "How would you like to receive your order?",
   "address": "What is the delivery address?",
   "saveAddress": "Save this address for future orders?",
   "confirmName": "Should we register the order under the name {{name}}?",

@@ -224,6 +224,8 @@ export function KnowledgeSettings({
     "orders",
     "appointments",
     "delivery",
+    "pickup",
+    "on_site",
   ];
   const commerceProviders = [
     { id: "shopify", name: "Shopify" },

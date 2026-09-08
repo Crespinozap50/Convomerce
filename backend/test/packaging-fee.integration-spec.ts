@@ -228,11 +228,14 @@ describe('D-104 / D-106 — automatic packaging fee stays in sync and out of the
     // answered before the fulfillment question even appears.
     expect(finishAfterAdd.body).toContain('nombre');
     const afterName = await send(providerSubject, `Cliente Prueba ${shortSuffix}`);
-    // tecnologia-demo has delivery disabled (app.tenant_capabilities) —
-    // NOTE: as of this writing deliveryCapabilityEnabled() reads that table
-    // with no tenant_id filter at all, so which tenant's row it actually
-    // sees is undefined; flagged separately, not fixed by this suite.
-    expect(afterName.body).toContain('recogida');
+    // tecnologia-demo (D-119 seed comment, 004_credicel_store.sql): only
+    // pickup is enabled in app.tenant_capabilities — delivery and on_site
+    // are both off, "pickup-only fulfillment for this tenant is
+    // deliberate". fulfillmentReply() now gates all three the same way, so
+    // only the pickup button should appear, not a body phrase naming it.
+    expect(afterName.interactive).toMatchObject({
+      options: [{ id: 'fulfillment:pickup' }],
+    });
 
     const afterPickup = await send(providerSubject, 'Recogida', {
       type: 'button',

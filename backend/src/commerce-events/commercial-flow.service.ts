@@ -3275,17 +3275,38 @@ export class CommercialFlowService {
     requestId: string,
     locale: Locale,
   ): Promise<DeterministicReply> {
-    const deliveryEnabled = await this.deliveryCapabilityEnabled(client, requestId);
+    // D-119: pickup/on_site used to be hardcoded as always offered — only
+    // delivery was ever gated against real tenant config. Now all three
+    // read the same app.tenant_capabilities table via one query instead of
+    // three, same join/no-filter fix D-108 already applied to delivery.
+    const enabledByCapability = await this.fulfillmentCapabilitiesEnabled(client, requestId);
+    let deliveryEnabled = enabledByCapability.delivery;
+    let pickupEnabled = enabledByCapability.pickup;
+    let onSiteEnabled = enabledByCapability.on_site;
+    // Fail open rather than showing an empty button list: a tenant with
+    // every modality disabled is a misconfiguration, not a business that
+    // genuinely cannot be reached by any means — better to offer all three
+    // than to hand the customer a dead end.
+    if (!deliveryEnabled && !pickupEnabled && !onSiteEnabled) {
+      deliveryEnabled = pickupEnabled = onSiteEnabled = true;
+    }
     const options: InteractiveMessage["options"] = [
       ...(deliveryEnabled
         ? [{ id: "fulfillment:delivery", title: this.copy(locale, "delivery") }]
         : []),
-      { id: "fulfillment:pickup", title: this.copy(locale, "pickup") },
-      { id: "fulfillment:on_site", title: this.copy(locale, "onSite") },
+      ...(pickupEnabled
+        ? [{ id: "fulfillment:pickup", title: this.copy(locale, "pickup") }]
+        : []),
+      ...(onSiteEnabled
+        ? [{ id: "fulfillment:on_site", title: this.copy(locale, "onSite") }]
+        : []),
     ];
-    const bodyKey: CommercialCopyKey = deliveryEnabled
-      ? "fulfillment"
-      : "fulfillmentNoDelivery";
+    const bodyKey: CommercialCopyKey =
+      deliveryEnabled && pickupEnabled && onSiteEnabled
+        ? "fulfillment"
+        : !deliveryEnabled && pickupEnabled && onSiteEnabled
+          ? "fulfillmentNoDelivery"
+          : "fulfillmentGeneric";
     return {
       ...this.reply(this.copy(locale, bodyKey)),
       responsePlan: {
@@ -3307,14 +3328,22 @@ export class CommercialFlowService {
   // already has a Workflow in scope with commercial_request_id, but not all
   // of them carry the tenantId-bearing UnderstoodFlowInput (goBack only has
   // `flow` + `locale`).
-  private async deliveryCapabilityEnabled(client: PoolClient, requestId: string): Promise<boolean> {
-    const result = await client.query<{ enabled: boolean }>(
-      `select capability.enabled from app.tenant_capabilities capability
+  private async fulfillmentCapabilitiesEnabled(
+    client: PoolClient,
+    requestId: string,
+  ): Promise<{ delivery: boolean; pickup: boolean; on_site: boolean }> {
+    const result = await client.query<{ capability: string; enabled: boolean }>(
+      `select capability.capability,capability.enabled from app.tenant_capabilities capability
          join app.commercial_requests request on request.tenant_id=capability.tenant_id
-        where request.id=$1 and capability.capability='delivery'`,
+        where request.id=$1 and capability.capability in ('delivery','pickup','on_site')`,
       [requestId],
     );
-    return result.rows[0]?.enabled ?? false;
+    const byCapability = new Map(result.rows.map((row) => [row.capability, row.enabled]));
+    return {
+      delivery: byCapability.get("delivery") ?? false,
+      pickup: byCapability.get("pickup") ?? false,
+      on_site: byCapability.get("on_site") ?? false,
+    };
   }
   private command(input: UnderstoodFlowInput): FlowCommand {
     const value = input.understanding.entities.command;

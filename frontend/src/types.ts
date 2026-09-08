@@ -71,7 +71,13 @@ export type BusinessProfile = {
   };
 };
 export type CapabilityName =
-  "commercial_offerings" | "inventory" | "orders" | "appointments" | "delivery";
+  | "commercial_offerings"
+  | "inventory"
+  | "orders"
+  | "appointments"
+  | "delivery"
+  | "pickup"
+  | "on_site";
 export type ExternalSource = {
   id: string;
   provider: string;

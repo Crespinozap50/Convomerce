@@ -242,21 +242,29 @@ describe('D-108 — the delivery option offered is the asking tenant\'s own capa
     // Both tenants' fulfillment question is the reply right after answering
     // 'name' — re-fetched here (rather than relying on the intermediate
     // `send()` return values above) so both checks read the same way.
-    const afterNameA = await pool.query<{ body: string }>(
-      `select content->>'body' as body from app.messages
+    const afterNameA = await pool.query<{ body: string; interactive: { options: { id: string }[] } }>(
+      `select content->>'body' as body, content->'interactive' as interactive from app.messages
         where conversation_id = $1 and direction = 'outbound'
         order by occurred_at desc, id desc limit 1`,
       [a1.conversationId],
     );
-    const afterNameB = await pool.query<{ body: string }>(
-      `select content->>'body' as body from app.messages
+    const afterNameB = await pool.query<{ body: string; interactive: { options: { id: string }[] } }>(
+      `select content->>'body' as body, content->'interactive' as interactive from app.messages
         where conversation_id = $1 and direction = 'outbound'
         order by occurred_at desc, id desc limit 1`,
       [b1.conversationId],
     );
 
     expect(afterNameA.rows[0]?.body).toContain('domicilio, recogida');
+    expect(afterNameA.rows[0]?.interactive?.options.map((o) => o.id)).toEqual([
+      'fulfillment:delivery',
+      'fulfillment:pickup',
+      'fulfillment:on_site',
+    ]);
+    // tecnologia-demo (D-119, 004_credicel_store.sql): pickup is the only
+    // capability enabled — delivery and on_site are both off, so only the
+    // pickup button should appear, not just "no domicilio in the body".
     expect(afterNameB.rows[0]?.body).not.toContain('domicilio');
-    expect(afterNameB.rows[0]?.body).toContain('recogida');
+    expect(afterNameB.rows[0]?.interactive?.options.map((o) => o.id)).toEqual(['fulfillment:pickup']);
   });
 });

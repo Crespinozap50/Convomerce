@@ -558,8 +558,16 @@ export default {
         help: "Ofrece espacios usando una o varias agendas.",
       },
       delivery: {
-        title: "Atención y entrega",
-        help: "Gestiona atención en sitio, retiro, domicilio o envío.",
+        title: "Domicilio",
+        help: "Ofrece envío a domicilio como modalidad de entrega.",
+      },
+      pickup: {
+        title: "Recogida",
+        help: "Permite que el cliente recoja su pedido en el negocio.",
+      },
+      on_site: {
+        title: "Consumo o atención en el local",
+        help: "Ofrece atención o consumo en el sitio físico del negocio.",
       },
     },
     offeringTypes: {

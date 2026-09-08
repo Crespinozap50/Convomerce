@@ -45,7 +45,12 @@ values
  ('0194f000-0000-7000-8000-000000000001','inventory',false),
  ('0194f000-0000-7000-8000-000000000001','orders',true),
  ('0194f000-0000-7000-8000-000000000001','appointments',false),
- ('0194f000-0000-7000-8000-000000000001','delivery',true)
+ ('0194f000-0000-7000-8000-000000000001','delivery',true),
+ -- D-119: pickup/on_site are gated by fulfillmentReply() the same way
+ -- delivery already is (080_tenant_capabilities_pickup_on_site.sql).
+ -- Santos Tacos genuinely offers all three, so both stay enabled.
+ ('0194f000-0000-7000-8000-000000000001','pickup',true),
+ ('0194f000-0000-7000-8000-000000000001','on_site',true)
 on conflict(tenant_id,capability) do update set enabled=excluded.enabled,updated_at=now();
 
 insert into app.bot_configurations(tenant_id,enabled,assistant_name,locale,welcome_message,fallback_message,handoff_keywords,updated_by_user_id)

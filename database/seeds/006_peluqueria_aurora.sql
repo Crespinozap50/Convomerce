@@ -80,7 +80,9 @@ values
  ('0194f000-0000-7000-8000-000000000006','inventory',false),
  ('0194f000-0000-7000-8000-000000000006','orders',false),
  ('0194f000-0000-7000-8000-000000000006','appointments',true),
- ('0194f000-0000-7000-8000-000000000006','delivery',false)
+ ('0194f000-0000-7000-8000-000000000006','delivery',false),
+ ('0194f000-0000-7000-8000-000000000006','pickup',true),
+ ('0194f000-0000-7000-8000-000000000006','on_site',true)
 on conflict(tenant_id,capability) do update set enabled=excluded.enabled,updated_at=now();
 
 insert into app.bot_configurations(tenant_id,enabled,assistant_name,locale,welcome_message,fallback_message,handoff_keywords)

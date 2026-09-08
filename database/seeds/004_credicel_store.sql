@@ -43,7 +43,13 @@ values
  ('0194f000-0000-7000-8000-000000000002','inventory',false),
  ('0194f000-0000-7000-8000-000000000002','orders',true),
  ('0194f000-0000-7000-8000-000000000002','appointments',false),
- ('0194f000-0000-7000-8000-000000000002','delivery',false)
+ ('0194f000-0000-7000-8000-000000000002','delivery',false),
+ -- D-119: pickup/on_site are now gated by fulfillmentReply() too
+ -- (080_tenant_capabilities_pickup_on_site.sql). "Pickup-only" above was
+ -- previously just a comment with no enforcement behind it — on_site is
+ -- explicitly off here so that intent actually holds at runtime.
+ ('0194f000-0000-7000-8000-000000000002','pickup',true),
+ ('0194f000-0000-7000-8000-000000000002','on_site',false)
 on conflict(tenant_id,capability) do update set enabled=excluded.enabled,updated_at=now();
 
 insert into app.tenant_users(id,tenant_id,user_id,role,status)

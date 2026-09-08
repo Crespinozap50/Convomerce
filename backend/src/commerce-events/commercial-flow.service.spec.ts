@@ -1602,7 +1602,13 @@ describe("CommercialFlowService", () => {
         }) // active workflow lookup
         .mockResolvedValueOnce({ rows: [{ exists: true }] }) // cart has an active line
         .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_fulfillment
-        .mockResolvedValueOnce({ rows: [{ enabled: true }] }), // fulfillmentReply: delivery capability
+        .mockResolvedValueOnce({
+          rows: [
+            { capability: "delivery", enabled: true },
+            { capability: "pickup", enabled: true },
+            { capability: "on_site", enabled: true },
+          ],
+        }), // fulfillmentReply: all three capabilities (D-119)
     };
 
     await service().resolve(client as never, {
@@ -1639,7 +1645,13 @@ describe("CommercialFlowService", () => {
         }) // active workflow lookup
         .mockResolvedValueOnce({ rows: [{ exists: true }] }) // cart has an active line
         .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_fulfillment
-        .mockResolvedValueOnce({ rows: [{ enabled: true }] }), // fulfillmentReply: delivery capability
+        .mockResolvedValueOnce({
+          rows: [
+            { capability: "delivery", enabled: true },
+            { capability: "pickup", enabled: true },
+            { capability: "on_site", enabled: true },
+          ],
+        }), // fulfillmentReply: all three capabilities (D-119)
     };
 
     const reply = await service().resolve(client as never, {
@@ -3365,7 +3377,13 @@ describe("CommercialFlowService", () => {
         })
         .mockResolvedValueOnce({ rows: [] }) // update contacts.display_name
         .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_fulfillment
-        .mockResolvedValueOnce({ rows: [{ enabled: true }] }) // fulfillmentReply: delivery capability
+        .mockResolvedValueOnce({
+          rows: [
+            { capability: "delivery", enabled: true },
+            { capability: "pickup", enabled: true },
+            { capability: "on_site", enabled: true },
+          ],
+        }) // fulfillmentReply: all three capabilities (D-119)
         .mockResolvedValue({ rows: [] }),
     };
 
@@ -3402,6 +3420,95 @@ describe("CommercialFlowService", () => {
           (params as unknown[])?.[1] === "awaiting_fulfillment",
       ),
     ).toBe(true);
+  });
+
+  const askFulfillment = (
+    capabilityRows: { capability: string; enabled: boolean }[],
+  ) => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_requirement:name",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }) // update contacts.display_name
+        .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_fulfillment
+        .mockResolvedValueOnce({ rows: capabilityRows }) // fulfillmentReply capabilities
+        .mockResolvedValue({ rows: [] }),
+    };
+    return service().resolve(client as never, {
+      ...input,
+      body: "Carlos Ramírez",
+      understanding: fulfillmentUnderstanding(null as never),
+    });
+  };
+
+  it("hides on_site when the tenant has it disabled, using the generic prompt instead of naming options that won't appear (D-119)", async () => {
+    const reply = await askFulfillment([
+      { capability: "delivery", enabled: true },
+      { capability: "pickup", enabled: true },
+      { capability: "on_site", enabled: false },
+    ]);
+
+    expect(reply?.responsePlan).toEqual(
+      expect.objectContaining({
+        kind: "localized_template",
+        template: { namespace: "commercial", key: "fulfillmentGeneric" },
+        interactive: expect.objectContaining({
+          options: [
+            expect.objectContaining({ id: "fulfillment:delivery" }),
+            expect.objectContaining({ id: "fulfillment:pickup" }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("shows only pickup for a pickup-only tenant (CrediCel Store-style, D-119)", async () => {
+    const reply = await askFulfillment([
+      { capability: "delivery", enabled: false },
+      { capability: "pickup", enabled: true },
+      { capability: "on_site", enabled: false },
+    ]);
+
+    expect(reply?.responsePlan).toEqual(
+      expect.objectContaining({
+        kind: "localized_template",
+        template: { namespace: "commercial", key: "fulfillmentGeneric" },
+        interactive: expect.objectContaining({
+          options: [expect.objectContaining({ id: "fulfillment:pickup" })],
+        }),
+      }),
+    );
+  });
+
+  it("fails open and offers all three modalities when every one is disabled, instead of a dead-end empty button list (D-119)", async () => {
+    const reply = await askFulfillment([
+      { capability: "delivery", enabled: false },
+      { capability: "pickup", enabled: false },
+      { capability: "on_site", enabled: false },
+    ]);
+
+    expect(reply?.responsePlan).toEqual(
+      expect.objectContaining({
+        kind: "localized_template",
+        template: { namespace: "commercial", key: "fulfillment" },
+        interactive: expect.objectContaining({
+          options: [
+            expect.objectContaining({ id: "fulfillment:delivery" }),
+            expect.objectContaining({ id: "fulfillment:pickup" }),
+            expect.objectContaining({ id: "fulfillment:on_site" }),
+          ],
+        }),
+      }),
+    );
   });
 
   it("asks for a custom configured requirement after fulfillment is chosen", async () => {

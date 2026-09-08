@@ -22,6 +22,7 @@
   "name": "¿A nombre de quién registramos el pedido?",
   "fulfillment": "¿Lo deseas para domicilio, recogida o consumo en el local?",
   "fulfillmentNoDelivery": "¿Lo deseas para recogida o atención en el local?",
+  "fulfillmentGeneric": "¿Cómo prefieres recibir tu pedido?",
   "address": "¿Cuál es la dirección del domicilio?",
   "saveAddress": "¿Quieres que guardemos esta dirección para tus próximos pedidos?",
   "confirmName": "¿Registramos el pedido a nombre de {{name}}?",
