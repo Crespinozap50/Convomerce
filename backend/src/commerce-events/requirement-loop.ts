@@ -103,6 +103,32 @@ export function extractSelfIntroducedName(text: string): string | null {
   return isPlausibleName(candidate) ? candidate : null;
 }
 
+// D-123: same conservative, explicit-pattern approach as
+// extractSelfIntroducedName above — a short, fixed list of known
+// delivery-selection lead-ins ("Domicilio, envíenlo a...", "Envío a
+// domicilio,...", "Para domicilio..."), tried in order, first match wins.
+// Exists because D-117's same-message fast-path stores input.body verbatim
+// as the address (deliberately, to avoid general free-text cleanup — see
+// D-117's decision entry), which left the modality phrase baked into the
+// address shown on the order summary and to whoever delivers it. Stripping
+// is always paired with re-validating the remainder against the tenant's
+// own AddressValidationRule by the caller — never applied blindly, and
+// never worse than keeping the original message when nothing matches or
+// the remainder no longer looks like a real address.
+const DELIVERY_ADDRESS_LEAD_INS: RegExp[] = [
+  /^\s*domicilio\s*[,.:]?\s*env[íi]en[lm]o\s+a\s*[,.:]?\s*/i,
+  /^\s*env[íi]o\s+a\s+domicilio\s*[,.:]?\s*/i,
+  /^\s*para\s+domicilio\s*[,.:]?\s*/i,
+  /^\s*domicilio\s*[,.:]?\s*/i,
+  /^\s*delivery\s*[,.:]?\s*(?:send\s+it\s+to\s*[,.:]?\s*)?/i,
+];
+export function stripDeliveryLeadIn(text: string): string {
+  for (const pattern of DELIVERY_ADDRESS_LEAD_INS) {
+    if (pattern.test(text)) return text.replace(pattern, "").trim();
+  }
+  return text;
+}
+
 // Selects the first still-unfilled requirement in display order. Requirements
 // are expected to already be filtered to is_active/is_required by the caller
 // (OperationalRequirementsService.getPendingRequirements) — this function only

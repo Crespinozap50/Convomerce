@@ -2924,11 +2924,16 @@ describe("CommercialFlowService", () => {
     const step = client.query.mock.calls.find(
       ([sql]) => String(sql).includes("update app.conversation_workflows"),
     );
+    // D-123: the "Domicilio, envíenlo a" lead-in is stripped from the
+    // stored/displayed address whenever the remainder still clears the
+    // tenant's own validator — the order summary shouldn't read "Domicilio,
+    // envíenlo a la calle 45..." as the delivery address.
     expect(step?.[1]).toEqual([
       "workflow-1",
       "awaiting_requirement:delivery_address:consent",
-      expect.stringContaining("Domicilio, envíenlo a la calle 45 #12-30"),
+      expect.stringContaining("la calle 45 #12-30"),
     ]);
+    expect(JSON.stringify(step?.[1])).not.toContain("Domicilio, envíenlo a");
   });
 
   it("still asks for the address next turn when a delivery message names a place but not a real address (D-117 stays conservative)", async () => {
@@ -2959,6 +2964,42 @@ describe("CommercialFlowService", () => {
       template: { namespace: "commercial", key: "address" },
       values: {},
     });
+  });
+
+  it("keeps the full message as the address when the phrasing doesn't match a known lead-in (D-123 stays conservative)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_fulfillment",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    // "Envíamelo a domicilio" isn't one of the recognized lead-in phrasings
+    // (different verb form from "envíenlo") — falls back to storing the
+    // full message verbatim, same as before D-123.
+    const reply = await service([addressRequirement]).resolve(client as never, {
+      ...input,
+      body: "Envíamelo a domicilio, la calle 45 #12-30",
+      understanding: fulfillmentUnderstanding("fulfillment.delivery"),
+    });
+
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "localized_template",
+      template: { namespace: "commercial", key: "saveAddress" },
+    });
+    const step = client.query.mock.calls.find(
+      ([sql]) => String(sql).includes("update app.conversation_workflows"),
+    );
+    expect(JSON.stringify(step?.[1])).toContain("Envíamelo a domicilio, la calle 45 #12-30");
   });
 
   it("adds an automatic packaging line (1 per N food items, rounded up) once pickup is chosen, when the tenant has one configured (D-104)", async () => {

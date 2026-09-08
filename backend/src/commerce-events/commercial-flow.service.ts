@@ -32,6 +32,7 @@ import {
   PendingRequirement,
   resolveBooleanRequirementValue,
   singularize,
+  stripDeliveryLeadIn,
   validateRequirementValue,
 } from "./requirement-loop";
 import { stepWorkflow } from "./conversation-workflow";
@@ -1091,9 +1092,20 @@ export class CommercialFlowService {
         requirement &&
         isAddressDetailedEnough(input.body, requirement.validationRule)
       ) {
+        // D-123: strip a known delivery lead-in ("Domicilio, envíenlo a...")
+        // so the saved address doesn't read as "Domicilio, envíenlo a la
+        // calle 45..." in the order summary — only when the remainder still
+        // clears the same validator; otherwise the raw message is kept, same
+        // as before D-123.
+        const stripped = stripDeliveryLeadIn(input.body);
+        const cleanedAddress =
+          stripped !== input.body &&
+          isAddressDetailedEnough(stripped, requirement.validationRule)
+            ? stripped
+            : input.body;
         const addressContext = {
           ...context,
-          address: input.body.trim().slice(0, 500),
+          address: cleanedAddress.trim().slice(0, 500),
         };
         await this.step(
           client,
@@ -1174,7 +1186,17 @@ export class CommercialFlowService {
         return requirement
           ? this.requirementPrompt(input.locale, requirement)
           : this.localizedReply(input.locale, "address");
-      const context = { ...flow.context, address };
+      // D-123: same lead-in cleanup as the D-117 fast-path above — less
+      // likely here (the customer is answering the address question
+      // directly), but a "Domicilio, ..." prefix is still harmless to catch
+      // if it shows up.
+      const strippedAddress = stripDeliveryLeadIn(address);
+      const cleanedAddress =
+        strippedAddress !== address &&
+        isAddressDetailedEnough(strippedAddress, requirement?.validationRule)
+          ? strippedAddress
+          : address;
+      const context = { ...flow.context, address: cleanedAddress };
       await this.step(
         client,
         flow.id,

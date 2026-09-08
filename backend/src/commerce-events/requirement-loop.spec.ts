@@ -5,6 +5,7 @@ import {
   nextPendingStep,
   PendingRequirement,
   resolveBooleanRequirementValue,
+  stripDeliveryLeadIn,
   validateRequirementValue,
 } from "./requirement-loop";
 
@@ -259,5 +260,37 @@ describe("extractSelfIntroducedName (D-118)", () => {
 
   it("is case-insensitive on the trigger phrase", () => {
     expect(extractSelfIntroducedName("SOY Carlos")).toBe("Carlos");
+  });
+});
+
+describe("stripDeliveryLeadIn (D-123)", () => {
+  it("strips each recognized delivery lead-in phrase", () => {
+    expect(stripDeliveryLeadIn("Domicilio, envíenlo a la calle 45 #12-30")).toBe(
+      "la calle 45 #12-30",
+    );
+    expect(stripDeliveryLeadIn("Envío a domicilio, calle 45 #12-30")).toBe(
+      "calle 45 #12-30",
+    );
+    expect(stripDeliveryLeadIn("Para domicilio: calle 45 #12-30")).toBe(
+      "calle 45 #12-30",
+    );
+    expect(stripDeliveryLeadIn("Domicilio calle 45 #12-30")).toBe(
+      "calle 45 #12-30",
+    );
+    expect(stripDeliveryLeadIn("Delivery, send it to Calle 45 #12-30")).toBe(
+      "Calle 45 #12-30",
+    );
+  });
+
+  it("returns the original text unchanged when no known lead-in is present", () => {
+    expect(stripDeliveryLeadIn("Calle 45 #12-30, portería azul")).toBe(
+      "Calle 45 #12-30, portería azul",
+    );
+  });
+
+  it("is case-insensitive", () => {
+    expect(stripDeliveryLeadIn("DOMICILIO, ENVÍENLO A la calle 45 #12-30")).toBe(
+      "la calle 45 #12-30",
+    );
   });
 });
