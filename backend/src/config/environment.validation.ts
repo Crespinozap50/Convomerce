@@ -28,6 +28,8 @@ export interface ValidatedEnvironment extends Record<string, unknown> {
   OPENAI_API_KEY:string;
   OPENAI_INPUT_COST_MINOR_PER_MILLION:number;
   OPENAI_OUTPUT_COST_MINOR_PER_MILLION:number;
+  OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED:string;
+  OPENAI_RECOMMENDATION_MODEL:string;
 }
 
 export function validateEnvironment(source: Record<string, unknown>): ValidatedEnvironment {
@@ -79,6 +81,8 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
   const responseRewritingEnabled=booleanString(source.OPENAI_RESPONSE_REWRITING_ENABLED,false,'OPENAI_RESPONSE_REWRITING_ENABLED');
   const openAiApiKey=stringValue(source.OPENAI_API_KEY,'').trim();
   if(responseRewritingEnabled==='true'&&openAiApiKey.length<20)throw new Error('OPENAI_API_KEY is required when response rewriting is enabled');
+  const consultativeRecommendationsEnabled=booleanString(source.OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED,false,'OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED');
+  if(consultativeRecommendationsEnabled==='true'&&openAiApiKey.length<20)throw new Error('OPENAI_API_KEY is required when consultative recommendations are enabled');
   return {
     ...source,
     NODE_ENV: nodeEnvironment,
@@ -112,6 +116,8 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
     OPENAI_API_KEY:openAiApiKey,
     OPENAI_INPUT_COST_MINOR_PER_MILLION:nonNegativeInteger(source.OPENAI_INPUT_COST_MINOR_PER_MILLION,100,'OPENAI_INPUT_COST_MINOR_PER_MILLION'),
     OPENAI_OUTPUT_COST_MINOR_PER_MILLION:nonNegativeInteger(source.OPENAI_OUTPUT_COST_MINOR_PER_MILLION,400,'OPENAI_OUTPUT_COST_MINOR_PER_MILLION'),
+    OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED:consultativeRecommendationsEnabled,
+    OPENAI_RECOMMENDATION_MODEL:stringValue(source.OPENAI_RECOMMENDATION_MODEL,'gpt-5.4-nano'),
   };
 }
 

@@ -49,7 +49,12 @@ values
  -- previously just a comment with no enforcement behind it — on_site is
  -- explicitly off here so that intent actually holds at runtime.
  ('0194f000-0000-7000-8000-000000000002','pickup',true),
- ('0194f000-0000-7000-8000-000000000002','on_site',false)
+ ('0194f000-0000-7000-8000-000000000002','on_site',false),
+ -- D-128: CrediCel Store is exactly the tenant this capability was designed
+ -- for — a real product storefront where a customer's need ("un computador
+ -- para diseño gráfico, tengo 3 millones") doesn't name any single product.
+ -- See 081_consultative_recommendations.sql and docs/decisions.md D-127/D-128.
+ ('0194f000-0000-7000-8000-000000000002','consultative_recommendations',true)
 on conflict(tenant_id,capability) do update set enabled=excluded.enabled,updated_at=now();
 
 insert into app.tenant_users(id,tenant_id,user_id,role,status)

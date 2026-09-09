@@ -184,6 +184,7 @@ export class MessageReceivedConsumer {
           tenantId: event.tenantId,
           conversationId: event.conversationId,
           contactId: message.rows[0].contact_id,
+          messageId: event.messageId,
           body: message.rows[0].body,
           locale: understanding.locale,
           displayName: plausibleDisplayName,

@@ -3,6 +3,7 @@ import { PoolClient } from "pg";
 import { v7 as uuidv7 } from "uuid";
 import { DeterministicReply } from "./deterministic-reply.service";
 import { RecommendationService } from "../recommendations/recommendation.service";
+import { ConsultativeRecommendationService } from "./consultative-recommendation.service";
 import {
   catalogFor,
   ConversationLocale,
@@ -200,6 +201,11 @@ export class CommercialFlowService {
   constructor(
     private readonly recommendations: RecommendationService,
     private readonly requirements: OperationalRequirementsService,
+    // D-128: optional so the many existing tests/callers that construct
+    // this service directly don't all need updating for a capability most
+    // of them never exercise — absent, tryConsultativeRecommendation just
+    // no-ops (same as the tenant capability being off).
+    private readonly consultativeRecommendations?: ConsultativeRecommendationService,
   ) {}
 
   async resolve(
@@ -387,7 +393,9 @@ export class CommercialFlowService {
     // reads as a question.
     const bareNameStart =
       !starts && match !== null && !looksLikeQuestion(input.body);
-    if (!starts && !bareNameStart) return null;
+    if (!starts && !bareNameStart) {
+      return this.tryConsultativeRecommendation(client, input);
+    }
     // Reaching here with `match` still null always means `starts` was true
     // (the `!starts && !bareNameStart` guard above already returned
     // otherwise, and bareNameStart requires match !== null) — the customer
@@ -404,6 +412,11 @@ export class CommercialFlowService {
     // permanently trapping every later message in that dead-end step
     // instead of letting a fresh order attempt through normally.
     if (!match) {
+      // D-128: reached with an explicit purchase intent ("starts") but no
+      // catalog match — tried before falling to the generic "didn't find
+      // that product" reply, same gap as the !starts branch above.
+      const consultative = await this.tryConsultativeRecommendation(client, input);
+      if (consultative) return consultative;
       const namedSomething = this.searchTerms(input).length > 0;
       const key: CommercialCopyKey = namedSomething
         ? input.understanding.entities.hasGreeting === true
@@ -1545,6 +1558,137 @@ export class CommercialFlowService {
       [timezone, languageFor(locale)],
     );
     return result.rows;
+  }
+  // D-128: separate from catalogItems() on purpose — this is the one
+  // query in the file that reads item.description, needed only by
+  // ConsultativeRecommendationService to reason over specs written in
+  // free text (no new "use case" taxonomy to maintain, see D-127/D-128).
+  // No time-window filter (D-097/D-120): a consultative "what do you
+  // recommend" isn't asking about something available right now the way
+  // "menú"/"precio" are — showing a product outside its serving window
+  // would be wrong for a taco, but this capability is designed for
+  // tenants selling durable goods (electronics, so far), where that
+  // distinction doesn't apply. Revisit if a future tenant type needs both.
+  private async consultativeCandidates(
+    client: PoolClient,
+    tenantId: string,
+    locale: Locale,
+  ): Promise<(Item & { description: string | null })[]> {
+    const result = await client.query<Item & { description: string | null }>(
+      `select item.id item_id,variant.id variant_id,
+              coalesce(item_loc.name,item.name) name,
+              coalesce(cat_loc.label,item.category) category,
+              coalesce(variant_loc.name,variant.name) variant_name,
+              variant.price_minor::text,variant.currency,item.description
+       from app.catalog_items item join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
+       left join app.catalog_item_localizations item_loc
+         on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$2
+       left join app.item_variant_localizations variant_loc
+         on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$2
+       left join app.catalog_category_localizations cat_loc
+         on cat_loc.tenant_id=item.tenant_id and cat_loc.category=item.category and cat_loc.locale=$2
+       where item.tenant_id=$1 and item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
+       order by item.name
+       limit 80`,
+      [tenantId, languageFor(locale)],
+    );
+    return result.rows;
+  }
+  // D-128: last resort inside startNewOrder(), tried only once nothing
+  // else matched — never overrides a real name/tie match, only fills the
+  // gap that otherwise falls through to the tenant's generic fallback
+  // message (see D-127's decision entry for the traced example: "tengo 3
+  // millones y necesito un computador para diseño gráfico"). Reuses the
+  // exact same tiedItems + selecting_item mechanism as a name-matching
+  // tie (D-051 etc.) — from the customer's next tap onward, an
+  // AI-sourced recommendation and a text-matched tie are indistinguishable
+  // to the rest of the flow.
+  private async tryConsultativeRecommendation(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+  ): Promise<DeterministicReply | null> {
+    if (!this.consultativeRecommendations || !input.messageId) return null;
+    // Avoids spending AI budget reasoning over a message too short to
+    // plausibly describe a real need ("hola", "ok").
+    if (input.body.trim().length < 15) return null;
+    const capability = await client.query<{ enabled: boolean }>(
+      `select enabled from app.tenant_capabilities where tenant_id=$1 and capability='consultative_recommendations'`,
+      [input.tenantId],
+    );
+    if (!capability.rows[0]?.enabled) return null;
+    const candidates = await this.consultativeCandidates(client, input.tenantId, input.locale);
+    if (candidates.length === 0) return null;
+    const picks = await this.consultativeRecommendations.recommend(
+      { tenantId: input.tenantId, conversationId: input.conversationId, messageId: input.messageId },
+      input.body,
+      candidates.map((item) => ({
+        variantId: item.variant_id,
+        name: item.name,
+        category: item.category ?? null,
+        description: item.description,
+        priceMinor: item.price_minor,
+        currency: item.currency,
+      })),
+      input.locale,
+      client,
+    );
+    if (!picks || picks.length === 0) return null;
+    const byVariantId = new Map(candidates.map((item) => [item.variant_id, item]));
+    const reasons = new Map(picks.map((pick) => [pick.variantId, pick.reason]));
+    const tied = picks
+      .map((pick) => byVariantId.get(pick.variantId))
+      .filter((item): item is Item & { description: string | null } => item !== undefined);
+    if (tied.length === 0) return null;
+    const requestId = uuidv7(),
+      flowId = uuidv7();
+    await client.query(
+      `insert into app.commercial_requests(id,tenant_id,conversation_id,contact_id,request_type,status,currency) values($1,$2,$3,$4,'order','draft',$5)`,
+      [requestId, input.tenantId, input.conversationId, input.contactId, tied[0].currency],
+    );
+    await client.query(
+      `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','selecting_item')`,
+      [flowId, input.tenantId, input.conversationId, input.contactId, requestId],
+    );
+    await this.step(client, flowId, "selecting_item", { tiedItems: tied });
+    return this.recommendationChoiceReply(input.locale, tied, reasons);
+  }
+  // D-128: same positional id/selectionIndex convention as
+  // itemChoiceInteractive (so a tap resolves through the exact same
+  // tiedItems path), but shows price and the model's short "why" per row
+  // — a customer choosing between recommended options needs that to
+  // decide, unlike itemChoiceReply's plain disambiguation-between-
+  // variants-they-already-picked use case.
+  private recommendationChoiceReply(
+    locale: Locale,
+    items: Item[],
+    reasons: Map<string, string>,
+  ): DeterministicReply {
+    const options = items.map((item, index) => {
+      const price = formatMoney(item.price_minor, item.currency, locale);
+      const reason = reasons.get(item.variant_id);
+      return {
+        id: String(index + 1),
+        title: this.truncate(item.name, 24),
+        description: this.truncate(
+          reason ? `${price} · ${reason}` : price,
+          72,
+        ),
+      };
+    });
+    const interactive: InteractiveMessage = {
+      type: "list",
+      body: "",
+      buttonLabel: this.copy(locale, "chooseButtonLabel"),
+      options,
+    };
+    return {
+      ...this.reply(this.copy(locale, "consultativeRecommendation")),
+      responsePlan: {
+        kind: "verified_content",
+        body: this.copy(locale, "consultativeRecommendation"),
+        interactive,
+      },
+    };
   }
   // Removing an item or changing its quantity should only ever match against
   // what is actually in the cart, not the whole catalog — otherwise

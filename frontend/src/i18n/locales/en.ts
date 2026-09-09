@@ -561,6 +561,10 @@ export default {
         title: "On-site service",
         help: "Offer service or consumption at the business's physical location.",
       },
+      consultative_recommendations: {
+        title: "Consultative recommendations",
+        help: "When no product is named, let the assistant suggest 2-3 real catalog items based on what the customer describes needing.",
+      },
     },
     offeringTypes: {
       product: "Product",

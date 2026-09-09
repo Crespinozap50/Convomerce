@@ -20,6 +20,7 @@ export const capabilityNames = [
   "delivery",
   "pickup",
   "on_site",
+  "consultative_recommendations",
 ] as const;
 export type CapabilityName = (typeof capabilityNames)[number];
 export type OfferingInput = {

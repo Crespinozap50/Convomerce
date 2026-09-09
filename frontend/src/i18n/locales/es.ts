@@ -568,6 +568,10 @@ export default {
         title: "Consumo o atención en el local",
         help: "Ofrece atención o consumo en el sitio físico del negocio.",
       },
+      consultative_recommendations: {
+        title: "Recomendaciones consultivas",
+        help: "Cuando el cliente no nombra un producto, deja que el asistente sugiera 2-3 productos reales del catálogo según lo que describe necesitar.",
+      },
     },
     offeringTypes: {
       product: "Producto",

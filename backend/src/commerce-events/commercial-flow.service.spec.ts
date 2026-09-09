@@ -373,6 +373,126 @@ describe("CommercialFlowService", () => {
     ).toBe(true);
   });
 
+  it("tries a consultative recommendation as a last resort when nothing matched by name, instead of the generic fallback (D-128)", async () => {
+    // "necesito un computador para diseño gráfico, tengo 3 millones" names
+    // no catalog item and isn't classified as start_order — today's
+    // behavior before D-128 was to fall straight through to the knowledge
+    // capability's generic fallback, with no help offered at all.
+    const candidateRows = [
+      {
+        item_id: "item-i7",
+        variant_id: "variant-i7",
+        name: "Laptop Creativo X1",
+        category: "computadores",
+        variant_name: "Único",
+        price_minor: "489000000",
+        currency: "COP",
+        description: "AMD Ryzen 7, 32GB RAM, tarjeta gráfica dedicada RTX 3050.",
+      },
+    ];
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.tenant_capabilities"))
+          return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return { rows: candidateRows };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "variant-i7", reason: "Tiene GPU dedicada, ideal para diseño gráfico." }]);
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: "necesito un computador para diseño gráfico, tengo 3 millones",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalledWith(
+      { tenantId: input.tenantId, conversationId: input.conversationId, messageId: "message-1" },
+      "necesito un computador para diseño gráfico, tengo 3 millones",
+      expect.arrayContaining([expect.objectContaining({ variantId: "variant-i7" })]),
+      "es",
+      client,
+    );
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "verified_content",
+      interactive: expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            title: "Laptop Creativo X1",
+            description: expect.stringContaining("Tiene GPU dedicada"),
+          }),
+        ]),
+      }),
+    });
+    expect(
+      queries.some(
+        ({ sql, params }) =>
+          sql.includes("update app.conversation_workflows") &&
+          JSON.stringify(params).includes("variant-i7"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not attempt a consultative recommendation when the tenant hasn't enabled the capability (D-128)", async () => {
+    const recommend = jest.fn();
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: false }] };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: "necesito un computador para diseño gráfico, tengo 3 millones",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).not.toHaveBeenCalled();
+    expect(reply).toBeNull();
+  });
+
   it("starts an order from a bare product name even when it collides with an FAQ keyword (regression)", async () => {
     // Bug reported live: a real customer typed "Tacos vegetarianos" right
     // after completing an unrelated order — no purchase verb, no question

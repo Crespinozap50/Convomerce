@@ -12,6 +12,7 @@ import { ConfigService } from "@nestjs/config";
 import { SECRET_PROVIDER } from "../secrets/secret-provider";
 import { DeterministicReplyService } from "./deterministic-reply.service";
 import { CommercialFlowService } from "./commercial-flow.service";
+import { ConsultativeRecommendationService } from "./consultative-recommendation.service";
 import { AppointmentFlowService } from "./appointment-flow.service";
 import { SchedulingModule } from "../scheduling/scheduling.module";
 import { RecommendationService } from "../recommendations/recommendation.service";
@@ -31,6 +32,7 @@ import { OperationalRequirementsModule } from "../operational-requirements/opera
     MessageReceivedConsumer,
     DeterministicReplyService,
     CommercialFlowService,
+    ConsultativeRecommendationService,
     AppointmentFlowService,
     RecommendationService,
     DeterministicUnderstandingProvider,
