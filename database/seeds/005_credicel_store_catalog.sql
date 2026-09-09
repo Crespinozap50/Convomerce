@@ -1,0 +1,121 @@
+\set ON_ERROR_STOP on
+
+begin;
+set local role commerce_owner;
+
+-- D-127 (docs/decisions.md): amplía el catálogo de CrediCel Store más allá
+-- de los 4 productos originales (2 celulares, 1 portátil, 1 audífonos) para
+-- dar soporte real a la recomendación consultiva diseñada en D-127 —
+-- necesita variedad de precio y categoría para que "tengo 3 millones y
+-- necesito un computador para diseño gráfico" tenga sobre qué razonar.
+-- Deliberadamente sin tags de "caso de uso": cada `description` ya trae
+-- las especificaciones reales (procesador, RAM, almacenamiento) en texto
+-- libre, tal como las escribiría el dueño del negocio — la misma señal
+-- que D-127 asume que una IA puede leer directamente, sin mantenimiento
+-- extra de una taxonomía separada.
+select set_config('app.tenant_id','0194f000-0000-7000-8000-000000000002',true);
+
+-- Enriquece la descripción del portátil ya existente (001_demo_tenants.sql)
+-- con especificaciones reales en vez del texto genérico original.
+update app.catalog_items
+   set description='Intel Core i7, 16GB RAM, 512GB SSD, tarjeta gráfica dedicada NVIDIA GTX 1650, pantalla 15.6". Recomendado para diseño gráfico, edición de video y programación exigente.',
+       updated_at=now()
+ where id='0194f005-0000-7000-8000-000000000002';
+
+insert into app.catalog_items(id,tenant_id,catalog_id,external_reference,name,description,category,status,offering_type)
+values
+ ('0194f005-0000-7000-8000-100000000005','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-5','Celular gama económica',
+  'Pantalla 6.1", 4GB RAM, 64GB de almacenamiento, cámara 13MP. Ideal para llamadas, mensajería y redes sociales sin exigencias altas.',
+  'celulares','active','product'),
+ ('0194f005-0000-7000-8000-100000000006','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-6','Portátil para ofimática',
+  'Intel Celeron, 8GB RAM, 256GB SSD, pantalla 14". Pensado para trámites, navegación, correo y ofimática básica (Word, Excel).',
+  'computadores','active','product'),
+ ('0194f005-0000-7000-8000-100000000007','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-7','Portátil para estudio',
+  'Intel Core i5, 8GB RAM, 512GB SSD, pantalla 15.6". Cómodo para estudio, multitarea liviana y hojas de cálculo exigentes.',
+  'computadores','active','product'),
+ ('0194f005-0000-7000-8000-100000000008','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-8','Portátil gama alta para creativos',
+  'AMD Ryzen 7, 32GB RAM, 1TB SSD, tarjeta gráfica dedicada RTX 3050, pantalla 15.6" con calibración de color. Pensado para diseño gráfico profesional, edición de video 4K e ilustración digital.',
+  'computadores','active','product'),
+ ('0194f005-0000-7000-8000-100000000009','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-9','Tablet básica',
+  'Pantalla 10.1", 4GB RAM, 64GB de almacenamiento. Ideal para lectura, video y uso escolar liviano.',
+  'tablets','active','product'),
+ ('0194f005-0000-7000-8000-100000000010','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-10','Tablet para dibujo y notas',
+  'Pantalla 11" compatible con lápiz óptico (se vende por separado), 6GB RAM, 128GB de almacenamiento. Buena opción para tomar notas a mano y bocetos digitales.',
+  'tablets','active','product'),
+ ('0194f005-0000-7000-8000-100000000011','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-11','Cámara compacta digital',
+  '20MP, zoom óptico 5x, grabación de video Full HD. Ideal para fotografía casual y viajes.',
+  'camaras','active','product'),
+ ('0194f005-0000-7000-8000-100000000012','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-12','Cámara de acción',
+  'Resistente al agua, grabación 4K, montajes incluidos. Ideal para deportes y contenido para redes sociales.',
+  'camaras','active','product'),
+ ('0194f005-0000-7000-8000-100000000013','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-13','Cargador rápido USB-C',
+  'Carga rápida 25W, compatible con la mayoría de celulares y tablets actuales.',
+  'accesorios','active','product'),
+ ('0194f005-0000-7000-8000-100000000014','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-14','Power bank 10000mAh',
+  'Batería portátil de 10000mAh, dos puertos de salida, carga rápida.',
+  'accesorios','active','product'),
+ ('0194f005-0000-7000-8000-100000000015','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-15','Funda protectora para celular',
+  'Funda de silicona resistente a caídas, disponible para los modelos de celular que manejamos.',
+  'accesorios','active','product'),
+ ('0194f005-0000-7000-8000-100000000016','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-16','Mouse inalámbrico',
+  'Mouse inalámbrico con receptor USB, ergonómico, pensado para uso con portátiles.',
+  'accesorios','active','product'),
+ ('0194f005-0000-7000-8000-100000000017','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-17','Vidrio templado para celular',
+  'Protector de pantalla en vidrio templado 9H, instalación incluida en tienda.',
+  'protectores','active','product'),
+ ('0194f005-0000-7000-8000-100000000018','0194f000-0000-7000-8000-000000000002','0194f004-0000-7000-8000-000000000002',
+  'TECH-DEMO-18','Vidrio templado para tablet',
+  'Protector de pantalla en vidrio templado 9H para tablet, instalación incluida en tienda.',
+  'protectores','active','product')
+on conflict(id) do update set name=excluded.name,description=excluded.description,category=excluded.category,
+ status=excluded.status,offering_type=excluded.offering_type,updated_at=now();
+
+insert into app.item_variants(id,tenant_id,catalog_item_id,sku,name,status,price_minor,currency,availability_status)
+values
+ ('0194f006-0000-7000-8000-100000000005','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000005',
+  'TECH-VAR-5','Único','active',45000000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000006','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000006',
+  'TECH-VAR-6','Único','active',179000000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000007','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000007',
+  'TECH-VAR-7','Único','active',269000000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000008','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000008',
+  'TECH-VAR-8','Único','active',489000000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000009','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000009',
+  'TECH-VAR-9','Único','active',65000000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000010','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000010',
+  'TECH-VAR-10','Único','active',145000000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000011','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000011',
+  'TECH-VAR-11','Único','active',98000000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000012','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000012',
+  'TECH-VAR-12','Único','active',65000000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000013','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000013',
+  'TECH-VAR-13','Único','active',6500000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000014','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000014',
+  'TECH-VAR-14','Único','active',9500000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000015','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000015',
+  'TECH-VAR-15','Único','active',3500000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000016','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000016',
+  'TECH-VAR-16','Único','active',5500000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000017','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000017',
+  'TECH-VAR-17','Único','active',2500000,'COP','available'),
+ ('0194f006-0000-7000-8000-100000000018','0194f000-0000-7000-8000-000000000002','0194f005-0000-7000-8000-100000000018',
+  'TECH-VAR-18','Único','active',4500000,'COP','available')
+on conflict(id) do update set name=excluded.name,status=excluded.status,price_minor=excluded.price_minor,
+ currency=excluded.currency,availability_status=excluded.availability_status,updated_at=now();
+
+select set_config('app.tenant_id','',true);
+
+commit;
