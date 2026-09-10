@@ -493,6 +493,163 @@ describe("CommercialFlowService", () => {
     expect(reply).toBeNull();
   });
 
+  it("shows the full untruncated recommendation details when 'Ver más información' is tapped, without adding anything to the cart (D-128)", async () => {
+    const tiedItems = [
+      {
+        item_id: "item-i7",
+        variant_id: "variant-i7",
+        name: "Portátil gama alta para creativos",
+        category: "computadores",
+        variant_name: "Único",
+        price_minor: "489000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = {
+      "variant-i7":
+        "Tiene GPU dedicada, ideal para diseño gráfico profesional con mucha memoria RAM y buen rendimiento sostenido en proyectos exigentes.",
+    };
+    const queries: { sql: string }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        queries.push({ sql });
+        if (sql.includes("from app.conversation_workflows where conversation_id")) {
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons },
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+    ).resolve(client as never, {
+      ...input,
+      body: "2",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { selectionIndex: 2 },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "verified_content",
+      body: expect.stringContaining("Tiene GPU dedicada, ideal para diseño gráfico profesional"),
+      interactive: expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({ id: "2", title: expect.stringContaining("Ver más") }),
+        ]),
+      }),
+    });
+    expect((reply?.responsePlan as { body: string }).body).toContain("Portátil gama alta para creativos");
+    expect(
+      queries.some(({ sql }) => sql.includes("insert into app.request_lines")),
+    ).toBe(false);
+  });
+
+  it("re-shows the recommended options instead of guessing a wrong one, when free text is typed instead of tapping (D-129 live finding)", async () => {
+    // Found live: a customer re-typed roughly the same need-description
+    // ("...tengo 3 millones...") instead of tapping one of the recommended
+    // options. Before this fix, that fell through to matching against the
+    // *entire* catalog by shared word — "diseño" alone matched "Tablet
+    // premium para diseño" (a product never offered in this recommendation
+    // at all), and "3" from "3 millones" was misread as a quantity,
+    // silently adding 3 of it to the cart with no confirmation.
+    const tiedItems = [
+      {
+        item_id: "item-dell",
+        variant_id: "variant-dell",
+        name: "Portátil Dell para oficina",
+        category: "computadores",
+        variant_name: "Único",
+        price_minor: "195000000",
+        currency: "COP",
+      },
+      {
+        item_id: "item-demo",
+        variant_id: "variant-demo",
+        name: "Equipo portátil demo",
+        category: "computadores",
+        variant_name: "Configuración base",
+        price_minor: "350000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = {
+      "variant-dell": "Buena opción de oficina.",
+      "variant-demo": "Tiene tarjeta gráfica dedicada para diseño.",
+    };
+    const queries: { sql: string }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        queries.push({ sql });
+        if (sql.includes("from app.conversation_workflows where conversation_id")) {
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons },
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+    ).resolve(client as never, {
+      ...input,
+      body: "Necesito un computador para diseño gráfico, tengo 3 millones de pesos, ¿qué me pueden ofrecer?",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "verified_content",
+      interactive: expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({ id: "1", title: expect.stringContaining("Portátil Dell") }),
+          expect.objectContaining({ id: "2", title: "Equipo portátil demo" }),
+        ]),
+      }),
+    });
+    expect(
+      queries.some(({ sql }) => sql.includes("insert into app.request_lines")),
+    ).toBe(false);
+  });
+
   it("starts an order from a bare product name even when it collides with an FAQ keyword (regression)", async () => {
     // Bug reported live: a real customer typed "Tacos vegetarianos" right
     // after completing an unrelated order — no purchase verb, no question

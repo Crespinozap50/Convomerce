@@ -4,6 +4,8 @@
   "greetingItem": "¡Hola! Soy {{assistant}}, el asistente virtual de {{business}}. ¿Qué producto deseas pedir?",
   "itemUnknown": "No encontré ese producto. Estas son nuestras opciones:",
   "consultativeRecommendation": "Con base en lo que buscas, estas opciones podrían servirte:",
+  "consultativeRecommendationDetail": "Aquí tienes la información completa de cada opción:",
+  "viewMoreInfoOption": "Ver más información",
   "greetingItemUnknown": "¡Hola! Soy {{assistant}}, el asistente virtual de {{business}}. No encontré ese producto. Estas son nuestras opciones:",
   "viewMenuButton": "Ver menú",
   "itemsNotFound": "No encontré: {{items}}. Agregué el resto a tu pedido.",

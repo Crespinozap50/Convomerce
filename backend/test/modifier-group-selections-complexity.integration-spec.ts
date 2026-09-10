@@ -580,9 +580,18 @@ describe('D-099 — modifier group selections, harder shapes and a second tenant
     });
 
     it('leaves a plain order with no modifiers on this same tenant completely unaffected (regression)', async () => {
+      // D-127/D-128 grew this tenant's catalog from 4 to 37+ real products
+      // for the consultative-recommendation feature — `limit 1` with no
+      // `order by` is undefined which row comes back, and several of the
+      // new products are deliberately similarly-named ("Celular gama
+      // media" / "Celular Samsung gama media", etc.), so an arbitrary pick
+      // can now tie against a sibling product where it didn't when this
+      // tenant only had a handful of unrelated items. `order by name` pins
+      // it to "Adaptador USB-C multipuerto", verified not to share enough
+      // name tokens with anything else in this catalog to tie.
       const plainItem = await pool.query<{ name: string }>(
         `select name from app.catalog_items
-          where tenant_id = $1 and status = 'active' and category <> 'prueba' limit 1`,
+          where tenant_id = $1 and status = 'active' and category <> 'prueba' order by name limit 1`,
         [tenantId],
       );
       const name = plainItem.rows[0]?.name;

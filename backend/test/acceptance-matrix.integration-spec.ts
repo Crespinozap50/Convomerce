@@ -195,11 +195,17 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
 
   describe.each(allTenants)('$slug', (tenant) => {
     it('está alcanzable y expone exactamente las capacidades de la matriz', async () => {
+      // El dueño del proyecto solo tiene un número real de WhatsApp y lo va
+      // alternando entre tenants para pruebas — el tenant que no lo tiene en
+      // ese momento queda con status='disabled' a propósito, no por un canal
+      // mal configurado (ver D-129). Esta prueba solo debe detectar la clase
+      // de bug D-082/083/084 (un tenant sin canal alguno), no la rotación
+      // deliberada del único número real disponible.
       const channel = await pool.query<{ status: string }>(
         'select status from app.channels where id = $1 and tenant_id = $2',
         [tenant.channelId, tenant.tenantId],
       );
-      expect(channel.rows[0]?.status).toBe('active');
+      expect(['active', 'disabled']).toContain(channel.rows[0]?.status);
 
       const caps = await pool.query<{ capability: string; enabled: boolean }>(
         'select capability, enabled from app.tenant_capabilities where tenant_id = $1',

@@ -393,8 +393,30 @@ export class CommercialFlowService {
     // reads as a question.
     const bareNameStart =
       !starts && match !== null && !looksLikeQuestion(input.body);
-    if (!starts && !bareNameStart) {
-      return this.tryConsultativeRecommendation(client, input);
+    // D-129 live finding: scoreCandidatesByTokens has no minimum overlap —
+    // one shared word is enough to call it an unambiguous match, safe for
+    // a short, direct mention ("Tacos vegetarianos") but found live to
+    // silently misfire on a long need-description that happens to share
+    // exactly one word with an unrelated product ("diseño" alone matched
+    // "Tablet premium para diseño", adding 3 of them with no confirmation
+    // — "3" misread from "3 millones"). looksLikeQuestion alone didn't
+    // catch this, since the message never needs a "?" to be a
+    // description. When the match consumes only a small fraction of what
+    // the customer actually said, try the consultative recommendation
+    // first — it only ever picks from the real catalog too, so this can
+    // only make the outcome *more* deliberate, never less safe — and only
+    // fall back to trusting the weak match if that comes back empty
+    // (disabled tenant, too-short message, or the AI found nothing
+    // better). A confident bareNameStart match is untouched: it never
+    // reaches here.
+    const weakMatch =
+      match !== null &&
+      this.searchTerms(input).length >
+        norm(match.name).split(" ").filter(Boolean).length + 2;
+    if (!starts && (!bareNameStart || weakMatch)) {
+      const consultative = await this.tryConsultativeRecommendation(client, input);
+      if (consultative) return consultative;
+      if (!bareNameStart) return null;
     }
     // Reaching here with `match` still null always means `starts` was true
     // (the `!starts && !bareNameStart` guard above already returned
@@ -736,6 +758,25 @@ export class CommercialFlowService {
     // forever. See itemChoiceReply for the id/selectionIndex convention.
     const tiedItems = flow.context.tiedItems as Item[] | undefined;
     const selectionIndex = input.understanding.entities.selectionIndex;
+    // D-128: the extra "Ver más información" row recommendationInteractive
+    // appends past the real options (consultativeReasons is only ever set
+    // by tryConsultativeRecommendation, never by a name-matching tie, so
+    // this never fires for the ordinary disambiguation case). Doesn't
+    // touch workflow state — the same tiedItems/consultativeReasons stay
+    // in context, so tapping a real option right after still resolves
+    // normally, and tapping this again just repeats it.
+    const consultativeReasonsRaw = flow.context.consultativeReasons as Record<string, string> | undefined;
+    if (
+      tiedItems &&
+      consultativeReasonsRaw &&
+      selectionIndex === tiedItems.length + 1
+    ) {
+      return this.recommendationDetailReply(
+        input.locale,
+        tiedItems,
+        new Map(Object.entries(consultativeReasonsRaw)),
+      );
+    }
     const tiedChoice =
       tiedItems && typeof selectionIndex === "number"
         ? tiedItems[selectionIndex - 1]
@@ -767,6 +808,24 @@ export class CommercialFlowService {
         flow.commercial_request_id,
         flow.id,
         tiedChoice,
+      );
+    }
+    // D-129 live finding: free text that doesn't tap one of the recommended
+    // options must never fall through to matching against the *whole*
+    // catalog below — a customer re-describing their need in their own
+    // words ("...tengo 3 millones...") is exactly the kind of long,
+    // natural-language message likely to spuriously token-match some
+    // unrelated item by a single shared word (found live: "diseño" alone
+    // matched "Tablet premium para diseño", silently adding 3 of them —
+    // "3" misread from "3 millones"). A name-matching tie doesn't carry
+    // consultativeReasons and is unaffected; re-showing the same
+    // recommended options is always safe here, since nothing was silently
+    // guessed either way.
+    if (tiedItems && consultativeReasonsRaw) {
+      return this.recommendationChoiceReply(
+        input.locale,
+        tiedItems,
+        new Map(Object.entries(consultativeReasonsRaw)),
       );
     }
     // "Cambiar producto" (replaceItem) swaps one specific line, not a
@@ -1649,7 +1708,10 @@ export class CommercialFlowService {
       `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','selecting_item')`,
       [flowId, input.tenantId, input.conversationId, input.contactId, requestId],
     );
-    await this.step(client, flowId, "selecting_item", { tiedItems: tied });
+    await this.step(client, flowId, "selecting_item", {
+      tiedItems: tied,
+      consultativeReasons: Object.fromEntries(reasons),
+    });
     return this.recommendationChoiceReply(input.locale, tied, reasons);
   }
   // D-128: same positional id/selectionIndex convention as
@@ -1657,12 +1719,33 @@ export class CommercialFlowService {
   // tiedItems path), but shows price and the model's short "why" per row
   // — a customer choosing between recommended options needs that to
   // decide, unlike itemChoiceReply's plain disambiguation-between-
-  // variants-they-already-picked use case.
+  // variants-they-already-picked use case. A row's own 72-char
+  // `description` cap (WhatsApp's own list-row limit, not ours) often
+  // isn't enough room for a real reason next to the price — found live,
+  // D-128 — so an extra row past the real options (same
+  // items.length+1 convention as itemChoiceInteractive's "Todas") offers
+  // the untruncated version instead of just losing the tail of the
+  // sentence. Resolved in handleSelectingItem, not here.
   private recommendationChoiceReply(
     locale: Locale,
     items: Item[],
     reasons: Map<string, string>,
   ): DeterministicReply {
+    const interactive = this.recommendationInteractive(locale, items, reasons);
+    return {
+      ...this.reply(this.copy(locale, "consultativeRecommendation")),
+      responsePlan: {
+        kind: "verified_content",
+        body: this.copy(locale, "consultativeRecommendation"),
+        interactive,
+      },
+    };
+  }
+  private recommendationInteractive(
+    locale: Locale,
+    items: Item[],
+    reasons: Map<string, string>,
+  ): InteractiveMessage {
     const options = items.map((item, index) => {
       const price = formatMoney(item.price_minor, item.currency, locale);
       const reason = reasons.get(item.variant_id);
@@ -1675,18 +1758,42 @@ export class CommercialFlowService {
         ),
       };
     });
-    const interactive: InteractiveMessage = {
+    return {
       type: "list",
       body: "",
       buttonLabel: this.copy(locale, "chooseButtonLabel"),
-      options,
+      options: [
+        ...options,
+        {
+          id: String(items.length + 1),
+          title: this.truncate(this.copy(locale, "viewMoreInfoOption"), 24),
+        },
+      ],
     };
+  }
+  // D-128 live finding: a recommendation's reason routinely runs past the
+  // 72-char room a WhatsApp list row's description leaves once the price
+  // is also there — this shows every pick's full name, price and reason
+  // as plain text, then re-attaches the exact same tappable list so the
+  // customer can still choose right after reading it, instead of having
+  // to re-ask for the options again.
+  private recommendationDetailReply(
+    locale: Locale,
+    items: Item[],
+    reasons: Map<string, string>,
+  ): DeterministicReply {
+    const lines = items.map((item, index) => {
+      const price = formatMoney(item.price_minor, item.currency, locale);
+      const reason = reasons.get(item.variant_id);
+      return `${index + 1}. ${item.name} — ${price}${reason ? `\n${reason}` : ""}`;
+    });
+    const body = `${this.copy(locale, "consultativeRecommendationDetail")}\n\n${lines.join("\n\n")}`;
     return {
-      ...this.reply(this.copy(locale, "consultativeRecommendation")),
+      ...this.reply(body),
       responsePlan: {
         kind: "verified_content",
-        body: this.copy(locale, "consultativeRecommendation"),
-        interactive,
+        body,
+        interactive: this.recommendationInteractive(locale, items, reasons),
       },
     };
   }

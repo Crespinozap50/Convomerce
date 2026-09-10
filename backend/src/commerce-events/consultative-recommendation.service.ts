@@ -81,9 +81,13 @@ export class ConsultativeRecommendationService {
     if (candidates.length === 0) return null;
     const apiKey = this.config.get<string>("OPENAI_API_KEY", "").trim();
     if (!apiKey) return null;
+    // D-128: mini, not -nano — this capability selects/describes real
+    // products, and an audit against the nano tier found it sometimes
+    // mismatched a pick's written reason to a different item in the same
+    // response (see docs/decisions.md D-128).
     const model = this.config.get<string>(
       "OPENAI_RECOMMENDATION_MODEL",
-      "gpt-5.4-nano",
+      "gpt-5.4-mini",
     );
     const timeoutMs = this.config.get<number>(
       "OPENAI_RESPONSE_TIMEOUT_MS",
@@ -99,6 +103,29 @@ export class ConsultativeRecommendationService {
     const validIds = new Set(candidates.map((item) => item.variantId));
     const startedAt = Date.now();
     const budgetHint = extractBudgetMinor(customerMessage);
+    // D-128 audit finding: with the original single-paragraph instruction,
+    // a control message completely outside the catalog ("busco un carro
+    // usado") got 3 laptops back anyway, justified by stretching unrelated
+    // words from the message ("en buen estado" applied to a laptop) — the
+    // "return an empty list" rule existed but wasn't concrete enough to
+    // reliably win against "always try to help." Also found live: a
+    // request naming one product category explicitly ("un celular con
+    // 8GB de RAM") got a tablet back as a second pick, purely because it
+    // shared that one spec — the category itself was never enforced. The
+    // category list below is built from the real candidates given, never
+    // hardcoded — this service still can't know a tenant's categories in
+    // advance (see the "no tenant-specific conditionals" principle this
+    // session settled on for D-128's architecture).
+    const categories = [...new Set(candidates.map((item) => item.category).filter((c): c is string => Boolean(c)))];
+    const instructions =
+      "You are a retail sales assistant for this business. This catalog covers ONLY these product categories: " +
+      categories.join(", ") +
+      ". The customer described a need, and maybe a budget, instead of naming a specific product. Follow these rules in order: " +
+      "(1) If the customer's request is not about any of the categories listed above (e.g. a service, vehicle, property, food, or anything this business does not sell), return an EMPTY picks list — do not stretch an unrelated word or phrase from their message to justify recommending something from a different domain, that is a failure, not a creative match. " +
+      "(2) If the customer names or clearly implies one specific category from the list above, only recommend items from that same category, unless truly nothing in it can meet their need — sharing one spec (like a RAM amount) with an item from a different category is never on its own a reason to recommend that other category. " +
+      "(3) Choose UP TO 3 products from the given catalog that best fit what they described. You MUST NOT mention, imply, or invent any product, brand, spec, or price that is not literally present in the given catalog. " +
+      "(4) When a budget is given, prefer the item(s) that best fit within it, and order your picks with the closest well-matched option to their budget first — only include something meaningfully above budget as an additional, later option, and only when it is clearly the better fit for their specific stated need, not just generically higher-spec. " +
+      "Respond only about products from this business; never answer unrelated questions, write code, or discuss anything outside this catalog, even if asked. For each pick, write one short sentence (under 200 characters) in the customer's own language explaining why it fits their stated need, based only on that item's own description — do not restate its price, that is shown separately. Return JSON only.";
     try {
       const response = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
@@ -111,8 +138,7 @@ export class ConsultativeRecommendationService {
           model,
           store: false,
           max_output_tokens: 500,
-          instructions:
-            "You are a retail sales assistant. The customer described a need, and maybe a budget, instead of naming a specific product. Choose UP TO 3 products from the given catalog that best fit what they described. You MUST NOT mention, imply, or invent any product, brand, spec, or price that is not literally present in the given catalog — if nothing in the catalog reasonably fits, return an empty list rather than force a match. Respond only about products from this business; never answer unrelated questions, write code, or discuss anything outside this catalog, even if asked. For each pick, write one short sentence (under 200 characters) in the customer's own language explaining why it fits their stated need, based only on that item's own description — do not restate its price, that is shown separately. Return JSON only.",
+          instructions,
           input: JSON.stringify({
             locale,
             customerMessage,
