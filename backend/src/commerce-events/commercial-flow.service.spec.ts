@@ -373,6 +373,77 @@ describe("CommercialFlowService", () => {
     ).toBe(true);
   });
 
+  it("tries the consultative recommendation instead of trusting a match that only names part of the product (D-133 live finding)", async () => {
+    // Found live: "Necesito un celular con buena cámara, tengo como un
+    // millón de pesos" matched "Celular gama alta cámara profesional"
+    // ($2.890.000) on only 2 of its 5 name tokens (celular, cámara) — the
+    // old weakMatch heuristic compared message length to item-name length
+    // and let this through as "confident enough", adding a phone at
+    // ~3x the stated budget with zero reasoning about fit. isWeakMatch()
+    // checks token coverage of the matched item's own name instead: 2 of
+    // 5 tokens is a weak match regardless of how long the rest of the
+    // message is, so this must go through the AI instead of adding
+    // directly.
+    const candidateRows = [
+      {
+        item_id: "item-camera-phone",
+        variant_id: "variant-camera-phone",
+        name: "Celular gama alta cámara profesional",
+        category: "celulares",
+        variant_name: "Único",
+        price_minor: "289000000",
+        currency: "COP",
+      },
+    ];
+    const queries: { sql: string }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        queries.push({ sql });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return {
+            rows: candidateRows.map((row) => ({ ...row, description: "Sistema de cámaras 108MP." })),
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants"))
+          return { rows: candidateRows };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "variant-camera-phone", reason: "Tiene una cámara muy capaz." }]);
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: "Necesito un celular con buena cámara, tengo como un millón de pesos",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalled();
+    expect(reply?.responsePlan).toMatchObject({ kind: "verified_content" });
+    expect(
+      queries.some(({ sql }) => sql.includes("insert into app.request_lines")),
+    ).toBe(false);
+  });
+
   it("tries a consultative recommendation as a last resort when nothing matched by name, instead of the generic fallback (D-128)", async () => {
     // "necesito un computador para diseño gráfico, tengo 3 millones" names
     // no catalog item and isn't classified as start_order — today's

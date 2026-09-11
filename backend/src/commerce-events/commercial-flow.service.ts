@@ -401,18 +401,16 @@ export class CommercialFlowService {
     // "Tablet premium para diseño", adding 3 of them with no confirmation
     // — "3" misread from "3 millones"). looksLikeQuestion alone didn't
     // catch this, since the message never needs a "?" to be a
-    // description. When the match consumes only a small fraction of what
-    // the customer actually said, try the consultative recommendation
+    // description. When the match only says *part* of what the matched
+    // item is actually called (isWeakMatch, D-133 — missing more than one
+    // of the item's own name words), try the consultative recommendation
     // first — it only ever picks from the real catalog too, so this can
     // only make the outcome *more* deliberate, never less safe — and only
     // fall back to trusting the weak match if that comes back empty
     // (disabled tenant, too-short message, or the AI found nothing
     // better). A confident bareNameStart match is untouched: it never
     // reaches here.
-    const weakMatch =
-      match !== null &&
-      this.searchTerms(input).length >
-        norm(match.name).split(" ").filter(Boolean).length + 2;
+    const weakMatch = match !== null && this.isWeakMatch(match, input);
     if (!starts && (!bareNameStart || weakMatch)) {
       const consultative = await this.tryConsultativeRecommendation(client, input);
       if (consultative) return consultative;
@@ -3792,5 +3790,24 @@ export class CommercialFlowService {
     return Array.isArray(value)
       ? value.filter((term): term is string => typeof term === "string")
       : [];
+  }
+  // D-133 live finding: comparing message length to item-name length (the
+  // original weakMatch heuristic) missed this — "Necesito un celular con
+  // buena cámara, tengo un millón" (7 search terms) matched "Celular gama
+  // alta cámara profesional" (5 name tokens) on only 2 of those 5 tokens
+  // (celular, cámara), landing just inside the old "+2" buffer and getting
+  // trusted directly — adding a $2.890.000 phone to the cart with zero
+  // consultative reasoning against a stated ~$1.000.000 budget. The real
+  // question was never "how long is the message" but "how much of the
+  // matched item's OWN name did the message actually say" — scoring rules
+  // by matches to searchTerms(input) already answers that, this just
+  // re-checks it: a match missing more than one of its own name's words is
+  // weak, regardless of how long or short the rest of the message is.
+  private isWeakMatch(match: Item, input: UnderstoodFlowInput): boolean {
+    const searchTerms = new Set(this.searchTerms(input).map(singularize));
+    const nameTokens = norm(match.name).split(" ").filter(Boolean);
+    if (nameTokens.length === 0) return false;
+    const matchedTokens = nameTokens.filter((token) => searchTerms.has(singularize(token))).length;
+    return matchedTokens < nameTokens.length - 1;
   }
 }
