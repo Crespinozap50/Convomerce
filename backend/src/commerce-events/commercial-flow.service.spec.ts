@@ -564,6 +564,65 @@ describe("CommercialFlowService", () => {
     ).toBe(false);
   });
 
+  it("falls through to the tenant's normal fallback, never forcing a pick, when the AI finds nothing that reasonably fits (D-131)", async () => {
+    // "Necesito comprar un carro usado" is completely outside any
+    // electronics category CrediCel Store sells — the AI is instructed to
+    // return an empty picks list rather than force a match (see
+    // consultative-recommendation.service.ts's off-topic rule), and
+    // nothing here should ever paper over that with a guess. Confirmed
+    // live against real OpenAI in D-129/D-131's manual audits; this pins
+    // the branch at the unit level too.
+    const recommend = jest.fn().mockResolvedValue([]);
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return {
+            rows: [
+              {
+                item_id: "item-i7",
+                variant_id: "variant-i7",
+                name: "Equipo portátil demo",
+                category: "computadores",
+                variant_name: "Configuración base",
+                price_minor: "350000000",
+                currency: "COP",
+                description: "Intel Core i7, tarjeta gráfica dedicada.",
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: "Necesito comprar un carro usado, ¿qué me recomiendan?",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalled();
+    expect(reply).toBeNull();
+  });
+
   it("re-shows the recommended options instead of guessing a wrong one, when free text is typed instead of tapping (D-129 live finding)", async () => {
     // Found live: a customer re-typed roughly the same need-description
     // ("...tengo 3 millones...") instead of tapping one of the recommended
