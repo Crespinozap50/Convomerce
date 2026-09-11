@@ -332,7 +332,11 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
     const fundaName = 'Funda protectora para celular';
     const credicelConversationIds: string[] = [];
 
-    async function sendCredicel(providerSubject: string, text: string) {
+    async function sendCredicel(
+      providerSubject: string,
+      text: string,
+      interactiveSelection?: { type: 'button' | 'list'; id: string; title: string },
+    ) {
       const id = uuidv7();
       const result = await messages.receive({
         tenantId,
@@ -341,6 +345,7 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
         externalEventId: `${providerSubject}-${id}`,
         externalMessageId: `${providerSubject}-${id}`,
         text,
+        ...(interactiveSelection ? { interactiveSelection } : {}),
       });
       if (!credicelConversationIds.includes(result.conversationId)) {
         credicelConversationIds.push(result.conversationId);
@@ -353,13 +358,17 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
           conversationId: result.conversationId,
         });
       }
-      const reply = await pool.query<{ body: string }>(
-        `select content->>'body' as body from app.messages
+      const reply = await pool.query<{ body: string; interactive: unknown }>(
+        `select content->>'body' as body, content->'interactive' as interactive from app.messages
           where conversation_id = $1 and direction = 'outbound'
           order by occurred_at desc, id desc limit 1`,
         [result.conversationId],
       );
-      return { body: reply.rows[0]?.body ?? null, conversationId: result.conversationId };
+      return {
+        body: reply.rows[0]?.body ?? null,
+        interactive: reply.rows[0]?.interactive ?? null,
+        conversationId: result.conversationId,
+      };
     }
 
     afterAll(async () => {
@@ -389,6 +398,92 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
         expect.stringContaining(celularName),
         expect.stringContaining(fundaName),
       ]);
+    });
+
+    it('agrega los tres productos reales nombrados en un solo mensaje (3+ productos)', async () => {
+      const providerSubject = `credicel-multi3-${shortSuffix}`;
+      const cargadorName = 'Cargador rápido USB-C';
+      const reply = await sendCredicel(
+        providerSubject,
+        `Quiero un ${celularName}, una ${fundaName} y un ${cargadorName}`,
+      );
+
+      const lines = await pool.query<{ description_snapshot: string }>(
+        `select line.description_snapshot from app.request_lines line
+           join app.commercial_requests request on request.id = line.commercial_request_id
+          where request.conversation_id = $1 and line.status = 'active'
+          order by line.created_at`,
+        [reply.conversationId],
+      );
+      expect(lines.rows.map((row) => row.description_snapshot)).toEqual([
+        expect.stringContaining(celularName),
+        expect.stringContaining(fundaName),
+        expect.stringContaining(cargadorName),
+      ]);
+    });
+
+    it('agrega el producto claro y ofrece desambiguación para el ambiguo, en el mismo mensaje, sin perder ninguno de los dos', async () => {
+      // A diferencia del bloque de Santos Tacos (ítems de fixture creados a
+      // propósito para garantizar el empate), esto usa un empate real del
+      // catálogo de CrediCel: "celular gama alta" coincide igual de bien
+      // (mismos 3 tokens: celular/gama/alta) contra "Celular gama alta
+      // (256 GB)" y "Celular gama alta cámara profesional" — ninguno de
+      // los dos nombra la especificación que los distingue.
+      const providerSubject = `credicel-tie-${shortSuffix}`;
+      const gamaAlta256 = 'Celular gama alta (256 GB)';
+      const gamaAltaCamara = 'Celular gama alta cámara profesional';
+
+      const first = await sendCredicel(
+        providerSubject,
+        `Quiero un ${celularName} y un celular gama alta`,
+      );
+      expect(first.body).toContain(celularName);
+      expect(first.body).toContain('Encontré varias opciones, ¿cuál prefieres?');
+      expect(first.interactive).toMatchObject({
+        type: 'list',
+        body: first.body,
+        buttonLabel: 'Elegir',
+        options: [
+          expect.objectContaining({ id: '1', title: expect.stringContaining('Celular gama alta') }),
+          expect.objectContaining({ id: '2', title: expect.stringContaining('Celular gama alta') }),
+        ],
+      });
+
+      const claroLines = await pool.query<{ description_snapshot: string }>(
+        `select line.description_snapshot from app.request_lines line
+           join app.commercial_requests request on request.id = line.commercial_request_id
+          where request.conversation_id = $1 and line.status = 'active'`,
+        [first.conversationId],
+      );
+      expect(claroLines.rows.map((row) => row.description_snapshot)).toEqual([
+        expect.stringContaining(celularName),
+      ]);
+
+      // Resolves by tapping the first tied option's id — which real product
+      // that lands on doesn't matter for this test, only that the tie
+      // resolves cleanly and both cart lines end up correct.
+      const options = (first.interactive as { options: { id: string; title: string }[] }).options;
+      const chosen = options[0];
+      const second = await sendCredicel(providerSubject, chosen.title, {
+        type: 'list',
+        id: chosen.id,
+        title: chosen.title,
+      });
+      expect(second.body).toContain(celularName);
+
+      const finalLines = await pool.query<{ description_snapshot: string }>(
+        `select line.description_snapshot from app.request_lines line
+           join app.commercial_requests request on request.id = line.commercial_request_id
+          where request.conversation_id = $1 and line.status = 'active'
+          order by line.created_at`,
+        [first.conversationId],
+      );
+      expect(finalLines.rows).toHaveLength(2);
+      expect(finalLines.rows[0].description_snapshot).toContain(celularName);
+      expect(
+        finalLines.rows[1].description_snapshot.includes(gamaAlta256) ||
+          finalLines.rows[1].description_snapshot.includes(gamaAltaCamara),
+      ).toBe(true);
     });
   });
 });
