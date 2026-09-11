@@ -380,12 +380,12 @@ export default {
     messageRetentionDisabled: "Never",
     messageRetentionHelp:
       "Messages older than this are permanently deleted, even if the conversation is still active. Minimum 7 days. Leave blank to never delete.",
-    aiRewriting: "Natural AI wording",
+    aiRewriting: "AI budget (wording & recommendations)",
     aiRewritingHelp:
-      "Optionally improves the tone after the safe deterministic response is built.",
-    aiEnabled: "Allow AI rewriting",
+      "One shared budget for improving reply tone and for consultative product recommendations (if enabled under Knowledge). Neither ever replaces the safe deterministic flow.",
+    aiEnabled: "Allow AI usage",
     aiEnabledHelp:
-      "Budget and rollout limits still apply. Safe fallback remains available.",
+      "Applies to both reply-tone wording and consultative product recommendations. Budget and rollout limits still apply. Safe fallback remains available.",
     aiRollout: "Eligible conversations (%)",
     aiDailyLimit: "Daily request limit",
     aiMonthlyBudget: "Monthly budget ({{currency}})",

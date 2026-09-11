@@ -316,4 +316,79 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
     );
     expect(lines.rows).toHaveLength(0);
   });
+
+  // D-130: a diferencia del bloque anterior (ítems sintéticos en Santos
+  // Tacos), esto prueba el caso real que el dueño del proyecto describió
+  // para CrediCel Store — nombrar dos productos reales y no relacionados
+  // en el mismo mensaje ("quiero un celular y una funda") — contra su
+  // catálogo real de 37+ productos (D-127/D-128), no uno de comida.
+  // matchItemMentions() en sí ya es genérico y ya está probado arriba;
+  // esto solo confirma que sigue funcionando igual contra datos de un
+  // negocio distinto, sin ítems de fixture.
+  describe('CrediCel Store (tecnologia-demo) — mismo mecanismo contra un catálogo real, no de comida', () => {
+    const tenantId = '0194f000-0000-7000-8000-000000000002';
+    const channelId = '0194f001-0000-7000-8000-000000000002';
+    const celularName = 'Celular Samsung gama media';
+    const fundaName = 'Funda protectora para celular';
+    const credicelConversationIds: string[] = [];
+
+    async function sendCredicel(providerSubject: string, text: string) {
+      const id = uuidv7();
+      const result = await messages.receive({
+        tenantId,
+        channelId,
+        providerSubject,
+        externalEventId: `${providerSubject}-${id}`,
+        externalMessageId: `${providerSubject}-${id}`,
+        text,
+      });
+      if (!credicelConversationIds.includes(result.conversationId)) {
+        credicelConversationIds.push(result.conversationId);
+      }
+      if (!result.duplicate) {
+        await consumer.consume({
+          eventId: result.outboxEventId!,
+          tenantId,
+          messageId: result.messageId,
+          conversationId: result.conversationId,
+        });
+      }
+      const reply = await pool.query<{ body: string }>(
+        `select content->>'body' as body from app.messages
+          where conversation_id = $1 and direction = 'outbound'
+          order by occurred_at desc, id desc limit 1`,
+        [result.conversationId],
+      );
+      return { body: reply.rows[0]?.body ?? null, conversationId: result.conversationId };
+    }
+
+    afterAll(async () => {
+      for (const conversationId of credicelConversationIds) {
+        await cleanupConversation(conversationId);
+      }
+    });
+
+    it('agrega ambos productos reales nombrados en un solo mensaje, sin confundirlos entre sí', async () => {
+      const providerSubject = `credicel-multi-${shortSuffix}`;
+      const reply = await sendCredicel(
+        providerSubject,
+        `Quiero un ${celularName} y una ${fundaName}`,
+      );
+
+      expect(reply.body).toContain(celularName);
+      expect(reply.body).toContain(fundaName);
+
+      const lines = await pool.query<{ description_snapshot: string }>(
+        `select line.description_snapshot from app.request_lines line
+           join app.commercial_requests request on request.id = line.commercial_request_id
+          where request.conversation_id = $1 and line.status = 'active'
+          order by line.created_at`,
+        [reply.conversationId],
+      );
+      expect(lines.rows.map((row) => row.description_snapshot)).toEqual([
+        expect.stringContaining(celularName),
+        expect.stringContaining(fundaName),
+      ]);
+    });
+  });
 });

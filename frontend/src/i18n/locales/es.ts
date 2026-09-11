@@ -383,12 +383,12 @@ export default {
     messageRetentionDisabled: "Nunca",
     messageRetentionHelp:
       "Los mensajes más antiguos que este tiempo se borran permanentemente, incluso si la conversación sigue activa. Mínimo 7 días. Déjalo en blanco para no borrar nunca.",
-    aiRewriting: "Redacción natural con IA",
+    aiRewriting: "Presupuesto de IA (redacción y recomendaciones)",
     aiRewritingHelp:
-      "Mejora opcionalmente el tono después de construir la respuesta determinista segura.",
-    aiEnabled: "Permitir redacción con IA",
+      "Un mismo presupuesto compartido para mejorar el tono de las respuestas y para las recomendaciones consultivas de productos (si están habilitadas en Conocimiento). Ninguna de las dos reemplaza el flujo determinista seguro.",
+    aiEnabled: "Permitir uso de IA",
     aiEnabledHelp:
-      "Los límites de presupuesto y despliegue siguen aplicando. Siempre existe fallback seguro.",
+      "Aplica tanto a la redacción de tono como a las recomendaciones consultivas de productos. Los límites de presupuesto y despliegue siguen aplicando. Siempre existe fallback seguro.",
     aiRollout: "Conversaciones elegibles (%)",
     aiDailyLimit: "Límite diario de solicitudes",
     aiMonthlyBudget: "Presupuesto mensual ({{currency}})",
