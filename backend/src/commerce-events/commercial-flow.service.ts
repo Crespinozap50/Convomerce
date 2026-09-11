@@ -2003,6 +2003,19 @@ export class CommercialFlowService {
     items: Item[],
     allowRemoveAll = false,
   ): InteractiveMessage {
+    // D-130 live finding: nothing here capped `items` before — a message
+    // vague enough to tie against 10+ catalog rows (found live: "Quiero un
+    // portátil" ties all 12 "Portátil ..." products in CrediCel Store's
+    // expanded catalog, D-127/D-128) built a `list` past WhatsApp's own
+    // 10-option limit and validateInteractiveMessage() threw, crashing the
+    // whole turn — the customer got no reply at all, not even a bad one.
+    // Truncating to what actually fits is a defensive floor, not a real
+    // UX answer for "your message matched almost everything" — that would
+    // want its own reply (closer to catalogChoiceReply's category picker),
+    // but never silently dropping the reply entirely is the non-negotiable
+    // part.
+    const maxItems = allowRemoveAll ? 9 : 10;
+    items = items.slice(0, maxItems);
     const nameCounts = new Map<string, number>();
     for (const item of items)
       nameCounts.set(item.name, (nameCounts.get(item.name) ?? 0) + 1);

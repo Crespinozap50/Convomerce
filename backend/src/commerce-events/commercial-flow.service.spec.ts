@@ -2644,6 +2644,51 @@ describe("CommercialFlowService", () => {
     expect(client.query).toHaveBeenCalledTimes(3);
   });
 
+  it("caps a tie at 10 options instead of crashing, when a vague mention ties against more products than WhatsApp allows in a list (D-130 live finding)", async () => {
+    // Found live on CrediCel Store: "Quiero un portátil" ties all 12
+    // "Portátil ..." products in its expanded catalog (D-127/D-128) —
+    // itemChoiceInteractive() had no cap, so validateInteractiveMessage()
+    // threw "list messages require between 1 and 10 options" and the
+    // customer got no reply at all, not even a bad one.
+    const tiedRows = Array.from({ length: 12 }, (_, i) => ({
+      item_id: `item-${i}`,
+      variant_id: `variant-${i}`,
+      name: `Portátil Modelo ${i}`,
+      variant_name: "Único",
+      price_minor: "1000000",
+      currency: "COP",
+    }));
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_item",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: tiedRows })
+        .mockResolvedValueOnce({ rows: [] }), // step(): persists tiedItems for next turn
+    };
+    const message = "Quiero un portátil";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.responsePlan?.kind).toBe("verified_content");
+    const interactive =
+      reply?.responsePlan?.kind === "verified_content" ? reply.responsePlan.interactive : undefined;
+    expect(interactive?.type).toBe("list");
+    expect(interactive?.options).toHaveLength(10);
+  });
+
   it("uses a list instead of buttons when a tied product's name would otherwise be truncated unreadable (regression, D-100 live finding)", async () => {
     // Found live testing Santos Tacos' packages: with only 2 tied options
     // this used `buttons` (20-char cap, since neither name repeats and
