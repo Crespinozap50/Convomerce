@@ -374,7 +374,7 @@ export class CommercialFlowService {
         tiedItems: tied,
         pendingQuantity: this.quantity(input),
       });
-      return this.itemChoiceReply(input.locale, tied);
+      return this.itemChoiceOrCategoryReply(input.locale, tied);
     }
     // A bare, unambiguous product mention (no "quiero"/"pedir") is enough
     // to start an order, as long as it doesn't itself read as a question
@@ -818,12 +818,16 @@ export class CommercialFlowService {
     // unrelated item by a single shared word (found live: "diseño" alone
     // matched "Tablet premium para diseño", silently adding 3 of them —
     // "3" misread from "3 millones"). A name-matching tie doesn't carry
-    // consultativeReasons and is unaffected; re-showing the same
-    // recommended options is always safe here, since nothing was silently
-    // guessed either way.
+    // consultativeReasons and is unaffected. D-131 follow-up: rather than
+    // just re-showing the exact same list (safe but ignores what the
+    // customer just said), this re-asks the AI with the refined message —
+    // still never guesses, only falls back to the unchanged list if the
+    // AI has nothing better to offer.
     if (tiedItems && consultativeReasonsRaw) {
-      return this.recommendationChoiceReply(
-        input.locale,
+      return this.retryConsultativeRecommendation(
+        client,
+        input,
+        flow,
         tiedItems,
         new Map(Object.entries(consultativeReasonsRaw)),
       );
@@ -854,7 +858,7 @@ export class CommercialFlowService {
         tiedItems: tied,
         pendingQuantity: this.quantity(input),
       });
-      return this.itemChoiceReply(input.locale, tied);
+      return this.itemChoiceOrCategoryReply(input.locale, tied);
     }
     if (!match) return this.localizedReply(input.locale, "itemUnknown");
     await this.addItem(
@@ -918,7 +922,7 @@ export class CommercialFlowService {
         tiedItems: tied,
         pendingQuantity: this.quantity(input),
       });
-      return this.itemChoiceReply(input.locale, tied);
+      return this.itemChoiceOrCategoryReply(input.locale, tied);
     }
     if (match) {
       await this.addItem(
@@ -1662,14 +1666,20 @@ export class CommercialFlowService {
   // tie (D-051 etc.) — from the customer's next tap onward, an
   // AI-sourced recommendation and a text-matched tie are indistinguishable
   // to the rest of the flow.
-  private async tryConsultativeRecommendation(
+  // D-131 follow-up: extracted from tryConsultativeRecommendation() so
+  // handleSelectingItem() can re-run the same reasoning on a fresh
+  // message without duplicating the gate/candidates/AI-call logic — used
+  // both for a brand new recommendation and for re-asking the AI after
+  // the customer refines their need instead of tapping an option.
+  private async consultativeRecommend(
     client: PoolClient,
     input: UnderstoodFlowInput,
-  ): Promise<DeterministicReply | null> {
+    message: string,
+  ): Promise<{ tied: (Item & { description: string | null })[]; reasons: Map<string, string> } | null> {
     if (!this.consultativeRecommendations || !input.messageId) return null;
     // Avoids spending AI budget reasoning over a message too short to
     // plausibly describe a real need ("hola", "ok").
-    if (input.body.trim().length < 15) return null;
+    if (message.trim().length < 15) return null;
     const capability = await client.query<{ enabled: boolean }>(
       `select enabled from app.tenant_capabilities where tenant_id=$1 and capability='consultative_recommendations'`,
       [input.tenantId],
@@ -1679,7 +1689,7 @@ export class CommercialFlowService {
     if (candidates.length === 0) return null;
     const picks = await this.consultativeRecommendations.recommend(
       { tenantId: input.tenantId, conversationId: input.conversationId, messageId: input.messageId },
-      input.body,
+      message,
       candidates.map((item) => ({
         variantId: item.variant_id,
         name: item.name,
@@ -1698,6 +1708,15 @@ export class CommercialFlowService {
       .map((pick) => byVariantId.get(pick.variantId))
       .filter((item): item is Item & { description: string | null } => item !== undefined);
     if (tied.length === 0) return null;
+    return { tied, reasons };
+  }
+  private async tryConsultativeRecommendation(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+  ): Promise<DeterministicReply | null> {
+    const result = await this.consultativeRecommend(client, input, input.body);
+    if (!result) return null;
+    const { tied, reasons } = result;
     const requestId = uuidv7(),
       flowId = uuidv7();
     await client.query(
@@ -1711,6 +1730,41 @@ export class CommercialFlowService {
     await this.step(client, flowId, "selecting_item", {
       tiedItems: tied,
       consultativeReasons: Object.fromEntries(reasons),
+      consultativeMessage: input.body,
+    });
+    return this.recommendationChoiceReply(input.locale, tied, reasons);
+  }
+  // D-131 live finding (follow-up to D-129): re-typing instead of tapping
+  // used to just re-show the exact same list, silently ignoring whatever
+  // the customer actually said ("en realidad prefiero algo más barato")
+  // — safe, but not useful. This re-asks the AI with the refined message,
+  // combined with what they originally described (consultativeMessage,
+  // persisted once when the recommendation was first shown) so a budget
+  // or need mentioned only in the first message isn't lost on a retry
+  // that doesn't repeat it. Updates the *existing* workflow/request in
+  // place — never inserts a second one — since one is already active.
+  // Falls back to re-showing the same list (D-129's safe behavior) when
+  // the AI has nothing better: too short a refinement, the tenant's
+  // capability/budget got disabled mid-conversation, or the model
+  // genuinely found nothing that fits any better than before.
+  private async retryConsultativeRecommendation(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+    flow: Workflow,
+    previousTied: Item[],
+    previousReasons: Map<string, string>,
+  ): Promise<DeterministicReply> {
+    const previousMessage =
+      typeof flow.context.consultativeMessage === "string" ? flow.context.consultativeMessage : "";
+    const combinedMessage = previousMessage ? `${previousMessage}. ${input.body}` : input.body;
+    const result = await this.consultativeRecommend(client, input, combinedMessage);
+    if (!result) return this.recommendationChoiceReply(input.locale, previousTied, previousReasons);
+    const { tied, reasons } = result;
+    await this.step(client, flow.id, "selecting_item", {
+      ...flow.context,
+      tiedItems: tied,
+      consultativeReasons: Object.fromEntries(reasons),
+      consultativeMessage: combinedMessage,
     });
     return this.recommendationChoiceReply(input.locale, tied, reasons);
   }
@@ -2099,6 +2153,23 @@ export class CommercialFlowService {
         interactive,
       },
     };
+  }
+  // D-131 follow-up: itemChoiceInteractive()'s own cap (D-131) stops a big
+  // tie from crashing, but silently showing an arbitrary first-10 slice of
+  // a 12-way tie isn't the best answer available — categoryPickerReply()
+  // already exists for exactly this shape of problem on the full catalog
+  // (D-102). Only used where `tied` came from matchItemCandidates()/
+  // matchItemMentions() against the *whole* catalog (so `category` is
+  // always populated) — never for a cart-scoped tie (remove/change-
+  // quantity/replace), which resolves against whatever's already in the
+  // customer's own cart and is realistically never this large.
+  private itemChoiceOrCategoryReply(
+    locale: Locale,
+    tied: Item[],
+  ): DeterministicReply {
+    return tied.length > 10
+      ? this.categoryPickerReply(locale, tied)
+      : this.itemChoiceReply(locale, tied);
   }
   // "Otro producto" used to just ask "¿Qué producto deseas pedir?" as bare
   // text, with no way to browse — the customer had to already know what to

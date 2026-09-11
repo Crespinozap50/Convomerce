@@ -709,6 +709,125 @@ describe("CommercialFlowService", () => {
     ).toBe(false);
   });
 
+  it("re-asks the AI with the refined message when retyping instead of tapping, combined with the original need (D-131 follow-up)", async () => {
+    // Unlike the D-129 test above (no ConsultativeRecommendationService
+    // wired at all, so it can only ever fall back to the unchanged list),
+    // this wires a real one to confirm the actual re-ask happens: the
+    // customer's refinement ("en realidad prefiero algo más barato")
+    // doesn't repeat the budget/need from their first message, so it must
+    // be combined with the persisted `consultativeMessage`, not sent
+    // alone — otherwise the AI would reason with no budget context at all.
+    const tiedItems = [
+      {
+        item_id: "item-dell",
+        variant_id: "variant-dell",
+        name: "Portátil Dell para oficina",
+        category: "computadores",
+        variant_name: "Único",
+        price_minor: "195000000",
+        currency: "COP",
+      },
+      {
+        item_id: "item-demo",
+        variant_id: "variant-demo",
+        name: "Equipo portátil demo",
+        category: "computadores",
+        variant_name: "Configuración base",
+        price_minor: "350000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = {
+      "variant-dell": "Buena opción de oficina.",
+      "variant-demo": "Tiene tarjeta gráfica dedicada para diseño.",
+    };
+    const originalMessage = "Necesito un computador para diseño gráfico, tengo 3 millones de pesos";
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id")) {
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons, consultativeMessage: originalMessage },
+              },
+            ],
+          };
+        }
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description")) {
+          return {
+            rows: [
+              {
+                item_id: "item-acer",
+                variant_id: "variant-acer",
+                name: "Portátil Acer para estudiantes",
+                category: "computadores",
+                variant_name: "Único",
+                price_minor: "159000000",
+                currency: "COP",
+                description: "Opción económica.",
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "variant-acer", reason: "Es la opción más económica del catálogo." }]);
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-2",
+      body: "En realidad prefiero algo más barato",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalledWith(
+      expect.anything(),
+      `${originalMessage}. En realidad prefiero algo más barato`,
+      expect.anything(),
+      "es",
+      client,
+    );
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "verified_content",
+      interactive: expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({ id: "1", title: expect.stringContaining("Portátil Acer") }),
+        ]),
+      }),
+    });
+    expect(
+      queries.some(
+        ({ sql, params }) =>
+          sql.includes("update app.conversation_workflows") &&
+          JSON.stringify(params).includes("variant-acer"),
+      ),
+    ).toBe(true);
+  });
+
   it("starts an order from a bare product name even when it collides with an FAQ keyword (regression)", async () => {
     // Bug reported live: a real customer typed "Tacos vegetarianos" right
     // after completing an unrelated order — no purchase verb, no question
@@ -2703,20 +2822,44 @@ describe("CommercialFlowService", () => {
     expect(client.query).toHaveBeenCalledTimes(3);
   });
 
-  it("caps a tie at 10 options instead of crashing, when a vague mention ties against more products than WhatsApp allows in a list (D-130 live finding)", async () => {
+  it("offers a category picker instead of crashing, when a vague mention ties against more products than WhatsApp allows in a list (D-130/D-131 live finding)", async () => {
     // Found live on CrediCel Store: "Quiero un portátil" ties all 12
     // "Portátil ..." products in its expanded catalog (D-127/D-128) —
     // itemChoiceInteractive() had no cap, so validateInteractiveMessage()
     // threw "list messages require between 1 and 10 options" and the
-    // customer got no reply at all, not even a bad one.
-    const tiedRows = Array.from({ length: 12 }, (_, i) => ({
-      item_id: `item-${i}`,
-      variant_id: `variant-${i}`,
-      name: `Portátil Modelo ${i}`,
-      variant_name: "Único",
-      price_minor: "1000000",
-      currency: "COP",
-    }));
+    // customer got no reply at all, not even a bad one. Real category mix
+    // matches what was actually found live: mostly laptops themselves
+    // (computadores), plus a couple of laptop accessories that also
+    // happen to have "portátil" in their own name.
+    const tiedRows = [
+      ...Array.from({ length: 10 }, (_, i) => ({
+        item_id: `laptop-${i}`,
+        variant_id: `laptop-variant-${i}`,
+        name: `Portátil Modelo ${i}`,
+        category: "computadores",
+        variant_name: "Único",
+        price_minor: "1000000",
+        currency: "COP",
+      })),
+      {
+        item_id: "case",
+        variant_id: "case-variant",
+        name: "Funda protectora para portátil",
+        category: "protectores",
+        variant_name: "Único",
+        price_minor: "65000",
+        currency: "COP",
+      },
+      {
+        item_id: "cooler",
+        variant_id: "cooler-variant",
+        name: "Base refrigerante para portátil",
+        category: "accesorios",
+        variant_name: "Único",
+        price_minor: "85000",
+        currency: "COP",
+      },
+    ];
     const client = {
       query: jest
         .fn()
@@ -2745,7 +2888,62 @@ describe("CommercialFlowService", () => {
     const interactive =
       reply?.responsePlan?.kind === "verified_content" ? reply.responsePlan.interactive : undefined;
     expect(interactive?.type).toBe("list");
-    expect(interactive?.options).toHaveLength(10);
+    expect(interactive?.options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "category:computadores" }),
+        expect.objectContaining({ id: "category:protectores" }),
+        expect.objectContaining({ id: "category:accesorios" }),
+      ]),
+    );
+  });
+
+  it("still caps at 10 options instead of crashing when a huge tie has no meaningful category to group by (regression)", async () => {
+    // itemChoiceInteractive()'s own defensive cap (D-131) is the fallback
+    // of last resort for a tie this large that's ALSO all the same (or no)
+    // category — categoryPickerReply() alone wouldn't help there, since
+    // grouping 12 uncategorized items produces one giant "Otros" bucket
+    // instead of a real choice.
+    const tiedRows = Array.from({ length: 12 }, (_, i) => ({
+      item_id: `item-${i}`,
+      variant_id: `variant-${i}`,
+      name: `Producto Genérico ${i}`,
+      category: "varios",
+      variant_name: "Único",
+      price_minor: "1000000",
+      currency: "COP",
+    }));
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_item",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: tiedRows })
+        .mockResolvedValueOnce({ rows: [] }),
+    };
+    const message = "Quiero un producto";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.responsePlan?.kind).toBe("verified_content");
+    const interactive =
+      reply?.responsePlan?.kind === "verified_content" ? reply.responsePlan.interactive : undefined;
+    // A single shared category still routes through categoryPickerReply,
+    // which itself never exceeds 10 — this only pins that no path here
+    // can ever produce an invalid, crash-inducing interactive message.
+    expect(interactive?.options?.length).toBeGreaterThan(0);
+    expect(interactive?.options?.length).toBeLessThanOrEqual(10);
   });
 
   it("uses a list instead of buttons when a tied product's name would otherwise be truncated unreadable (regression, D-100 live finding)", async () => {
