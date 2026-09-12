@@ -151,6 +151,111 @@ describe('MessageReceivedConsumer', () => {
     ).toBe(true);
   });
 
+  it('inserts each of decision.additionalMessages as its own outbound message, in order, after the primary reply (D-144)', async () => {
+    // deterministic-reply.service.ts's offeringReply() (Ficha técnica,
+    // D-138/D-144) attaches additionalMessages when a real technical
+    // description needs more than one message to show in full without
+    // truncation — this bypasses composition/rewriting entirely (each
+    // entry is already final text) and must reach app.messages the same
+    // way the primary reply does, or the extra parts would just silently
+    // never get sent.
+    const { consumer, decisions, sendClient } = buildConsumer();
+    decisions.decide.mockResolvedValue({
+      outcome: 'respond',
+      capability: 'knowledge',
+      intent: 'menu',
+      requestedAction: null,
+      confidence: 0.9,
+      sources: [],
+      reason: 'knowledge_intent_matched',
+      responsePlan: { kind: 'verified_content', body: 'Parte 1 de la ficha técnica' },
+      additionalMessages: [
+        { body: 'Parte 2 de la ficha técnica' },
+        { body: 'Encabezado', interactive: { type: 'list', body: 'Encabezado', buttonLabel: 'Elegir', options: [{ id: 'variant-1', title: 'Producto' }] } },
+      ],
+    });
+
+    const result = await consumer.consume(event);
+
+    expect(result).toEqual({ duplicate: false });
+    const messageInserts = sendClient.query.mock.calls.filter(([sql]: [string]) =>
+      String(sql).includes('insert into app.messages'),
+    );
+    // Primary reply + 2 additionalMessages = 3 message rows.
+    expect(messageInserts).toHaveLength(3);
+    expect(messageInserts[1][1]).toContain('Parte 2 de la ficha técnica');
+    expect(
+      (messageInserts[2][1] as unknown[]).some(
+        (param) => typeof param === 'string' && param.includes('Producto'),
+      ),
+    ).toBe(true);
+  });
+
+  it('queues a single outbox event carrying every additionalMessages id as followUpMessageIds, not one event per message (D-146, found live on CrediCel Store)', async () => {
+    // Found live: each additionalMessages entry used to get its own
+    // outbox event, and therefore its own BullMQ job — with the worker's
+    // default concurrency, two jobs for the same reply could be sent to
+    // WhatsApp at the same time, with no guarantee of completing in the
+    // order they were queued. The tappable list arrived before the
+    // technical text it was supposed to follow. A single outbox event now
+    // carries the primary messageId plus every follow-up id, in order, so
+    // SendRequestedConsumer can send them all sequentially inside one job.
+    const { consumer, decisions, sendClient } = buildConsumer();
+    decisions.decide.mockResolvedValue({
+      outcome: 'respond',
+      capability: 'knowledge',
+      intent: 'menu',
+      requestedAction: null,
+      confidence: 0.9,
+      sources: [],
+      reason: 'knowledge_intent_matched',
+      responsePlan: { kind: 'verified_content', body: 'Parte 1 de la ficha técnica' },
+      additionalMessages: [
+        { body: 'Parte 2 de la ficha técnica' },
+        { body: 'Encabezado', interactive: { type: 'list', body: 'Encabezado', buttonLabel: 'Elegir', options: [{ id: 'variant-1', title: 'Producto' }] } },
+      ],
+    });
+
+    await consumer.consume(event);
+
+    const outboxInserts = sendClient.query.mock.calls.filter(([sql]: [string]) =>
+      String(sql).includes('insert into app.outbox_events'),
+    );
+    expect(outboxInserts).toHaveLength(1);
+    const params = outboxInserts[0][1] as unknown[];
+    const followUpIds = params[4] as string[];
+    expect(followUpIds).toHaveLength(2);
+  });
+
+  it('rejects an additionalMessages entry with an empty interactive.body loudly instead of letting it fail silently at WhatsApp (D-144, found live on CrediCel Store)', async () => {
+    // Found live: offeringReply()'s detailMode built its interactive list
+    // from a shared object whose own `body` stays '' until
+    // LocalizedResponseComposer copies the outer body into it — a step
+    // additionalMessages skips entirely by design (see its own comment on
+    // DeterministicReply). The customer got the full technical text, but
+    // the tappable list after it silently failed every WhatsApp API retry
+    // ("Interactive message body is required") — no crash, no error
+    // visible anywhere except the server log, and no way for the customer
+    // to act on what they'd just read. This guard turns that into a loud,
+    // immediate failure here instead.
+    const { consumer, decisions } = buildConsumer();
+    decisions.decide.mockResolvedValue({
+      outcome: 'respond',
+      capability: 'knowledge',
+      intent: 'menu',
+      requestedAction: null,
+      confidence: 0.9,
+      sources: [],
+      reason: 'knowledge_intent_matched',
+      responsePlan: { kind: 'verified_content', body: 'Ficha técnica' },
+      additionalMessages: [
+        { body: 'Encabezado', interactive: { type: 'list', body: '', buttonLabel: 'Elegir', options: [{ id: 'variant-1', title: 'Producto' }] } },
+      ],
+    });
+
+    await expect(consumer.consume(event)).rejects.toThrow('Interactive message body is required');
+  });
+
   it('does not log a "fallback"-intent question as unresolved when a knowledge entry actually answered it (D-078 regression)', async () => {
     // classifyMessage's fixed intents no longer cover every FAQ topic
     // (D-078) — a message can be tagged 'fallback' and still be answered

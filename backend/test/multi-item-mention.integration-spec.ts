@@ -328,7 +328,14 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
   describe('CrediCel Store (tecnologia-demo) — mismo mecanismo contra un catálogo real, no de comida', () => {
     const tenantId = '0194f000-0000-7000-8000-000000000002';
     const channelId = '0194f001-0000-7000-8000-000000000002';
-    const celularName = 'Celular Samsung gama media';
+    // D-143 (docs/decisions.md): must stay a genuinely single-variant
+    // product — every real celular in this catalog now carries a second
+    // (storage-capacity) variant, and matchItemMentions() correctly treats
+    // a bare name mention of a multi-variant product as ambiguous (same
+    // rule Santos Tacos' "Agua fresca" 12oz/16oz already relies on), which
+    // would consume this message's one tie slot and starve the "celular
+    // gama alta" tie below instead of leaving it for that test to exercise.
+    const celularName = 'Parlante Bluetooth portátil';
     const fundaName = 'Funda protectora para celular';
     const credicelConversationIds: string[] = [];
 
@@ -402,7 +409,11 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
 
     it('agrega los tres productos reales nombrados en un solo mensaje (3+ productos)', async () => {
       const providerSubject = `credicel-multi3-${shortSuffix}`;
-      const cargadorName = 'Cargador rápido USB-C';
+      // D-143 (docs/decisions.md): must also stay single-variant — the
+      // original "Cargador rápido USB-C" gained a second (wattage) variant
+      // from the same catalog realism pass, for the same reason celularName
+      // was changed above.
+      const cargadorName = 'Mouse inalámbrico';
       const reply = await sendCredicel(
         providerSubject,
         `Quiero un ${celularName}, una ${fundaName} y un ${cargadorName}`,

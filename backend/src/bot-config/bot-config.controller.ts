@@ -10,6 +10,7 @@ import { isValidLocale, normalizeLocale } from '../localization/localization';
 export class BotConfigController {
  constructor(private readonly service:BotConfigService){}
  @Get() get(@Param('tenantId') id:string,@Req() req:AuthenticatedRequest){valid(id);return this.service.get(id,req.actor.userId)}
+ @Get('ai-usage') usage(@Param('tenantId') id:string,@Req() req:AuthenticatedRequest){valid(id);return this.service.usage(id,req.actor.userId)}
  @Put() save(@Param('tenantId') id:string,@Body() body:unknown,@Req() req:AuthenticatedRequest){valid(id);return this.service.save(id,req.actor.userId,parse(body))}
 }
 function valid(id:string){if(!isUuid(id))throw badRequest('VALIDATION_ERROR','tenantId must be a UUID')}

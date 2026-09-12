@@ -291,6 +291,33 @@ describe('DeterministicReplyService', () => {
     });
   });
 
+  it('appends the variant name to the row title when two rows share the same (short enough) product name, not just an identical truncated prefix (D-145, found live on CrediCel Store)', async () => {
+    // Found live: a product with two real variants (D-142/D-143's
+    // multi-variant catalog) gets two rows with the IDENTICAL title —
+    // only the description told them apart. Fixable at the title level
+    // only when name+variant actually fit in 24 chars; a name already
+    // past that on its own (see the "Sandwich..." test above) still
+    // relies on the description, same limitation itemChoiceInteractive
+    // already accepts for the same reason.
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValue({
+          rowCount: 2,
+          rows: [
+            { item_id: 'item-1', variant_id: 'variant-1', name: 'Agua fresca', category: 'Bebidas', variant_name: 'Vaso de 12 oz', price_minor: '700000', currency: 'COP' },
+            { item_id: 'item-1', variant_id: 'variant-2', name: 'Agua fresca', category: 'Bebidas', variant_name: 'Vaso de 16 oz', price_minor: '900000', currency: 'COP' },
+          ],
+        }),
+    };
+    const reply = await new DeterministicReplyService().resolve(client as never, 'muéstrame el menú', {
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
+    });
+    const titles = (reply.interactive?.options ?? []).map((option) => option.title);
+    expect(new Set(titles).size).toBe(titles.length);
+    expect(titles).toEqual(['Agua fresca (Vaso de 12…', 'Agua fresca (Vaso de 16…', 'Ver opciones']);
+  });
+
   it('does not repeat the tappable list items as text in the body (avoids duplication)', async () => {
     // The list itself already shows name, variant, and price per row —
     // repeating all of that as bullet lines in the body too is pure
@@ -388,6 +415,98 @@ describe('DeterministicReplyService', () => {
       { id: 'details:menu:Tacos:page:1', title: 'Ficha técnica' },
       { id: 'cart:view_catalog', title: 'Ver opciones' },
     ]);
+  });
+
+  it('also lists a whole category for commercial-flow.service.ts\'s own "category:" id, not just "menu-category:" (D-143, found live on CrediCel Store)', async () => {
+    // commercial-flow.service.ts's categoryPickerReply() (the "Otro
+    // producto" mid-order picker) tags its own rows "category:{name}" —
+    // its categoryItemsReply() returns null once the tapped category has
+    // more than 10 items, deferring here the same way a "menu:"/
+    // "menu-category:" tap always has. Before this, nothing here recognized
+    // "category:" either, so that hand-off landed on nothing and the
+    // customer saw the generic fallback instead of any real product list.
+    const client = { query: jest.fn().mockResolvedValue({ rowCount: 2, rows: [
+      { item_id: 'item-1', variant_id: 'variant-1', name: 'Orden x 3 Tacos', category: 'Tacos', variant_name: 'Unidad', price_minor: '2550000', currency: 'COP' },
+      { item_id: 'item-2', variant_id: 'variant-2', name: 'Birria', category: 'Tacos', variant_name: 'Unidad', price_minor: '900000', currency: 'COP' },
+    ] }) };
+    const reply = await new DeterministicReplyService().resolve(
+      client as never,
+      'Tacos',
+      { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC' },
+      'category:Tacos',
+    );
+    expect(reply.interactive?.options).toEqual([
+      expect.objectContaining({ title: 'Orden x 3 Tacos' }),
+      expect.objectContaining({ title: 'Birria' }),
+      { id: 'details:menu:Tacos:page:1', title: 'Ficha técnica' },
+      { id: 'cart:view_catalog', title: 'Ver opciones' },
+    ]);
+  });
+
+  it('shows every product\'s full technical description untruncated, never cutting real spec text (D-144, found live on CrediCel Store)', async () => {
+    // D-138's original fix split WhatsApp's 1024-char interactive-body cap
+    // evenly across whichever items are on the page and truncated each to
+    // its share — safe from crashing, but the project owner reported that
+    // cutting real technical specs stops a customer from choosing well
+    // between products. A text-only message (no interactive attached) gets
+    // WhatsApp's much larger 4096-char limit instead, so ordinary
+    // descriptions like these fit in one message with nothing cut — the
+    // tappable list itself goes out as a second, separate message.
+    const client = { query: jest.fn().mockResolvedValue({ rowCount: 2, rows: [
+      { item_id: 'item-1', variant_id: 'variant-1', name: 'Tacos al pastor', category: 'Tacos', variant_name: 'Unidad', price_minor: '1890000', currency: 'COP', description: 'Tortilla de maíz, cerdo marinado en achiote y piña, cebolla y cilantro al gusto.' },
+      { item_id: 'item-2', variant_id: 'variant-2', name: 'Birria', category: 'Tacos', variant_name: 'Unidad', price_minor: '900000', currency: 'COP', description: 'Carne de res deshebrada en consomé, servida con tortilla aparte para remojar.' },
+    ] }) };
+    const reply = await new DeterministicReplyService().resolve(
+      client as never,
+      'Ficha técnica',
+      { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC' },
+      'details:menu:Tacos:page:1',
+    );
+    expect(reply.body).toContain('Tortilla de maíz, cerdo marinado en achiote y piña, cebolla y cilantro al gusto.');
+    expect(reply.body).toContain('Carne de res deshebrada en consomé, servida con tortilla aparte para remojar.');
+    expect(reply.body).not.toContain('…');
+    expect(reply.additionalMessages).toHaveLength(1);
+    expect(reply.additionalMessages?.[0].interactive?.options).toEqual([
+      expect.objectContaining({ title: 'Tacos al pastor' }),
+      expect.objectContaining({ title: 'Birria' }),
+      { id: 'details:menu:Tacos:page:1', title: 'Ficha técnica' },
+      { id: 'cart:view_catalog', title: 'Ver opciones' },
+    ]);
+    // The list-carrying message has no technical text of its own, and
+    // (D-145) a heading distinct from the technical-text message right
+    // before it — repeating the same "Aquí tienes la ficha técnica..."
+    // text on both made the second message read as a duplicate of the
+    // first at a glance, easy to miss the tappable list inside it.
+    expect(reply.additionalMessages?.[0].body).toBe('Toca un producto para elegirlo:');
+  });
+
+  it('splits into as many text-only messages as actually needed, never truncating, when descriptions genuinely exceed one message (D-144)', async () => {
+    // Each description alone (~2475 chars) comfortably fits one 4096-char
+    // text message — realistic, if unusually long — but the two combined
+    // (plus heading/labels) don't fit in one, forcing a split *between*
+    // items. Neither description itself should ever be cut.
+    const descriptionA = 'Especificación técnica extensa de este portátil. '.repeat(50);
+    const descriptionB = 'Especificación técnica extensa de este otro portátil. '.repeat(50);
+    const client = { query: jest.fn().mockResolvedValue({ rowCount: 2, rows: [
+      { item_id: 'item-1', variant_id: 'variant-1', name: 'Portátil A', category: 'Computadores', variant_name: 'Único', price_minor: '100000000', currency: 'COP', description: descriptionA },
+      { item_id: 'item-2', variant_id: 'variant-2', name: 'Portátil B', category: 'Computadores', variant_name: 'Único', price_minor: '200000000', currency: 'COP', description: descriptionB },
+    ] }) };
+    const reply = await new DeterministicReplyService().resolve(
+      client as never,
+      'Ficha técnica',
+      { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC' },
+      'details:menu:Computadores:page:1',
+    );
+    const textParts = [reply.body, ...(reply.additionalMessages ?? []).filter((m) => !m.interactive).map((m) => m.body)];
+    expect(textParts.length).toBeGreaterThan(1);
+    expect(textParts.join('')).toContain(descriptionA);
+    expect(textParts.join('')).toContain(descriptionB);
+    expect(textParts.join('')).not.toContain('…');
+    for (const part of textParts) expect(part.length).toBeLessThanOrEqual(4096);
+    // The interactive list still goes out as its own final message, with
+    // no technical text attached to it either way.
+    const listMessage = reply.additionalMessages?.find((m) => m.interactive);
+    expect(listMessage).toBeDefined();
   });
 
   it('narrows a catalog question to the most specific matching offering', async () => {

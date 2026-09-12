@@ -396,6 +396,8 @@ export default {
     aiRollout: "Conversaciones elegibles (%)",
     aiDailyLimit: "Límite diario de solicitudes",
     aiMonthlyBudget: "Presupuesto mensual ({{currency}})",
+    aiUsageDayLabel: "Usado hoy:",
+    aiUsageMonthLabel: "Usado este mes:",
     saveHint: "Los cambios aplican a las conversaciones nuevas.",
     saved: "Configuración del bot guardada.",
   },
@@ -463,6 +465,18 @@ export default {
     additionalVariants: "+{{count}} variante adicional",
     additionalVariants_other: "+{{count}} variantes adicionales",
     uncategorized: "Sin categoría",
+    variantsSectionTitle: "Variantes",
+    variantsSectionHelp:
+      "Cada variante es una presentación o tamaño vendible por separado, con su propio precio y SKU.",
+    variantAdd: "Agregar variante",
+    variantAddNamePlaceholder: "Nombre (ej. Talla grande)",
+    variantSaved: "Variante guardada.",
+    variantRemove: "Eliminar variante",
+    variantRemoveConfirm:
+      "¿Eliminar esta variante? Dejará de estar disponible para la venta.",
+    variantLastActiveHelp:
+      "Debe quedar al menos una variante activa: no se puede eliminar la última.",
+    variantTranslateName: "Nombre en inglés",
     sourcesTitle: "Fuentes externas de catálogo",
     sourcesHelp:
       "Los adaptadores sincronizan ofertas desde plataformas comerciales.",
@@ -881,5 +895,12 @@ export default {
       "Agrega al menos una opción antes de activar este requisito.",
     REQUIREMENT_RESERVED_FIELD_KEY:
       "Esta clave de campo la administra la plataforma y no se puede reutilizar.",
+    OFFERING_NOT_FOUND: "La oferta ya no existe o fue retirada.",
+    EXTERNAL_OFFERING_READ_ONLY:
+      "Esta oferta viene de una fuente externa y solo se puede editar allí.",
+    VARIANT_SKU_IN_USE: "Este SKU ya lo usa otra variante.",
+    VARIANT_NOT_FOUND: "La variante ya no existe.",
+    OFFERING_LAST_VARIANT:
+      "Esta oferta debe conservar al menos una variante activa.",
   },
 } as const;

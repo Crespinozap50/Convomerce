@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Bot, MessageCircle } from "lucide-react";
 import { api } from "../api";
-import { BotConfig } from "../types";
+import { AiUsageSummary, BotConfig } from "../types";
 import { AppSelect } from "../components/AppSelect";
 
 export function BotSettings({
@@ -18,7 +18,26 @@ export function BotSettings({
   const [form, setForm] = useState(value);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [usage, setUsage] = useState<AiUsageSummary | null>(null);
   useEffect(() => setForm(value), [value]);
+  // D-148 (docs/decisions.md): loaded once on open — this is a point-in-time
+  // snapshot for orientation ("am I close to the limit right now"), not a
+  // live dashboard; the project owner can reopen this panel to refresh it,
+  // same as every other read in this settings form.
+  useEffect(() => {
+    let cancelled = false;
+    api<AiUsageSummary>(`/v1/admin/tenants/${tenant}/bot/ai-usage`)
+      .then((result) => {
+        if (!cancelled) setUsage(result);
+      })
+      .catch(() => {
+        // Silent: this is a supplementary read-only summary, not required
+        // for the form itself to load and work.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tenant]);
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
@@ -188,6 +207,63 @@ export function BotSettings({
             <small>{t("bot.aiRewritingHelp")}</small>
           </span>
         </div>
+        {usage && (
+          <div className="ai-usage-summary">
+            <div className="ai-usage-row">
+              <span>
+                {t("bot.aiUsageDayLabel")}
+                <b>
+                  {" "}
+                  {usage.day.requestsUsed} / {usage.day.requestsLimit}
+                </b>
+              </span>
+              <div className="ai-usage-bar">
+                <div
+                  className={
+                    usage.day.requestsLimit > 0 &&
+                    usage.day.requestsUsed / usage.day.requestsLimit >= 0.9
+                      ? "ai-usage-fill ai-usage-fill-danger"
+                      : "ai-usage-fill"
+                  }
+                  style={{
+                    width: `${Math.min(100, usage.day.requestsLimit > 0 ? (usage.day.requestsUsed / usage.day.requestsLimit) * 100 : 0)}%`,
+                  }}
+                />
+              </div>
+            </div>
+            <div className="ai-usage-row">
+              <span>
+                {t("bot.aiUsageMonthLabel")}
+                <b>
+                  {" "}
+                  {new Intl.NumberFormat(undefined, {
+                    style: "currency",
+                    currency: usage.costCurrency,
+                  }).format(usage.month.costUsedMinor / 100)}{" "}
+                  /{" "}
+                  {new Intl.NumberFormat(undefined, {
+                    style: "currency",
+                    currency: usage.costCurrency,
+                  }).format(usage.month.costLimitMinor / 100)}
+                </b>
+              </span>
+              <div className="ai-usage-bar">
+                <div
+                  className={
+                    usage.month.costLimitMinor > 0 &&
+                    usage.month.costUsedMinor / usage.month.costLimitMinor >=
+                      0.9
+                      ? "ai-usage-fill ai-usage-fill-danger"
+                      : "ai-usage-fill"
+                  }
+                  style={{
+                    width: `${Math.min(100, usage.month.costLimitMinor > 0 ? (usage.month.costUsedMinor / usage.month.costLimitMinor) * 100 : 0)}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
         <label className="switch-row">
           <input
             type="checkbox"

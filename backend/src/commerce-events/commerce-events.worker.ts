@@ -54,19 +54,11 @@ export class CommerceEventsWorker implements OnApplicationBootstrap, OnModuleDes
       return { duplicate: false };
     }
     if (job.name === 'message.send_requested') {
-      const data = job.data as Partial<{
-        eventId: string;
-        tenantId: string;
-        messageId: string;
-      }>;
+      const data = job.data as Partial<SendRequestedEvent>;
       if (!data.eventId || !data.tenantId || !data.messageId) {
         throw new UnrecoverableError('Incomplete message.send_requested event');
       }
-      return this.sendRequested.consume(data as {
-        eventId: string;
-        tenantId: string;
-        messageId: string;
-      });
+      return this.sendRequested.consume(data as SendRequestedEvent);
     }
     if (job.name === 'message.received') {
       const data = job.data as Partial<MessageReceivedEvent>;

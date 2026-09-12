@@ -64,6 +64,7 @@ export class ConversationDecisionEngine {
         body:reply.body,
         ...(reply.interactive?{interactive:reply.interactive}:{}),
       },
+      ...(reply.additionalMessages?{additionalMessages:reply.additionalMessages}:{}),
     };
   }
 }

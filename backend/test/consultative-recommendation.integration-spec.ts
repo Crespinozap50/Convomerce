@@ -76,10 +76,15 @@ describe('D-128/D-129 — recomendación consultiva de CrediCel Store (tecnologi
   // Real seeded catalog rows (database/seeds/005_credicel_store_catalog.sql)
   // — the candidate list tryConsultativeRecommendation() builds comes from
   // a real query against app.catalog_items/item_variants, so the mock's
-  // picks must be real variant ids that query will actually return.
+  // picks must be real variant ids that query will actually return. D-143
+  // (docs/decisions.md): the original fixture ("Equipo portátil demo") was
+  // archived as a non-realistic leftover placeholder — replaced with a
+  // real, still-active laptop whose name is also short enough (<=24 chars)
+  // to survive recommendationInteractive()'s title truncation untouched,
+  // same as the original.
   const equipoPortatilDemo = {
-    variantId: '0194f006-0000-7000-8000-000000000002',
-    name: 'Equipo portátil demo',
+    variantId: '0194f006-0000-7000-8000-100000000007',
+    name: 'Portátil para estudio',
   };
   const portatilAcer = {
     variantId: '0194f006-0000-7000-8000-100000000027',
@@ -211,6 +216,17 @@ describe('D-128/D-129 — recomendación consultiva de CrediCel Store (tecnologi
     return { conversationId: result.conversationId, ...reply.rows[0] };
   }
 
+  // D-143 (docs/decisions.md) live finding: this exact wording, comma and
+  // all, is load-bearing — a shorter variant ending at "...3 millones de
+  // pesos" (no trailing question) routes through matchItemMentions()'s
+  // comma-splitter instead of the single-item flow, which has no
+  // consultative-AI fallback of its own. With CrediCel's real laptops now
+  // carrying 2 variants each (the multi-variant catalog feature), that
+  // splitter ties "Portátil HP para diseño gráfico intermedio" against its
+  // own two variants (its name alone shares "diseño"/"gráfico" with the
+  // message) instead of ever reaching tryConsultativeRecommendation() —
+  // every sendTurn() below reusing this exact string is deliberate, not
+  // copy-paste.
   it('camino feliz: texto libre describiendo una necesidad recibe una lista tocable con precio, razón y "Ver más información"', async () => {
     mockAiPicks([
       { variantId: equipoPortatilDemo.variantId, reason: 'Tiene tarjeta gráfica dedicada para diseño gráfico.' },
@@ -245,7 +261,7 @@ describe('D-128/D-129 — recomendación consultiva de CrediCel Store (tecnologi
       { variantId: portatilAcer.variantId, reason: 'Opción económica.' },
     ]);
     const providerSubject = `consultative-${suffix}-select`;
-    await sendTurn(providerSubject, 'Necesito un computador para diseño gráfico, tengo 3 millones de pesos');
+    await sendTurn(providerSubject, 'Necesito un computador para diseño gráfico, tengo 3 millones de pesos, ¿qué me pueden ofrecer?');
 
     const tap = await sendTurn(providerSubject, equipoPortatilDemo.name, { id: '1', title: equipoPortatilDemo.name });
 
@@ -269,7 +285,7 @@ describe('D-128/D-129 — recomendación consultiva de CrediCel Store (tecnologi
       { variantId: portatilAcer.variantId, reason: 'Opción económica.' },
     ]);
     const providerSubject = `consultative-${suffix}-detail`;
-    await sendTurn(providerSubject, 'Necesito un computador para diseño gráfico, tengo 3 millones de pesos');
+    await sendTurn(providerSubject, 'Necesito un computador para diseño gráfico, tengo 3 millones de pesos, ¿qué me pueden ofrecer?');
 
     const detail = await sendTurn(providerSubject, 'Ver más información', { id: '3', title: 'Ver más información' });
 
@@ -293,7 +309,7 @@ describe('D-128/D-129 — recomendación consultiva de CrediCel Store (tecnologi
       { variantId: portatilAcer.variantId, reason: 'Opción económica.' },
     ]);
     const providerSubject = `consultative-${suffix}-retype`;
-    await sendTurn(providerSubject, 'Necesito un computador para diseño gráfico, tengo 3 millones de pesos');
+    await sendTurn(providerSubject, 'Necesito un computador para diseño gráfico, tengo 3 millones de pesos, ¿qué me pueden ofrecer?');
 
     const retry = await sendTurn(
       providerSubject,

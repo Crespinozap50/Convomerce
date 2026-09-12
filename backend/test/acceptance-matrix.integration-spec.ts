@@ -299,8 +299,8 @@ describe('Fase 2 — matriz de aceptación automatizada (D-091)', () => {
     it.each([
       {
         tenant: tecnologia,
-        question: '¿Cuánto cuesta el celular gama alta?',
-        itemId: '0194f005-0000-7000-8000-100000000003',
+        question: '¿Cuánto cuesta el Xiaomi cámara 200MP?',
+        itemId: '0194f005-0000-7000-8000-100000000045',
       },
       {
         tenant: barberia,

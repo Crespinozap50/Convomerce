@@ -172,6 +172,14 @@ export function KnowledgeSettings({
     () => setResponseVariants(value.responseVariants),
     [value.responseVariants],
   );
+  function mergeOfferingIntoProducts(offering: Offering) {
+    setProducts((rows) => {
+      const exists = rows.some((row) => row.id === offering.id);
+      return exists
+        ? rows.map((row) => (row.id === offering.id ? offering : row))
+        : [...rows, offering].sort((a, b) => a.name.localeCompare(b.name));
+    });
+  }
   async function archiveOffering(offering: Offering) {
     try {
       await api(
@@ -648,15 +656,9 @@ export function KnowledgeSettings({
           modifierGroups={modifierGroups}
           onNotice={onNotice}
           onClose={() => setEditingOffering(null)}
+          onVariantsChanged={mergeOfferingIntoProducts}
           onSaved={(offering) => {
-            setProducts((rows) => {
-              const exists = rows.some((row) => row.id === offering.id);
-              return exists
-                ? rows.map((row) => (row.id === offering.id ? offering : row))
-                : [...rows, offering].sort((a, b) =>
-                    a.name.localeCompare(b.name),
-                  );
-            });
+            mergeOfferingIntoProducts(offering);
             void loadModifierGroups();
             onNotice(t("knowledge.offeringSaved"));
             setEditingOffering(null);

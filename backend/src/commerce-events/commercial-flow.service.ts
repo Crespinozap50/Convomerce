@@ -247,6 +247,22 @@ export class CommercialFlowService {
     // what the row's title happens to say.
     if (input.interactiveSelectionId?.startsWith("category:")) {
       const category = input.interactiveSelectionId.slice("category:".length);
+      // D-143 live finding (CrediCel): categoryItemsReply() returns null
+      // when the tapped category itself has more than 10 items (its own
+      // comment explains why it can't just re-show a one-row picker) — with
+      // every CrediCel category now holding well over 10 items (D-137),
+      // that null used to reach the customer as the generic "Todavía no
+      // tengo esa información" fallback, since nothing downstream
+      // recognized this id either. A first fix bolted on a generic
+      // catalogButtonReply() here, but that just bounced the customer back
+      // to the UNNARROWED category picker — real progress over the dead
+      // end, but still one extra wasted tap that lost which category they
+      // already picked. deterministic-reply.service.ts's resolve() now
+      // recognizes this exact "category:" id itself (mirroring its own
+      // "menu-category:" handling) and hands back its real, paginated
+      // product listing (D-138) for that SAME category — so returning
+      // `reply` unconditionally here, including `null`, lets that direct
+      // hand-off happen instead of masking it with a worse local fallback.
       return this.categoryItemsReply(client, input.locale, input.timezone ?? "UTC", category, input.categoryLabelPrefix ?? null);
     }
     // Found live (Wendy Muñoz, D-115): a pagination row tap
@@ -936,7 +952,21 @@ export class CommercialFlowService {
       });
       return this.itemChoiceOrCategoryReply(input.locale, tied, input.categoryLabelPrefix ?? null);
     }
-    if (!match) return this.localizedReply(input.locale, "itemUnknown");
+    // D-143 live finding (CrediCel): this used to return the bare
+    // "itemUnknown" text ("...Estas son nuestras opciones:") with no
+    // options ever attached — unlike startNewOrder()'s own itemUnknown
+    // case (~line 552 above), which already shows the catalog (or falls
+    // back to a button) instead of a text claiming options it never
+    // shows. A customer already inside selecting_item (e.g. after "Otro
+    // producto") who then types anything unmatched hit this bare reply on
+    // every single turn, with the workflow never leaving selecting_item —
+    // permanently stuck, exactly the trap startNewOrder's own comment
+    // above already warns against, just not fixed here too.
+    if (!match)
+      return (
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), "itemUnknown", {}, input.categoryLabelPrefix ?? null) ??
+        this.catalogButtonReply(input.locale, "itemUnknown")
+      );
     await this.addItem(
       client,
       input.tenantId,
@@ -1713,22 +1743,42 @@ export class CommercialFlowService {
     tenantId: string,
     locale: Locale,
   ): Promise<(Item & { description: string | null })[]> {
+    // D-143 (docs/decisions.md) live finding: this used to join straight
+    // to app.item_variants with no dedup, so a product with N active
+    // variants contributed N rows here — harmless while every catalog item
+    // had exactly one variant, but once the multi-variant catalog feature
+    // shipped and CrediCel's real products gained a second (storage/RAM)
+    // variant each, the old `limit 80` started silently cutting off roughly
+    // the second half of the tenant's real catalog (alphabetically) from
+    // the AI's candidate pool entirely — a real product could never be
+    // recommended no matter what the customer described. `distinct on`
+    // picks each item's single cheapest active/available variant as its
+    // representative row before the outer limit is applied, so the cap
+    // now counts distinct *products*, not variant rows. Raised 80->200 on
+    // top of that dedup — CrediCel alone already has 116 real products, and
+    // a real catalog only grows; 200 products of description text is still
+    // a modest AI request body, and silently invisible-to-recommendations
+    // inventory is a worse failure mode than a slightly bigger prompt.
     const result = await client.query<Item & { description: string | null }>(
-      `select item.id item_id,variant.id variant_id,
-              coalesce(item_loc.name,item.name) name,
-              coalesce(cat_loc.label,item.category) category,
-              coalesce(variant_loc.name,variant.name) variant_name,
-              variant.price_minor::text,variant.currency,item.description
-       from app.catalog_items item join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
-       left join app.catalog_item_localizations item_loc
-         on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$2
-       left join app.item_variant_localizations variant_loc
-         on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$2
-       left join app.catalog_category_localizations cat_loc
-         on cat_loc.tenant_id=item.tenant_id and cat_loc.category=item.category and cat_loc.locale=$2
-       where item.tenant_id=$1 and item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
-       order by item.name
-       limit 80`,
+      `select * from (
+         select distinct on (item.id)
+                item.id item_id,variant.id variant_id,
+                coalesce(item_loc.name,item.name) name,
+                coalesce(cat_loc.label,item.category) category,
+                coalesce(variant_loc.name,variant.name) variant_name,
+                variant.price_minor::text,variant.currency,item.description
+         from app.catalog_items item join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
+         left join app.catalog_item_localizations item_loc
+           on item_loc.tenant_id=item.tenant_id and item_loc.catalog_item_id=item.id and item_loc.locale=$2
+         left join app.item_variant_localizations variant_loc
+           on variant_loc.tenant_id=variant.tenant_id and variant_loc.item_variant_id=variant.id and variant_loc.locale=$2
+         left join app.catalog_category_localizations cat_loc
+           on cat_loc.tenant_id=item.tenant_id and cat_loc.category=item.category and cat_loc.locale=$2
+         where item.tenant_id=$1 and item.status='active' and item.customer_orderable and variant.status='active' and variant.availability_status='available'
+         order by item.id,variant.price_minor asc,variant.created_at asc
+       ) representative
+       order by name
+       limit 200`,
       [tenantId, languageFor(locale)],
     );
     return result.rows;

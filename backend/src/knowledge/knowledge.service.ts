@@ -1,7 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { PoolClient } from "pg";
 import { DatabaseService } from "../database/database.service";
-import { forbidden, notFound } from "../observability/http-errors";
+import { conflict, forbidden, notFound } from "../observability/http-errors";
 import { v7 as uuidv7 } from "uuid";
 
 export type ProfileInput = {
@@ -32,10 +32,18 @@ export type OfferingInput = {
   status: "active" | "inactive";
   durationMinutes: number | null;
   bookingRequired: boolean;
-  variantName: string;
+};
+// D-142 (docs/decisions.md): split out of OfferingInput so an offering can
+// carry more than one variant — createOffering still takes exactly one of
+// these alongside the offering fields (a product is never left with zero
+// variants), but createVariant/updateVariant/saveVariantLocalization below
+// address a specific variant by id instead of always the first one.
+export type VariantInput = {
+  name: string;
   sku: string | null;
   priceMinor: number;
   currency: string;
+  status: "active" | "inactive";
   availabilityStatus: "available" | "unavailable";
 };
 
@@ -326,7 +334,12 @@ export class KnowledgeService {
       return { saved: true, capabilities: enabled };
     });
   }
-  createOffering(tenantId: string, userId: string, input: OfferingInput) {
+  createOffering(
+    tenantId: string,
+    userId: string,
+    input: OfferingInput,
+    variant: VariantInput,
+  ) {
     return this.db.withTenantTransaction(tenantId, async (client) => {
       if (!(await this.canManage(client, userId)))
         throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage offerings");
@@ -337,7 +350,7 @@ export class KnowledgeService {
         const id = uuidv7();
         await client.query(
           `insert into app.catalogs(id,tenant_id,name,status,currency,version,published_at) values($1,$2,'Main catalog','published',$3,1,now()) on conflict(tenant_id,name,version) do nothing`,
-          [id, tenantId, input.currency],
+          [id, tenantId, variant.currency],
         );
         catalog = await client.query(
           `select id from app.catalogs where status='published' order by published_at desc limit 1`,
@@ -360,20 +373,29 @@ export class KnowledgeService {
           input.bookingRequired,
         ],
       );
-      await client.query(
-        `insert into app.item_variants(id,tenant_id,catalog_item_id,sku,name,status,price_minor,currency,availability_status,availability_checked_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,now())`,
-        [
-          variantId,
-          tenantId,
-          itemId,
-          input.sku,
-          input.variantName,
-          input.status,
-          input.priceMinor,
-          input.currency,
-          input.availabilityStatus,
-        ],
-      );
+      try {
+        await client.query(
+          `insert into app.item_variants(id,tenant_id,catalog_item_id,sku,name,status,price_minor,currency,availability_status,availability_checked_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,now())`,
+          [
+            variantId,
+            tenantId,
+            itemId,
+            variant.sku,
+            variant.name,
+            variant.status,
+            variant.priceMinor,
+            variant.currency,
+            variant.availabilityStatus,
+          ],
+        );
+      } catch (error) {
+        if (isPgCode(error, "23505"))
+          throw conflict(
+            "VARIANT_SKU_IN_USE",
+            "This SKU is already used by another variant",
+          );
+        throw error;
+      }
       return { offering: await this.readOffering(client, itemId) };
     });
   }
@@ -397,6 +419,10 @@ export class KnowledgeService {
           "EXTERNAL_OFFERING_READ_ONLY",
           "Externally synchronized offerings must be edited at their source",
         );
+      // D-142: no longer touches app.item_variants at all — an offering can
+      // have several variants now, so "the first one" isn't a meaningful
+      // target here anymore. See createVariant/updateVariant/archiveVariant
+      // below, which address a specific variant by id instead.
       await client.query(
         `update app.catalog_items set name=$2,description=$3,category=$4,status=$5,offering_type=$6,duration_minutes=$7,booking_required=$8,updated_at=now() where id=$1`,
         [
@@ -410,38 +436,6 @@ export class KnowledgeService {
           input.bookingRequired,
         ],
       );
-      const variant = await client.query<{ id: string }>(
-        `select id from app.item_variants where catalog_item_id=$1 and status<>'archived' order by created_at limit 1`,
-        [offeringId],
-      );
-      if (variant.rows[0])
-        await client.query(
-          `update app.item_variants set sku=$2,name=$3,status=$4,price_minor=$5,currency=$6,availability_status=$7,availability_checked_at=now(),updated_at=now() where id=$1`,
-          [
-            variant.rows[0].id,
-            input.sku,
-            input.variantName,
-            input.status,
-            input.priceMinor,
-            input.currency,
-            input.availabilityStatus,
-          ],
-        );
-      else
-        await client.query(
-          `insert into app.item_variants(id,tenant_id,catalog_item_id,sku,name,status,price_minor,currency,availability_status,availability_checked_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,now())`,
-          [
-            uuidv7(),
-            tenantId,
-            offeringId,
-            input.sku,
-            input.variantName,
-            input.status,
-            input.priceMinor,
-            input.currency,
-            input.availabilityStatus,
-          ],
-        );
       return { offering: await this.readOffering(client, offeringId) };
     });
   }
@@ -449,7 +443,7 @@ export class KnowledgeService {
     tenantId: string,
     userId: string,
     offeringId: string,
-    input: { name: string; description: string; variantName: string },
+    input: { name: string; description: string },
   ) {
     return this.db.withTenantTransaction(tenantId, async (client) => {
       if (!(await this.canManage(client, userId)))
@@ -461,17 +455,9 @@ export class KnowledgeService {
            name=excluded.name,description=excluded.description,updated_at=now()`,
         [offeringId, input.name || null, input.description || null],
       );
-      const variant = await client.query<{ id: string }>(
-        `select id from app.item_variants where catalog_item_id=$1 and status<>'archived' order by created_at limit 1`,
-        [offeringId],
-      );
-      if (variant.rows[0])
-        await client.query(
-          `insert into app.item_variant_localizations(tenant_id,item_variant_id,locale,name)
-           values(app.current_tenant_id(),$1,'en',$2)
-           on conflict(tenant_id,item_variant_id,locale) do update set name=excluded.name,updated_at=now()`,
-          [variant.rows[0].id, input.variantName || null],
-        );
+      // D-142: variant-name translation moved to saveVariantLocalization,
+      // addressed by variant id — this used to always translate whichever
+      // variant happened to be first, silently ignoring any others.
       return { offering: await this.readOffering(client, offeringId) };
     });
   }
@@ -490,6 +476,158 @@ export class KnowledgeService {
         [offeringId],
       );
       return { archived: true };
+    });
+  }
+  // D-142: the write-side half of "self-service catalog with real
+  // multi-variant support" — the read side (readOffering/get() below)
+  // already returned every variant, unbounded; createVariant/updateVariant/
+  // archiveVariant are what let the admin panel actually add a second
+  // priced option to an existing product instead of requiring raw SQL.
+  private async assertManualOffering(client: PoolClient, offeringId: string) {
+    const item = await client.query<{ source_provider: string }>(
+      `select source_provider from app.catalog_items where id=$1 and status<>'archived'`,
+      [offeringId],
+    );
+    if (!item.rows[0])
+      throw notFound("OFFERING_NOT_FOUND", "Offering was not found");
+    if (item.rows[0].source_provider !== "manual")
+      throw forbidden(
+        "EXTERNAL_OFFERING_READ_ONLY",
+        "Externally synchronized offerings must be edited at their source",
+      );
+  }
+  createVariant(
+    tenantId: string,
+    userId: string,
+    offeringId: string,
+    input: VariantInput,
+  ) {
+    return this.db.withTenantTransaction(tenantId, async (client) => {
+      if (!(await this.canManage(client, userId)))
+        throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage offerings");
+      await this.assertManualOffering(client, offeringId);
+      const id = uuidv7();
+      try {
+        await client.query(
+          `insert into app.item_variants(id,tenant_id,catalog_item_id,sku,name,status,price_minor,currency,availability_status,availability_checked_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,now())`,
+          [
+            id,
+            tenantId,
+            offeringId,
+            input.sku,
+            input.name,
+            input.status,
+            input.priceMinor,
+            input.currency,
+            input.availabilityStatus,
+          ],
+        );
+      } catch (error) {
+        if (isPgCode(error, "23505"))
+          throw conflict(
+            "VARIANT_SKU_IN_USE",
+            "This SKU is already used by another variant",
+          );
+        throw error;
+      }
+      return { offering: await this.readOffering(client, offeringId) };
+    });
+  }
+  updateVariant(
+    tenantId: string,
+    userId: string,
+    offeringId: string,
+    variantId: string,
+    input: VariantInput,
+  ) {
+    return this.db.withTenantTransaction(tenantId, async (client) => {
+      if (!(await this.canManage(client, userId)))
+        throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage offerings");
+      await this.assertManualOffering(client, offeringId);
+      try {
+        const result = await client.query<{ id: string }>(
+          `update app.item_variants set sku=$3,name=$4,status=$5,price_minor=$6,currency=$7,availability_status=$8,availability_checked_at=now(),updated_at=now()
+           where id=$1 and catalog_item_id=$2 and status<>'archived' returning id`,
+          [
+            variantId,
+            offeringId,
+            input.sku,
+            input.name,
+            input.status,
+            input.priceMinor,
+            input.currency,
+            input.availabilityStatus,
+          ],
+        );
+        if (!result.rows[0])
+          throw notFound("VARIANT_NOT_FOUND", "Variant was not found");
+      } catch (error) {
+        if (isPgCode(error, "23505"))
+          throw conflict(
+            "VARIANT_SKU_IN_USE",
+            "This SKU is already used by another variant",
+          );
+        throw error;
+      }
+      return { offering: await this.readOffering(client, offeringId) };
+    });
+  }
+  archiveVariant(
+    tenantId: string,
+    userId: string,
+    offeringId: string,
+    variantId: string,
+  ) {
+    return this.db.withTenantTransaction(tenantId, async (client) => {
+      if (!(await this.canManage(client, userId)))
+        throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage offerings");
+      await this.assertManualOffering(client, offeringId);
+      // A product must never end up with zero sellable variants without an
+      // explicit warning — archiving the last *active* one is refused
+      // outright (deactivating one is still always allowed; only the
+      // one-way archive is guarded). Counts every other active variant of
+      // this same offering, excluding the one about to be archived.
+      const remaining = await client.query<{ count: string }>(
+        `select count(*) from app.item_variants where catalog_item_id=$1 and status='active' and id<>$2`,
+        [offeringId, variantId],
+      );
+      if (Number(remaining.rows[0].count) === 0)
+        throw conflict(
+          "OFFERING_LAST_VARIANT",
+          "This offering must keep at least one active variant",
+        );
+      const result = await client.query<{ id: string }>(
+        `update app.item_variants set status='archived',updated_at=now() where id=$1 and catalog_item_id=$2 and status<>'archived' returning id`,
+        [variantId, offeringId],
+      );
+      if (!result.rows[0])
+        throw notFound("VARIANT_NOT_FOUND", "Variant was not found");
+      return { offering: await this.readOffering(client, offeringId) };
+    });
+  }
+  saveVariantLocalization(
+    tenantId: string,
+    userId: string,
+    offeringId: string,
+    variantId: string,
+    input: { name: string },
+  ) {
+    return this.db.withTenantTransaction(tenantId, async (client) => {
+      if (!(await this.canManage(client, userId)))
+        throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage offerings");
+      const variant = await client.query<{ id: string }>(
+        `select id from app.item_variants where id=$1 and catalog_item_id=$2`,
+        [variantId, offeringId],
+      );
+      if (!variant.rows[0])
+        throw notFound("VARIANT_NOT_FOUND", "Variant was not found");
+      await client.query(
+        `insert into app.item_variant_localizations(tenant_id,item_variant_id,locale,name)
+         values(app.current_tenant_id(),$1,'en',$2)
+         on conflict(tenant_id,item_variant_id,locale) do update set name=excluded.name,updated_at=now()`,
+        [variantId, input.name || null],
+      );
+      return { offering: await this.readOffering(client, offeringId) };
     });
   }
   review(
@@ -652,4 +790,12 @@ export class KnowledgeService {
       })),
     };
   }
+}
+function isPgCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === code
+  );
 }

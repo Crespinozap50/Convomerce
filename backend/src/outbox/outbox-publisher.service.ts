@@ -84,7 +84,19 @@ export class OutboxPublisherService implements OnApplicationBootstrap, OnModuleD
            select id from app.outbox_events
            where (status = 'pending' or (status = 'publishing' and lease_expires_at < now()))
              and available_at <= now()
-           order by available_at, created_at
+           -- D-146 (docs/decisions.md) live finding: now() is
+           -- transaction-scoped in Postgres, so every outbox event created
+           -- within the same transaction (e.g. a primary reply plus its
+           -- additionalMessages, D-144) gets an IDENTICAL available_at AND
+           -- created_at -- with no tiebreaker, this ORDER BY had no
+           -- deterministic answer for which one claimBatch() returns
+           -- first, and the two could reach WhatsApp out of order (found
+           -- live: the tappable list arrived before the technical text it
+           -- was supposed to follow). id (uuidv7, monotonic even within
+           -- the same millisecond) breaks the tie in true creation order
+           -- without changing the intended available_at/created_at
+           -- scheduling for events from different transactions.
+           order by available_at, created_at, id
            for update skip locked
            limit $1
          )

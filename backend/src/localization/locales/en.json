@@ -16,6 +16,7 @@
     "previousPageLabel": "Previous",
     "viewTechDetailsLabel": "Tech specs",
     "viewTechDetailsHeading": "Here are the tech specs for each product:",
+    "viewTechDetailsListHeading": "Tap a product to choose it:",
     "priceHeading": "Price found:",
     "recommendation": "Would you like to add {{item}} for {{price}}?",
     "recommendationAccept": "Yes, add it",

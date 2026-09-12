@@ -55,6 +55,11 @@ export type BotConfig = {
     costCurrency: string;
   };
 };
+export type AiUsageSummary = {
+  costCurrency: string;
+  day: { requestsUsed: number; requestsLimit: number };
+  month: { costUsedMinor: number; costLimitMinor: number };
+};
 export type BusinessProfile = {
   description: string;
   address: string;

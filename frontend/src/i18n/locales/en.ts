@@ -393,6 +393,8 @@ export default {
     aiRollout: "Eligible conversations (%)",
     aiDailyLimit: "Daily request limit",
     aiMonthlyBudget: "Monthly budget ({{currency}})",
+    aiUsageDayLabel: "Used today:",
+    aiUsageMonthLabel: "Used this month:",
     saveHint: "Changes apply to new conversations.",
     saved: "Bot configuration saved.",
   },
@@ -460,6 +462,18 @@ export default {
     additionalVariants: "+{{count}} additional variant",
     additionalVariants_other: "+{{count}} additional variants",
     uncategorized: "Uncategorized",
+    variantsSectionTitle: "Variants",
+    variantsSectionHelp:
+      "Each variant is a separately sellable size or presentation, with its own price and SKU.",
+    variantAdd: "Add variant",
+    variantAddNamePlaceholder: "Name (e.g. Large size)",
+    variantSaved: "Variant saved.",
+    variantRemove: "Remove variant",
+    variantRemoveConfirm:
+      "Remove this variant? It will stop being available for sale.",
+    variantLastActiveHelp:
+      "At least one active variant must remain — the last one can't be removed.",
+    variantTranslateName: "English name",
     sourcesTitle: "External catalog sources",
     sourcesHelp: "Adapters synchronize offerings from commerce platforms.",
     adapterReady: "Adapter planned; not connected",
@@ -877,5 +891,12 @@ export default {
       "Add at least one option before activating this requirement.",
     REQUIREMENT_RESERVED_FIELD_KEY:
       "This field key is managed by the platform and cannot be reused.",
+    OFFERING_NOT_FOUND: "The offering no longer exists or was removed.",
+    EXTERNAL_OFFERING_READ_ONLY:
+      "This offering comes from an external source and can only be edited there.",
+    VARIANT_SKU_IN_USE: "This SKU is already used by another variant.",
+    VARIANT_NOT_FOUND: "The variant no longer exists.",
+    OFFERING_LAST_VARIANT:
+      "This offering must keep at least one active variant.",
   },
 } as const;

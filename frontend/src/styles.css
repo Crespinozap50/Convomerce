@@ -1046,6 +1046,41 @@ header h1 {
 .settings-section-title small {
   color: #748078;
 }
+.ai-usage-summary {
+  grid-column: 1/-1;
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #f6f8f7;
+  border-radius: 10px;
+}
+.ai-usage-row {
+  display: grid;
+  gap: 6px;
+}
+.ai-usage-row span {
+  font-size: 12px;
+  font-weight: 600;
+  color: #445149;
+}
+.ai-usage-row b {
+  color: #24322b;
+}
+.ai-usage-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: #dfe6e2;
+  overflow: hidden;
+}
+.ai-usage-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #168b5d;
+  transition: width 0.2s;
+}
+.ai-usage-fill-danger {
+  background: #c0392b;
+}
 .switch-row {
   position: relative;
   display: flex;
@@ -1833,6 +1868,55 @@ header h1 {
 .offering-modal .checkbox-row input {
   width: 18px;
   height: 18px;
+}
+.variants-section {
+  border-top: 1px solid #e1e7e3;
+  margin-top: 20px;
+  padding: 20px 24px 24px;
+}
+.variants-section h3 {
+  margin: 0;
+}
+.variants-section > p {
+  margin-top: 4px;
+  color: #748078;
+}
+.variants-list {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+}
+.variant-row {
+  border: 1px solid #e1e7e3;
+  border-radius: 12px;
+  padding: 14px;
+}
+.variant-row .modal-two {
+  margin-bottom: 8px;
+}
+.variant-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.variant-row-actions button:first-child {
+  width: auto;
+  padding: 7px 14px;
+}
+.variant-row-new {
+  display: flex;
+  gap: 8px;
+}
+.variant-row-new input {
+  flex: 1;
+}
+.variant-row-new input[type="number"] {
+  max-width: 170px;
+}
+.variant-row-new button {
+  width: auto;
+  padding: 7px 14px;
 }
 .close {
   position: absolute;

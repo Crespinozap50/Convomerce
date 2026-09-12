@@ -2090,6 +2090,84 @@ describe("CommercialFlowService", () => {
     expect(client.query).toHaveBeenCalledTimes(1);
   });
 
+  it("defers to the knowledge capability's own paginated reply, not a dead end, when the tapped category itself has more than 10 items (D-143, found live on CrediCel Store)", async () => {
+    // categoryItemsReply() bails with null once a single category has more
+    // than 10 items (its own comment explains why it can't just re-show the
+    // picker) — an earlier fix bolted a generic catalogButtonReply() onto
+    // that null here, but deterministic-reply.service.ts's resolve() now
+    // recognizes this exact "category:" id itself and hands back its own
+    // real, paginated product listing for the SAME category instead. That
+    // hand-off only happens if this file returns the null unconditionally,
+    // exactly like it already does for "menu:"/"menu-category:" taps below
+    // — asserting `null` here is what proves the hand-off isn't masked by
+    // a worse local fallback, the same shape as those other two tests.
+    const rows = Array.from({ length: 11 }, (_, index) => ({
+      item_id: `item-${index}`,
+      variant_id: `variant-${index}`,
+      name: `Producto ${index}`,
+      category: "Accesorios",
+      variant_name: "Unidad",
+      price_minor: "1000000",
+      currency: "COP",
+    }));
+    const client = { query: jest.fn().mockResolvedValueOnce({ rows }) };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Accesorios",
+      interactiveSelectionId: "category:Accesorios",
+      understanding: await understand("Accesorios"),
+    });
+
+    expect(reply).toBeNull();
+  });
+
+  it("shows the real catalog instead of a bare 'here are our options' text with nothing attached, when a message inside selecting_item matches no product (D-143, found live on CrediCel Store)", async () => {
+    // handleSelectingItem()'s own itemUnknown fallback used to be a bare
+    // localizedReply — the copy text literally says "...Estas son nuestras
+    // opciones:" but no options were ever attached, unlike startNewOrder()'s
+    // own itemUnknown case a few hundred lines above, which already shows
+    // the catalog. Found live: a customer stuck in selecting_item (entered
+    // via "Otro producto") who then said anything unmatched ("Si") got this
+    // exact lying reply on every single turn, with no way out except
+    // guessing an exact product name from memory — the workflow never left
+    // selecting_item.
+    const catalogRows = {
+      rows: [
+        { item_id: "item-1", variant_id: "pastor-variant", name: "Tacos al pastor", category: "Tacos", variant_name: "Unidad", price_minor: "1890000", currency: "COP" },
+        { item_id: "item-2", variant_id: "birria-variant", name: "Tacos de birria", category: "Tacos", variant_name: "Unidad", price_minor: "2290000", currency: "COP" },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [{ id: "workflow-1", commercial_request_id: "request-1", step: "selecting_item", context: { returnToCart: true } }],
+        })
+        .mockResolvedValueOnce(catalogRows) // matchItemCandidates() -> catalogItems()
+        .mockResolvedValueOnce(catalogRows), // itemUnknown fallback -> catalogItems() again
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Si",
+      understanding: await understand("Si"),
+    });
+
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "pastor-variant", title: "Tacos al pastor", description: "$ 18.900" },
+        { id: "birria-variant", title: "Tacos de birria", description: "$ 22.900" },
+        { id: "cart:view_catalog", title: "Ver menú" },
+      ],
+    });
+  });
+
   it("defers to the knowledge capability's own reply for a menu-pagination tap instead of matching it as a cart item (D-115, found live on Wendy Muñoz's conversation)", async () => {
     // deterministic-reply.service.ts's "Siguiente"/"Anterior" rows
     // (D-114, id "menu:<category>:page:<n>") only make sense to the

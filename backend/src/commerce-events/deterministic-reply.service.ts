@@ -40,6 +40,13 @@ export interface DeterministicReply {
   sources: string[];
   interactive?: InteractiveMessage;
   responsePlan?:ResponsePlan;
+  // D-144 (docs/decisions.md): extra outbound messages sent right after
+  // `body`/`responsePlan`, in order — bypasses composition/rewriting
+  // entirely (each entry is already final, human-readable text), used only
+  // where a single reply would otherwise have to truncate real content to
+  // fit one message (see offeringReply()'s detailMode branch). Never used
+  // for ordinary natural-language replies.
+  additionalMessages?: { body: string; interactive?: InteractiveMessage }[];
 }
 
 export interface BotCopy {
@@ -154,6 +161,26 @@ export class DeterministicReplyService {
         page: 1,
       });
     }
+    // D-143 live finding (CrediCel): commercial-flow.service.ts's own
+    // categoryPickerReply() tags its rows "category:{name}" (same
+    // `prefix:value` convention, different prefix — that file owns the
+    // in-order "Otro producto" category picker, this one owns the
+    // standalone "Ver menú" entry point). Its categoryItemsReply() returns
+    // null once the tapped category itself has more than 10 items (D-102's
+    // own comment explains why it can't just re-show a one-row picker) and
+    // resolve() there returns that null through unconditionally — which
+    // used to hand off to nothing at all recognizing this id, landing on
+    // the generic "Ver menú" button instead of any real products. Routing
+    // it here the same as "menu-category:" means that hand-off now lands
+    // directly on this file's own paginated, real product listing (D-138)
+    // instead of one more bounce back through the category picker.
+    const commerceCategorySelection = interactiveSelectionId?.match(/^category:(.+)$/);
+    if (commerceCategorySelection) {
+      return this.offeringReply(client, message, 'menu', copy, bot.locale, bot.timezone, bot.categoryLabelPrefix ?? null, {
+        category: commerceCategorySelection[1],
+        page: 1,
+      });
+    }
     const intent = classifyMessage(message, bot.handoffKeywords, bot.locale);
     if (intent === 'handoff') {
       return { intent, handoff: true, sources: [], body: copy.handoff };
@@ -201,7 +228,7 @@ export class DeterministicReplyService {
       menuUnavailable: string; productQuestion: string; menuHeading: string; priceHeading: string; menuButtonLabel: string;
       menuCategoriesHeading: string; menuUncategorized: string;
       nextPageLabel: string; previousPageLabel: string;
-      viewTechDetailsLabel: string; viewTechDetailsHeading: string;
+      viewTechDetailsLabel: string; viewTechDetailsHeading: string; viewTechDetailsListHeading: string;
     },
     locale: ConversationLocale,
     timezone: string,
@@ -434,6 +461,21 @@ export class DeterministicReplyService {
     // its Anterior/Siguiente/Ver opciones rows instead of the single
     // escape-hatch row every other case gets. `10 - navRows.length` keeps
     // item rows + nav rows within WhatsApp's 10-row cap either way.
+    const shownRows = rowInfo.slice(0, 10 - navRows.length);
+    // D-145 (docs/decisions.md) live finding: two variants of the same
+    // product ("Celular Honor batería extendida gamer" Único/256 GB) used
+    // to get the IDENTICAL row title — only the description told them
+    // apart, same shape of problem commercial-flow.service.ts's
+    // itemChoiceInteractive() already guards against for its own lists
+    // ("Meta rejects `buttons` outright when two options share the exact
+    // same title... `list` rows only need unique ids, not unique titles" —
+    // true for the id, but a customer picking between two rows that read
+    // identically has no way to tell which is which without opening each
+    // one). Appends the variant name in parentheses, the same convention
+    // that file already uses, whenever a name repeats among the rows
+    // actually shown on this page.
+    const nameCounts = new Map<string, number>();
+    for (const { row } of shownRows) nameCounts.set(row.name, (nameCounts.get(row.name) ?? 0) + 1);
     const interactive: InteractiveMessage | undefined =
       intent === 'menu' && rowInfo.length > 0
         ? {
@@ -441,11 +483,15 @@ export class DeterministicReplyService {
             body: '',
             buttonLabel: copy.menuButtonLabel,
             options: [
-              ...rowInfo.slice(0, 10 - navRows.length).map(({ row, price, variantLabel }) => {
+              ...shownRows.map(({ row, price, variantLabel }) => {
                 const detail = variantLabel ? `${variantLabel} · ${price}` : price;
+                const label =
+                  (nameCounts.get(row.name) ?? 0) > 1 && variantLabel
+                    ? `${row.name} (${variantLabel})`
+                    : row.name;
                 return {
                   id: row.variant_id,
-                  title: truncate(row.name, 24),
+                  title: truncate(label, 24),
                   // Same rule as itemChoiceReply (D-101/D-102): a name too
                   // long for the 24-char title must not lose the words that
                   // tell it apart from a sibling row — "Sandwich de queso y
@@ -454,7 +500,7 @@ export class DeterministicReplyService {
                   // carries variant/price, so the full name goes in front of
                   // it rather than replacing it.
                   description: truncate(
-                    row.name.length > 24 ? `${row.name} · ${detail}` : detail,
+                    label.length > 24 ? `${label} · ${detail}` : detail,
                     72,
                   ),
                 };
@@ -474,29 +520,81 @@ export class DeterministicReplyService {
       // D-138 live finding: composing every shown item's FULL description
       // unconditionally blew past LocalizedResponseComposer's 1024-char
       // body cap once a page held several items with genuinely long specs
-      // — this crashed the whole turn instead of degrading gracefully.
-      // Splits the available room evenly across however many items are on
-      // this page (a near-empty last page gets much more room per item
-      // than a full one), then truncates each block to its own share —
-      // same "…"-truncation convention this file already uses for row
-      // titles/descriptions, just applied to the plain-text detail body.
-      const MAX_BODY = 1024;
+      // — this crashed the whole turn instead of degrading gracefully. The
+      // original fix split the 1024-char room evenly across items and
+      // truncated each to its share — safe, but the project owner reported
+      // (D-144, docs/decisions.md) that cutting real technical
+      // specifications is never acceptable: a customer can't choose well
+      // between products from a cut-off spec sheet, unlike a merely
+      // decorative truncation (a list row's title) elsewhere in this file.
+      // 1024 is WhatsApp's cap on a message that also carries an
+      // interactive component — a text-ONLY message (no interactive
+      // attached) gets WhatsApp's much larger 4096-char limit instead.
+      // Full, untruncated descriptions are packed into as many text-only
+      // messages as actually needed (in practice almost always just one —
+      // this catalog's real descriptions run well under 1000 chars total
+      // for a 6-item page), and the tappable list itself goes out as one
+      // final, separate message carrying no technical text of its own, so
+      // its own body never approaches the interactive cap either.
+      const TEXT_LIMIT = 4096;
       const SEPARATOR = '\n\n';
       const detailHeading = copy.viewTechDetailsHeading;
-      const overhead = detailHeading.length + SEPARATOR.length * rowInfo.length;
-      const perItemBudget = Math.max(40, Math.floor((MAX_BODY - overhead) / Math.max(rowInfo.length, 1)));
-      const detailLines = rowInfo.map(({ row, price, variantLabel }) => {
+      const detailBlocks = rowInfo.map(({ row, price, variantLabel }) => {
         const label = `${row.name}${variantLabel ? ` (${variantLabel})` : ''} — ${price}`;
         const block = row.description ? `${label}\n${row.description}` : label;
-        return truncate(block, perItemBudget);
+        // Defensive only — no real description in this catalog gets
+        // anywhere near 4096 chars alone; this just guarantees a single
+        // pathological block can never itself exceed a message on its own.
+        return truncate(block, TEXT_LIMIT);
       });
-      const detailBody = truncate(`${detailHeading}${SEPARATOR}${detailLines.join(SEPARATOR)}`, MAX_BODY);
+      const parts: string[] = [];
+      let current = detailHeading;
+      for (const block of detailBlocks) {
+        const candidate = `${current}${SEPARATOR}${block}`;
+        if (candidate.length > TEXT_LIMIT && current !== detailHeading) {
+          parts.push(current);
+          current = block;
+        } else {
+          current = candidate;
+        }
+      }
+      parts.push(current);
+      const numbered = parts.length > 1
+        ? parts.map((part, index) => `${part}${SEPARATOR}(${index + 1}/${parts.length})`)
+        : parts;
+      const [firstBody, ...restBodies] = numbered;
+      // D-144 live finding (CrediCel, found live by the project owner right
+      // after this shipped): additionalMessages bypasses
+      // LocalizedResponseComposer entirely (see its own comment on
+      // DeterministicReply) — but that composer is also what copies the
+      // outer `body` into `interactive.body` before every ordinary reply
+      // (`interactive={...plan.interactive,body}`), because this same
+      // `interactive` object is built once above with `body: ''` and only
+      // ever gets a real body from that copy. Skipping the composer meant
+      // this list went out with a genuinely empty interactive.body — Meta
+      // rejects that outright ("Interactive message body is required"),
+      // so the customer got the full technical text but the tappable list
+      // silently failed every retry, leaving no way to act on what they'd
+      // just read.
+      // D-145 live finding (CrediCel): this used to reuse the exact same
+      // `detailHeading` text as the technical-text message right before it
+      // ("Aquí tienes la ficha técnica de cada producto:", twice in a
+      // row) — the project owner reported the two messages read as
+      // duplicates of each other at a glance, making it easy to miss that
+      // the second one actually carried the tappable list. A distinct
+      // heading ("Toca un producto para elegirlo:") makes the second
+      // message identifiable as its own, different thing.
+      const listHeading = copy.viewTechDetailsListHeading;
+      const additionalMessages = [
+        ...restBodies.map((body) => ({ body })),
+        ...(interactive ? [{ body: listHeading, interactive: { ...interactive, body: listHeading } }] : []),
+      ];
       return {
         intent,
         handoff: false,
         sources: [...new Set(sourceRows.map((row) => `catalog_item:${row.item_id}`))],
-        body: detailBody,
-        ...(interactive ? { interactive } : {}),
+        body: firstBody,
+        ...(additionalMessages.length ? { additionalMessages } : {}),
       };
     }
     // The tappable list already shows every product (name, variant, price)

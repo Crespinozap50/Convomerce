@@ -18,6 +18,7 @@ import { ConversationDecision } from "../conversation-decisions/conversation-dec
 import { LocalizedResponseComposer } from "../response-composition/localized-response.composer";
 import { NaturalResponseRewriter } from "../response-composition/natural-response.rewriter";
 import { ComposedResponse } from "../response-composition/response-plan.types";
+import { validateInteractiveMessage } from "../interactive-messages/interactive-message.types";
 
 type PendingReply = {
   channelId: string;
@@ -368,13 +369,72 @@ export class MessageReceivedConsumer {
               : "deterministic-response",
         ],
       );
+      // D-144 (docs/decisions.md): additionalMessages bypasses composition/
+      // rewriting entirely (each entry is already final text — see
+      // DeterministicReply.additionalMessages) and gets sent as its own
+      // outbound message, in order, right after the primary one — used so
+      // a real technical description never has to be truncated to fit a
+      // single message's char limit (offeringReply()'s detailMode branch).
+      // D-144 live finding: additionalMessages bypasses
+      // LocalizedResponseComposer entirely (see its own comment on
+      // DeterministicReply), which is also what normally validates an
+      // interactive payload before it ever reaches WhatsApp — an
+      // interactive entry that skips this (found live: an empty
+      // interactive.body) used to fail silently at Meta's API after every
+      // retry instead of failing loudly here. Validated up front, before
+      // any of this transaction's inserts, so a malformed entry never
+      // leaves a partially-persisted reply behind.
+      for (const extra of decision.additionalMessages ?? []) {
+        if (extra.interactive) validateInteractiveMessage(extra.interactive);
+      }
+      const extraMessageIds: string[] = [];
+      for (const extra of decision.additionalMessages ?? []) {
+        const extraMessageId = uuidv7();
+        extraMessageIds.push(extraMessageId);
+        await client.query(
+          `insert into app.messages
+              (id, tenant_id, conversation_id, channel_id, direction, sender_type,
+               message_type, content, delivery_status, occurred_at)
+             values ($1, $2, $3, $4, 'outbound', 'ai', $5,
+                     jsonb_strip_nulls(jsonb_build_object(
+                       'body', $6::text,
+                       'interactive', $7::jsonb,
+                       'automation', 'deterministic-response',
+                       'intent', $8::text,
+                       'sources', $9::jsonb)),
+                     'queued', now())`,
+          [
+            extraMessageId,
+            event.tenantId,
+            event.conversationId,
+            channelId,
+            extra.interactive ? "interactive" : "text",
+            extra.body,
+            extra.interactive ? JSON.stringify(extra.interactive) : null,
+            reply.intent,
+            JSON.stringify(reply.sources),
+          ],
+        );
+      }
+      // D-146 (docs/decisions.md) live finding: additionalMessages used to
+      // get their own outbox event (and therefore their own BullMQ job)
+      // each — with the worker's default concurrency, two jobs for the
+      // same reply could be sent to Meta at the same time, with no
+      // guarantee they complete in the order they were queued (found
+      // live: the tappable list arrived before the technical text it was
+      // supposed to follow). A single outbox event carries every message
+      // id for this reply; SendRequestedConsumer sends them all,
+      // sequentially, inside that one job — never as separate jobs that
+      // could race.
       await client.query(
         `insert into app.outbox_events
             (id, tenant_id, event_type, aggregate_type, aggregate_id, correlation_id,
              payload_schema_version, payload)
            values ($1, $2, 'message.send_requested', 'message', $3, $4, 1,
-                   jsonb_build_object('messageId', ($3::uuid)::text))`,
-        [uuidv7(), event.tenantId, replyMessageId, correlationId],
+                   jsonb_build_object(
+                     'messageId', ($3::uuid)::text,
+                     'followUpMessageIds', to_jsonb($5::uuid[])))`,
+        [uuidv7(), event.tenantId, replyMessageId, correlationId, extraMessageIds],
       );
     });
   }

@@ -21,6 +21,7 @@ import {
   KnowledgeService,
   OfferingInput,
   ProfileInput,
+  VariantInput,
 } from "./knowledge.service";
 
 @Controller("v1/admin/tenants/:tenantId/knowledge")
@@ -72,10 +73,12 @@ export class KnowledgeController {
     @Req() request: AuthenticatedRequest,
   ) {
     valid(id);
+    const { offering, variant } = parseCreateOffering(body);
     return this.service.createOffering(
       id,
       request.actor.userId,
-      parseOffering(body),
+      offering,
+      variant,
     );
   }
   @Patch("offerings/:offeringId") updateOffering(
@@ -116,6 +119,77 @@ export class KnowledgeController {
     valid(id);
     valid(offeringId);
     return this.service.archiveOffering(id, request.actor.userId, offeringId);
+  }
+  // D-142: nested under a specific offering, same "prefix:value" nested
+  // resource shape modifier-groups.controller.ts already uses for
+  // groupId/optionId — lets a manual offering carry more than one priced
+  // variant from the admin panel instead of requiring raw SQL.
+  @Post("offerings/:offeringId/variants") createVariant(
+    @Param("tenantId") id: string,
+    @Param("offeringId") offeringId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    valid(id);
+    valid(offeringId);
+    return this.service.createVariant(
+      id,
+      request.actor.userId,
+      offeringId,
+      parseVariant(body),
+    );
+  }
+  @Patch("offerings/:offeringId/variants/:variantId") updateVariant(
+    @Param("tenantId") id: string,
+    @Param("offeringId") offeringId: string,
+    @Param("variantId") variantId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    valid(id);
+    valid(offeringId);
+    valid(variantId);
+    return this.service.updateVariant(
+      id,
+      request.actor.userId,
+      offeringId,
+      variantId,
+      parseVariant(body),
+    );
+  }
+  @Delete("offerings/:offeringId/variants/:variantId") archiveVariant(
+    @Param("tenantId") id: string,
+    @Param("offeringId") offeringId: string,
+    @Param("variantId") variantId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    valid(id);
+    valid(offeringId);
+    valid(variantId);
+    return this.service.archiveVariant(
+      id,
+      request.actor.userId,
+      offeringId,
+      variantId,
+    );
+  }
+  @Put("offerings/:offeringId/variants/:variantId/localizations/en") saveVariantLocalization(
+    @Param("tenantId") id: string,
+    @Param("offeringId") offeringId: string,
+    @Param("variantId") variantId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    valid(id);
+    valid(offeringId);
+    valid(variantId);
+    return this.service.saveVariantLocalization(
+      id,
+      request.actor.userId,
+      offeringId,
+      variantId,
+      parseVariantLocalization(body),
+    );
   }
   @Post("unresolved/:questionId/review") review(
     @Param("tenantId") id: string,
@@ -251,7 +325,12 @@ function parseOfferingLocalization(body: unknown) {
   return {
     name: string(value?.name),
     description: string(value?.description),
-    variantName: string(value?.variantName),
+  };
+}
+function parseVariantLocalization(body: unknown) {
+  const value = body as Record<string, unknown>;
+  return {
+    name: typeof value?.name === "string" ? value.name.trim() : "",
   };
 }
 function parseEntryLocalization(body: unknown) {
@@ -294,7 +373,7 @@ function parseResponseVariantReview(body: unknown) {
     throw badRequest("VALIDATION_ERROR", "Invalid response variant review");
   return { action: action as "approve" | "reject", variantBody };
 }
-function parseOffering(body: unknown) {
+function parseOffering(body: unknown): OfferingInput {
   const value = body as Record<string, unknown>;
   if (!value || typeof value !== "object")
     throw badRequest("VALIDATION_ERROR", "Invalid offering");
@@ -315,20 +394,11 @@ function parseOffering(body: unknown) {
   const statuses = ["active", "inactive"];
   const offeringType = string("offeringType", true);
   const status = string("status", true);
-  const currency = string("currency", true).toUpperCase();
-  const priceMinor = Number(value.priceMinor);
   const durationMinutes =
     value.durationMinutes === null || value.durationMinutes === ""
       ? null
       : Number(value.durationMinutes);
-  if (
-    !types.includes(offeringType) ||
-    !statuses.includes(status) ||
-    !Number.isSafeInteger(priceMinor) ||
-    priceMinor < 0 ||
-    priceMinor > 999999999999 ||
-    !/^[A-Z]{3}$/.test(currency)
-  )
+  if (!types.includes(offeringType) || !statuses.includes(status))
     throw badRequest("VALIDATION_ERROR", "Invalid offering values");
   if (
     durationMinutes !== null &&
@@ -347,13 +417,55 @@ function parseOffering(body: unknown) {
     status: status as "active" | "inactive",
     durationMinutes,
     bookingRequired: value.bookingRequired === true,
-    variantName: string("variantName", true),
+  };
+}
+// D-142: split out of parseOffering so it's shared by createVariant and
+// updateVariant, which each address one specific variant instead of always
+// the offering's first one.
+function parseVariant(body: unknown): VariantInput {
+  const value = body as Record<string, unknown>;
+  if (!value || typeof value !== "object")
+    throw badRequest("VALIDATION_ERROR", "Invalid variant");
+  const string = (field: string, required = false) => {
+    const result =
+      typeof value[field] === "string" ? (value[field] as string).trim() : "";
+    if (required && !result)
+      throw badRequest("VALIDATION_ERROR", `${field} is required`);
+    return result;
+  };
+  const statuses = ["active", "inactive"];
+  const status = string("status", true);
+  const currency = string("currency", true).toUpperCase();
+  const priceMinor = Number(value.priceMinor);
+  if (
+    !statuses.includes(status) ||
+    !Number.isSafeInteger(priceMinor) ||
+    priceMinor < 0 ||
+    priceMinor > 999999999999 ||
+    !/^[A-Z]{3}$/.test(currency)
+  )
+    throw badRequest("VALIDATION_ERROR", "Invalid variant values");
+  return {
+    name: string("name", true),
     sku: string("sku") || null,
     priceMinor,
     currency,
+    status: status as "active" | "inactive",
     availabilityStatus:
       value.availabilityStatus === "unavailable"
         ? "unavailable"
         : ("available" as "available" | "unavailable"),
   };
+}
+// Creating an offering still needs exactly one variant alongside it in the
+// same call — a catalog item is never left with zero variants — so the
+// request body nests { ...offeringFields, variant: {...} } instead of
+// flattening everything the way the old single-variant OfferingInput did.
+function parseCreateOffering(body: unknown): {
+  offering: OfferingInput;
+  variant: VariantInput;
+} {
+  const offering = parseOffering(body);
+  const variant = parseVariant((body as Record<string, unknown>)?.variant);
+  return { offering, variant };
 }
