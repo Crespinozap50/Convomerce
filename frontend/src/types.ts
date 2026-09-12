@@ -46,6 +46,7 @@ export type BotConfig = {
   handoffKeywords: string[];
   conversationTimeoutMinutes: number | null;
   messageRetentionDays: number | null;
+  categoryLabelPrefix: string | null;
   aiResponsePolicy: {
     enabled: boolean;
     rolloutPercentage: number;

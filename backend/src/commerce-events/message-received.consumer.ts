@@ -140,8 +140,9 @@ export class MessageReceivedConsumer {
             fallback_message: string;
             handoff_keywords: string[];
             timezone: string;
+            category_label_prefix: string | null;
           }>(
-            `select bot.enabled,bot.assistant_name,tenant.display_name as business_name,bot.locale,bot.welcome_message,bot.fallback_message,bot.handoff_keywords,tenant.timezone
+            `select bot.enabled,bot.assistant_name,tenant.display_name as business_name,bot.locale,bot.welcome_message,bot.fallback_message,bot.handoff_keywords,tenant.timezone,bot.category_label_prefix
              from app.tenants tenant left join app.bot_configurations bot on bot.tenant_id=tenant.id
             where tenant.id=app.current_tenant_id() limit 1`,
           ),
@@ -193,6 +194,7 @@ export class MessageReceivedConsumer {
           interactiveSelectionId:
             message.rows[0].interactive_selection_id ?? undefined,
           timezone: bot?.timezone ?? "UTC",
+          categoryLabelPrefix: bot?.category_label_prefix ?? undefined,
           understanding,
         };
         const decision = await this.decisions.decide(client, flowInput, {
@@ -204,6 +206,7 @@ export class MessageReceivedConsumer {
           handoffKeywords: bot?.handoff_keywords ?? [],
           customerName: plausibleDisplayName,
           timezone: bot?.timezone ?? "UTC",
+          categoryLabelPrefix: bot?.category_label_prefix ?? null,
         });
         const deterministicResponse = this.responseComposer.compose(
           decision.responsePlan,

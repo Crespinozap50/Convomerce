@@ -49,6 +49,10 @@ export interface BotCopy {
   handoffKeywords: string[];
   customerName?: string | null;
   timezone: string;
+  // D-139/D-140: per-tenant opt-in word/phrase shown before each category
+  // row in the "Ver menú" picker ("Menú Tacos" for Santos Tacos) — null
+  // (the default) means no prefix at all (CrediCel Store's "Celulares").
+  categoryLabelPrefix?: string | null;
 }
 
 interface OfferingRow {
@@ -59,9 +63,26 @@ interface OfferingRow {
   variant_name: string;
   price_minor: string;
   currency: string;
+  description: string | null;
 }
 
 const includesAny = (text: string, words: string[]): boolean => words.some((word) => text.includes(word));
+
+// Tenant-authored category values are free text — some tenants already
+// write them capitalized ("Tacos"), CrediCel's are all lowercase
+// ("celulares"). Capitalizing the first letter on display only ever helps
+// or is a no-op, never double-capitalizes since only the first character
+// changes.
+const capitalizeFirst = (value: string): string =>
+  value.length === 0 ? value : `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+
+// D-140: a tenant that opts into a category prefix ("Menú" for Santos
+// Tacos) gets its own wording exactly as configured, category value
+// untouched (preserves the tenant's own casing) — a tenant with no prefix
+// gets the plain category name capitalized instead (D-139's "Celulares",
+// not "celulares").
+const categoryRowLabel = (prefix: string | null, category: string): string =>
+  prefix ? `${prefix} ${category}` : capitalizeFirst(category);
 
 export function classifyMessage(message: string, handoffKeywords: string[] = [], locale: ConversationLocale = 'es'): ReplyIntent {
   const text = normalize(message);
@@ -88,9 +109,49 @@ export class DeterministicReplyService {
     // a natural-language question, so there's nothing to (mis)classify.
     const pageSelection = interactiveSelectionId?.match(/^menu:(.+):page:(\d+)$/);
     if (pageSelection) {
-      return this.offeringReply(client, message, 'menu', copy, bot.locale, bot.timezone, {
+      return this.offeringReply(client, message, 'menu', copy, bot.locale, bot.timezone, bot.categoryLabelPrefix ?? null, {
         category: pageSelection[1],
         page: Number(pageSelection[2]),
+      });
+    }
+    // "Ficha técnica" row tapped from a category listing (see offeringReply)
+    // — same category+page addressing as the pagination tap above, tagged
+    // with detailMode so offeringReply regenerates the exact same page but
+    // returns the full spec text instead of the short tappable list body.
+    const detailSelection = interactiveSelectionId?.match(/^details:menu:(.+):page:(\d+)$/);
+    if (detailSelection) {
+      return this.offeringReply(
+        client,
+        message,
+        'menu',
+        copy,
+        bot.locale,
+        bot.timezone,
+        bot.categoryLabelPrefix ?? null,
+        { category: detailSelection[1], page: Number(detailSelection[2]) },
+        true,
+      );
+    }
+    // D-138/D-139 live finding: menuCategoriesReply()'s own category rows
+    // used to rely on their *title* carrying the word "Menú" so a tap's
+    // reconstructed text ("Menú Celulares") still matched classifyMessage's
+    // "catalog" keyword list and re-triggered the 'menu' intent — the
+    // project owner asked for the plain category name shown instead
+    // ("Celulares"), which breaks that trick. First fix used a bare
+    // (unprefixed) id and told it apart from a variant_id by shape (not a
+    // UUID) — Santos Tacos live testing broke that: this file's own tests
+    // (and, on the commerce side, commercial-flow.service.ts's own early
+    // bailout for this same id) use short, readable mock ids for
+    // variant_id/option_id ("agua-12", "opt-1") that also aren't
+    // UUID-shaped, so the heuristic couldn't actually tell them apart.
+    // Given its own explicit `menu-category:` prefix instead — the same
+    // `prefix:value` convention every other id in this system already
+    // follows — there's no ambiguity left to resolve by guessing at shape.
+    const categorySelection = interactiveSelectionId?.match(/^menu-category:(.+)$/);
+    if (categorySelection) {
+      return this.offeringReply(client, message, 'menu', copy, bot.locale, bot.timezone, bot.categoryLabelPrefix ?? null, {
+        category: categorySelection[1],
+        page: 1,
       });
     }
     const intent = classifyMessage(message, bot.handoffKeywords, bot.locale);
@@ -121,7 +182,7 @@ export class DeterministicReplyService {
         return { intent, handoff: false, sources: [`knowledge_entry:${specific.id}`], body: specific.content };
       }
       if (intent === 'menu' || intent === 'price') {
-        return this.offeringReply(client, message, intent, copy, bot.locale, bot.timezone);
+        return this.offeringReply(client, message, intent, copy, bot.locale, bot.timezone, bot.categoryLabelPrefix ?? null);
       }
       return this.profileReply(client, intent, bot.fallbackMessage, bot.locale);
     }
@@ -138,12 +199,27 @@ export class DeterministicReplyService {
     intent: 'menu' | 'price',
     copy: {
       menuUnavailable: string; productQuestion: string; menuHeading: string; priceHeading: string; menuButtonLabel: string;
-      menuCategoriesHeading: string; menuCategoryPrefix: string; menuUncategorized: string;
+      menuCategoriesHeading: string; menuUncategorized: string;
       nextPageLabel: string; previousPageLabel: string;
+      viewTechDetailsLabel: string; viewTechDetailsHeading: string;
     },
     locale: ConversationLocale,
     timezone: string,
+    // D-139/D-140: per-tenant opt-in word shown before each category row
+    // ("Menú Tacos" for Santos Tacos) — null means no prefix at all
+    // (CrediCel Store's "Celulares"). Threaded down to menuCategoriesReply()
+    // below, the only place that actually builds a category row.
+    categoryLabelPrefix: string | null,
     pageSelection?: { category: string; page: number },
+    // D-138 live finding: browsing the catalog (via "Ver menú" or the
+    // commerce capability's own "Otro producto") never showed a product's
+    // real technical description — only name/variant/price, same gap
+    // recommendationDetailReply() (D-128) already solved for consultative
+    // recommendations. Set when the "Ficha técnica" row (added below) is
+    // tapped — reuses the exact same category+page addressing as the
+    // pagination tap right above it, so the detail view always matches
+    // what's actually on screen instead of guessing.
+    detailMode = false,
   ): Promise<DeterministicReply> {
     // Same time-window rule as CommercialFlowService.catalogItems() (D-097)
     // — an item outside its daily window (e.g. a lunch-only dish asked
@@ -156,7 +232,7 @@ export class DeterministicReplyService {
               coalesce(item_loc.name,item.name) as name,
               coalesce(cat_loc.label,item.category) as category,
               coalesce(variant_loc.name,variant.name) as variant_name,
-              variant.price_minor::text,variant.currency
+              variant.price_minor::text,variant.currency,item.description
          from app.catalog_items item
          join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
          left join app.catalog_item_localizations item_loc
@@ -198,6 +274,11 @@ export class DeterministicReplyService {
     let navRows: { id: string; title: string }[] = [
       { id: 'cart:view_catalog', title: copy.menuButtonLabel },
     ];
+    // D-138: hoisted so the "Ficha técnica" row below can address the
+    // current page even when pagination itself never kicks in (a category
+    // with 9 or fewer items skips the `rows.length > 9` block entirely,
+    // but still sits on "page 1" for addressing purposes).
+    let currentPage = 1;
     if (intent === 'menu') {
       const ignored = new Set(catalogFor(locale).stopWords.map(normalize));
       const categoryWords = (value: string | null) =>
@@ -260,7 +341,7 @@ export class DeterministicReplyService {
       // case: once a category (or product) has already been picked, the
       // normal listing below runs instead — so tapping a category can never
       // loop back into another category picker.
-      if (!narrowed && rows.length > 10) return this.menuCategoriesReply(rows, copy);
+      if (!narrowed && rows.length > 10) return this.menuCategoriesReply(rows, copy, categoryLabelPrefix);
       // D-113/D-114, three attempts before this one, all found live on
       // Santos Tacos: "Menú Tacos" narrows to the Tacos category
       // (byCategory=true, so the >10 check above never fires), but that
@@ -274,14 +355,14 @@ export class DeterministicReplyService {
       // items — real progress, but silently dropped every item past the
       // 9th with no way to reach them; a category with 20-30 items would
       // lose most of it, not just Santos Tacos' 4 extra tacos.
-      // D-114: real pagination. 7 items/page (not 9) leaves room for up to
-      // 3 nav rows (Anterior, Siguiente, Ver opciones) on a middle page
-      // without ever exceeding WhatsApp's 10-row cap.
+      // D-114: real pagination. 6 items/page leaves room for up to 4 nav
+      // rows (Anterior, Siguiente, Ver opciones, and D-138's Ficha técnica)
+      // on a middle page without ever exceeding WhatsApp's 10-row cap.
       if (byCategory && askedCategory && rows.length > 9) {
-        const ITEMS_PER_PAGE = 7;
+        const ITEMS_PER_PAGE = 6;
         const totalPages = Math.ceil(rows.length / ITEMS_PER_PAGE);
         const requestedPage = pageSelection && pageSelection.category === askedCategory ? pageSelection.page : 1;
-        const currentPage = Math.min(Math.max(requestedPage, 1), totalPages);
+        currentPage = Math.min(Math.max(requestedPage, 1), totalPages);
         const category = askedCategory;
         rows = rows.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
         navRows = [
@@ -292,6 +373,16 @@ export class DeterministicReplyService {
             ? [{ id: `menu:${category}:page:${currentPage + 1}`, title: copy.nextPageLabel }]
             : []),
           { id: 'cart:view_catalog', title: copy.menuButtonLabel },
+        ];
+      }
+      // D-138: only offered once a specific category is on screen — a
+      // name-matched result (bestScore>0, byCategory false) has no stable
+      // category+page key to re-address on a later tap, and the unnarrowed
+      // category-picker branch above has no products to detail yet.
+      if (byCategory && askedCategory) {
+        navRows = [
+          { id: `details:menu:${askedCategory}:page:${currentPage}`, title: copy.viewTechDetailsLabel },
+          ...navRows,
         ];
       }
     }
@@ -372,6 +463,42 @@ export class DeterministicReplyService {
             ],
           }
         : undefined;
+    // D-138 live finding: a WhatsApp list row's 72-char description has no
+    // room for a real technical description once name/variant/price are
+    // already there — same gap recommendationDetailReply() (D-128) already
+    // solved for consultative recommendations. Prints every currently-shown
+    // item's full name, price and description as plain text, then still
+    // attaches the identical tappable list below so the customer can act
+    // on what they just read instead of having to ask for the menu again.
+    if (detailMode) {
+      // D-138 live finding: composing every shown item's FULL description
+      // unconditionally blew past LocalizedResponseComposer's 1024-char
+      // body cap once a page held several items with genuinely long specs
+      // — this crashed the whole turn instead of degrading gracefully.
+      // Splits the available room evenly across however many items are on
+      // this page (a near-empty last page gets much more room per item
+      // than a full one), then truncates each block to its own share —
+      // same "…"-truncation convention this file already uses for row
+      // titles/descriptions, just applied to the plain-text detail body.
+      const MAX_BODY = 1024;
+      const SEPARATOR = '\n\n';
+      const detailHeading = copy.viewTechDetailsHeading;
+      const overhead = detailHeading.length + SEPARATOR.length * rowInfo.length;
+      const perItemBudget = Math.max(40, Math.floor((MAX_BODY - overhead) / Math.max(rowInfo.length, 1)));
+      const detailLines = rowInfo.map(({ row, price, variantLabel }) => {
+        const label = `${row.name}${variantLabel ? ` (${variantLabel})` : ''} — ${price}`;
+        const block = row.description ? `${label}\n${row.description}` : label;
+        return truncate(block, perItemBudget);
+      });
+      const detailBody = truncate(`${detailHeading}${SEPARATOR}${detailLines.join(SEPARATOR)}`, MAX_BODY);
+      return {
+        intent,
+        handoff: false,
+        sources: [...new Set(sourceRows.map((row) => `catalog_item:${row.item_id}`))],
+        body: detailBody,
+        ...(interactive ? { interactive } : {}),
+      };
+    }
     // The tappable list already shows every product (name, variant, price)
     // as its own row — repeating that as bullet lines in the body as well
     // is pure duplication once WhatsApp renders both. Only fall back to the
@@ -386,15 +513,22 @@ export class DeterministicReplyService {
       ...(interactive ? { interactive } : {}),
     };
   }
-  // Each row's title carries copy.menuCategoryPrefix ("Menú") specifically
-  // so a tap re-triggers the 'menu' intent when its title comes back as the
-  // next inbound message (see classifyMessage's keyword list) — the
-  // category name alone wouldn't necessarily match any fixed intent and
-  // could fall through to unrelated FAQ matching instead. The category name
-  // itself is what then narrows the *next* call to offeringReply via the
-  // exact same name+category token scoring already used above, so no new
-  // matching logic is needed for the second tap — it reuses the one this
-  // file already had before this feature existed.
+  // D-138/D-139 live finding: the row's title used to carry
+  // copy.menuCategoryPrefix ("Menú") specifically so a tap re-triggered
+  // the 'menu' intent when its title came back as the next inbound message
+  // (see classifyMessage's keyword list) — the category name alone
+  // wouldn't necessarily match any fixed intent and could fall through to
+  // unrelated FAQ matching instead. The project owner asked for the plain
+  // category name shown instead ("Celulares", not "Menú Celulares") —
+  // resolve()'s own id-based shortcut (added alongside this) now
+  // recognizes the row's own "menu-category:{name}" id directly, so the
+  // tap no longer depends on what the title text says at all (found live
+  // on Santos Tacos: without this, tapping "Tacos" — no longer "Menú
+  // Tacos" — fell through commerce's own item-name matching first and
+  // tied against every taco on the menu, since commerce owns nothing
+  // about this id and had only ever been saved by the word "menu" in the
+  // old title). Text-scoring against the reconstructed title still works
+  // as a fallback for a genuinely typed question naming the category.
   //
   // Capped at 10 categories (WhatsApp's own list-row limit) — with more
   // than that, the smallest categories by item count are dropped from the
@@ -409,7 +543,8 @@ export class DeterministicReplyService {
   // above if a merged label got truncated mid-name.
   private menuCategoriesReply(
     rows: OfferingRow[],
-    copy: { menuCategoriesHeading: string; menuCategoryPrefix: string; menuUncategorized: string; menuButtonLabel: string },
+    copy: { menuCategoriesHeading: string; menuUncategorized: string; menuButtonLabel: string },
+    categoryLabelPrefix: string | null,
   ): DeterministicReply {
     const counts = new Map<string, number>();
     for (const row of rows) {
@@ -430,8 +565,8 @@ export class DeterministicReplyService {
         body: '',
         buttonLabel: copy.menuButtonLabel,
         options: top.map(([category]) => ({
-          id: category,
-          title: truncate(`${copy.menuCategoryPrefix} ${category}`, 24),
+          id: `menu-category:${category}`,
+          title: truncate(categoryRowLabel(categoryLabelPrefix, category), 24),
         })),
       },
     };

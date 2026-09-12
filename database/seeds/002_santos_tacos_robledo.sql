@@ -53,16 +53,23 @@ values
  ('0194f000-0000-7000-8000-000000000001','on_site',true)
 on conflict(tenant_id,capability) do update set enabled=excluded.enabled,updated_at=now();
 
-insert into app.bot_configurations(tenant_id,enabled,assistant_name,locale,welcome_message,fallback_message,handoff_keywords,updated_by_user_id)
+-- D-140 (docs/decisions.md): the project owner explicitly asked for Santos
+-- Tacos to keep saying "Menú Tacos" in the category picker, unlike
+-- CrediCel Store's "Celulares" (no prefix) — category_label_prefix
+-- (082_bot_configuration_category_prefix.sql) is the per-tenant opt-in for
+-- exactly this.
+insert into app.bot_configurations(tenant_id,enabled,assistant_name,locale,welcome_message,fallback_message,handoff_keywords,category_label_prefix,updated_by_user_id)
 values(
  '0194f000-0000-7000-8000-000000000001',true,'Santos','es',
  '¡Hola! Soy Santos, el asistente de Santos Tacos Robledo. Puedo mostrarte el menú, ayudarte con un pedido o contarte sobre nuestros domicilios. ¿Qué se te antoja?',
  'Todavía no tengo esa información. Puedo ayudarte con el menú, precios, horarios, medios de pago y cobertura, o comunicarte con una persona.',
  array['asesor','persona','humano','hablar con alguien'],
+ 'Menú',
  '0194f000-0000-7000-8000-000000000102'
 )
 on conflict(tenant_id) do update set enabled=excluded.enabled,assistant_name=excluded.assistant_name,locale=excluded.locale,
  welcome_message=excluded.welcome_message,fallback_message=excluded.fallback_message,handoff_keywords=excluded.handoff_keywords,
+ category_label_prefix=excluded.category_label_prefix,
  updated_by_user_id=excluded.updated_by_user_id,updated_at=now();
 
 insert into app.contacts(id,tenant_id,display_name,locale,consent_status)

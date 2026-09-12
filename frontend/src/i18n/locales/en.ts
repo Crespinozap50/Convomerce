@@ -380,6 +380,10 @@ export default {
     messageRetentionDisabled: "Never",
     messageRetentionHelp:
       "Messages older than this are permanently deleted, even if the conversation is still active. Minimum 7 days. Leave blank to never delete.",
+    categoryLabelPrefix: "Word shown before each category in the menu",
+    categoryLabelPrefixDisabled: "No word (name only)",
+    categoryLabelPrefixHelp:
+      "For example \"Menu\" so it reads \"Menu Tacos\". Leave blank to show just the category name (e.g. \"Phones\").",
     aiRewriting: "AI budget (wording & recommendations)",
     aiRewritingHelp:
       "One shared budget for improving reply tone and for consultative product recommendations (if enabled under Knowledge). Neither ever replaces the safe deterministic flow.",

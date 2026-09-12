@@ -14,6 +14,8 @@
     "menuUncategorized": "Otros",
     "nextPageLabel": "Siguiente",
     "previousPageLabel": "Anterior",
+    "viewTechDetailsLabel": "Ficha técnica",
+    "viewTechDetailsHeading": "Aquí tienes la ficha técnica de cada producto:",
     "priceHeading": "Precio encontrado:",
     "recommendation": "¿Te agrego {{item}} por {{price}} para acompañar tu compra?",
     "recommendationAccept": "Sí, agregar",

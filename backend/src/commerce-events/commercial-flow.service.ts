@@ -195,6 +195,20 @@ export const parseRecommendationAction = (
     ? { action: match[1] as "add" | "reject", eventId: match[2] }
     : null;
 };
+// Tenant-authored category values are free text — some tenants already
+// write them capitalized ("Tacos"), CrediCel's are all lowercase
+// ("celulares"). Capitalizing the first letter on display only ever helps
+// or is a no-op, never double-capitalizes since only the first character
+// changes.
+const capitalizeFirst = (value: string): string =>
+  value.length === 0 ? value : `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+// D-140: a tenant that opts into a category prefix ("Menú" for Santos
+// Tacos) gets its own wording exactly as configured, category value
+// untouched (preserves the tenant's own casing) — a tenant with no prefix
+// gets the plain category name capitalized instead (D-139's "Celulares",
+// not "celulares").
+const categoryRowLabel = (prefix: string | null, category: string): string =>
+  prefix ? `${prefix} ${category}` : capitalizeFirst(category);
 
 @Injectable()
 export class CommercialFlowService {
@@ -218,13 +232,22 @@ export class CommercialFlowService {
     // product prompt, which deliberately creates no workflow row at all
     // (D-095). Resolved by id, not by reprocessing the tapped title as
     // text, since this file's normal item-matching never considers
-    // category (only deterministic-reply.service.ts's sibling menu picker
-    // needs the text-based trick, because it has no id-based dispatch of
-    // its own to hook into).
+    // category. D-138 live finding: always returns here now, even when
+    // categoryItemsReply() itself has nothing to show (its own >10-item
+    // bail, D-113/D-114's territory) — this used to fall through to the
+    // rest of resolve() instead, relying on the tapped row's title still
+    // containing the word "Menú" so classifyFlowCommand's "catalog" rule
+    // recognized it and deferred to the knowledge capability's own
+    // (paginated) listing. Once the category-picker row's title stopped
+    // carrying that word (removed so a category shows as "Celulares", not
+    // "Menú Celulares"), that fallback silently broke — a workflow already
+    // in progress swallowed the tap as a failed product-name search
+    // instead. Returning `reply` unconditionally (including `null`) makes
+    // the handoff to knowledge purely id-driven, with no dependency on
+    // what the row's title happens to say.
     if (input.interactiveSelectionId?.startsWith("category:")) {
       const category = input.interactiveSelectionId.slice("category:".length);
-      const reply = await this.categoryItemsReply(client, input.locale, input.timezone ?? "UTC", category);
-      if (reply) return reply;
+      return this.categoryItemsReply(client, input.locale, input.timezone ?? "UTC", category, input.categoryLabelPrefix ?? null);
     }
     // Found live (Wendy Muñoz, D-115): a pagination row tap
     // (deterministic-reply.service.ts's "Siguiente"/"Anterior", D-114) has
@@ -237,7 +260,39 @@ export class CommercialFlowService {
     // `command === "catalog"` returning null below (line ~260) — this file
     // doesn't own menu browsing/pagination, it only needs to get out of the
     // way so the knowledge capability's own reply runs instead.
-    if (input.interactiveSelectionId?.startsWith("menu:")) return null;
+    // D-138 live finding: same reasoning as the "menu:" pagination tap
+    // above — the "Ficha técnica" row deterministic-reply.service.ts's
+    // offeringReply() adds (details:menu:{category}:page:{n}) is knowledge
+    // capability's own reply, not a product mention. Without this, it fell
+    // through to the active workflow's item-name matching mid-order and
+    // was swallowed as "No encontré ese producto" instead of ever reaching
+    // offeringReply's detail view.
+    // D-139 live finding (Santos Tacos): deterministic-reply.service.ts's
+    // own category-picker rows (menuCategoriesReply(), the "Ver menú"
+    // entry point, id "menu-category:{name}") used to carry the bare
+    // category value with no prefix of its own, told apart from a
+    // variant_id purely by not looking like a UUID — but Santos Tacos'
+    // real "Tacos" category tap showed this couldn't actually be told
+    // apart from a variant_id/option_id reliably: before this category's
+    // row *title* stopped saying "Menú Tacos" (D-139, so a category shows
+    // as "Tacos", not "Menú Tacos"), the word "Menú" alone made
+    // `command === "catalog"` true below and this file bailed out before
+    // ever reaching startNewOrder() — worked by coincidence, not by
+    // design. Once "Menú" was gone, the bare word "Tacos" matched none of
+    // classifyFlowCommand's keywords, so resolve() fell all the way into
+    // startNewOrder()'s own name-matching — which tied "Tacos" against
+    // every catalog item whose name happens to contain the word "tacos"
+    // (five different items, for a taco restaurant), showing a spurious
+    // product disambiguation instead of ever reaching the category
+    // listing. Given its own explicit prefix instead, matched the same way
+    // as "menu:"/"category:" above, there's no ambiguity left to resolve
+    // by guessing at id shape.
+    if (
+      input.interactiveSelectionId?.startsWith("menu:") ||
+      input.interactiveSelectionId?.startsWith("details:menu:") ||
+      input.interactiveSelectionId?.startsWith("menu-category:")
+    )
+      return null;
     const active = await client.query<Workflow>(
       `select id,commercial_request_id,step,context from app.conversation_workflows where conversation_id=$1 and status='active'`,
       [input.conversationId],
@@ -273,7 +328,7 @@ export class CommercialFlowService {
     // to be active (e.g. selecting_item, which used to answer it with
     // itemUnknown — see the "S" conversation review).
     if (input.understanding.requestedAction === "request_recommendation") {
-      return this.recommendationRequestReply(client, input.locale);
+      return this.recommendationRequestReply(client, input.locale, input.categoryLabelPrefix ?? null);
     }
     if (command === "handoff") return null;
     if (command === "help") return this.helpReply(input.locale);
@@ -374,7 +429,7 @@ export class CommercialFlowService {
         tiedItems: tied,
         pendingQuantity: this.quantity(input),
       });
-      return this.itemChoiceOrCategoryReply(input.locale, tied);
+      return this.itemChoiceOrCategoryReply(input.locale, tied, input.categoryLabelPrefix ?? null);
     }
     // A bare, unambiguous product mention (no "quiero"/"pedir") is enough
     // to start an order, as long as it doesn't itself read as a question
@@ -478,7 +533,7 @@ export class CommercialFlowService {
       // nothing to list or it exceeds WhatsApp's 10-row limit (see
       // catalogChoiceReply).
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), key, values) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), key, values, input.categoryLabelPrefix ?? null) ??
         this.catalogButtonReply(input.locale, key, values)
       );
     }
@@ -544,7 +599,7 @@ export class CommercialFlowService {
         returnToCart: true,
       });
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale)) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), "item", {}, input.categoryLabelPrefix ?? null) ??
         this.localizedReply(input.locale, "item")
       );
     }
@@ -632,7 +687,7 @@ export class CommercialFlowService {
       );
       await this.step(client, flow.id, "selecting_item", { replaceItem: true });
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale)) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), "item", {}, input.categoryLabelPrefix ?? null) ??
         this.localizedReply(input.locale, "item")
       );
     }
@@ -761,7 +816,7 @@ export class CommercialFlowService {
       replaceItemId: match.variant_id,
     });
     return (
-      this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale)) ??
+      this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), "item", {}, input.categoryLabelPrefix ?? null) ??
       this.localizedReply(input.locale, "item")
     );
   }
@@ -879,7 +934,7 @@ export class CommercialFlowService {
         tiedItems: tied,
         pendingQuantity: this.quantity(input),
       });
-      return this.itemChoiceOrCategoryReply(input.locale, tied);
+      return this.itemChoiceOrCategoryReply(input.locale, tied, input.categoryLabelPrefix ?? null);
     }
     if (!match) return this.localizedReply(input.locale, "itemUnknown");
     await this.addItem(
@@ -905,7 +960,7 @@ export class CommercialFlowService {
     if (affirmative) {
       await this.step(client, flow.id, "selecting_item", {});
       return (
-        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale)) ??
+        this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), "item", {}, input.categoryLabelPrefix ?? null) ??
         this.localizedReply(input.locale, "item")
       );
     }
@@ -943,7 +998,7 @@ export class CommercialFlowService {
         tiedItems: tied,
         pendingQuantity: this.quantity(input),
       });
-      return this.itemChoiceOrCategoryReply(input.locale, tied);
+      return this.itemChoiceOrCategoryReply(input.locale, tied, input.categoryLabelPrefix ?? null);
     }
     if (match) {
       await this.addItem(
@@ -2258,9 +2313,10 @@ export class CommercialFlowService {
   private itemChoiceOrCategoryReply(
     locale: Locale,
     tied: Item[],
+    categoryLabelPrefix: string | null,
   ): DeterministicReply {
     return tied.length > 10
-      ? this.categoryPickerReply(locale, tied)
+      ? this.categoryPickerReply(locale, tied, categoryLabelPrefix)
       : this.itemChoiceReply(locale, tied);
   }
   // "Otro producto" used to just ask "¿Qué producto deseas pedir?" as bare
@@ -2274,6 +2330,7 @@ export class CommercialFlowService {
     items: Item[],
     bodyKey: CommercialCopyKey = "item",
     values: Record<string, string | number> = {},
+    categoryLabelPrefix: string | null = null,
   ): DeterministicReply | null {
     if (items.length === 0) return null;
     // A catalog bigger than WhatsApp's 10-row list cap used to fall all the
@@ -2285,7 +2342,7 @@ export class CommercialFlowService {
     // menuCategoriesReply, see its own comment for the full reasoning and
     // the ">10 categories" caveat) means only a genuinely empty catalog
     // still needs that plain-button fallback.
-    if (items.length > 10) return this.categoryPickerReply(locale, items);
+    if (items.length > 10) return this.categoryPickerReply(locale, items, categoryLabelPrefix);
     const labels = catalogFor(locale).labels;
     // Found live: reaching a single-item (or otherwise short) list — e.g.
     // "Extras" after picking it from the category picker — offered no way
@@ -2343,12 +2400,16 @@ export class CommercialFlowService {
   // tappable list — id carries "category:{name}" so the *next* inbound tap
   // is resolved directly by id in resolve() (see the interactiveSelectionId
   // check near the top), unlike deterministic-reply.service.ts's sibling
-  // menuCategoriesReply(), which has no id-based dispatch available to it
-  // and has to rely on the tapped title's text instead. Same >10-categories
-  // cap and the same documented gap (the smallest categories are dropped
-  // from the picker, not merged) as that sibling implementation — see its
-  // comment for the full reasoning.
-  private categoryPickerReply(locale: Locale, items: Item[]): DeterministicReply {
+  // menuCategoriesReply(), which needs its own id-based shortcut for the
+  // same reason (D-138). Same >10-categories cap and the same documented
+  // gap (the smallest categories are dropped from the picker, not merged)
+  // as that sibling implementation — see its comment for the full
+  // reasoning.
+  private categoryPickerReply(
+    locale: Locale,
+    items: Item[],
+    categoryLabelPrefix: string | null,
+  ): DeterministicReply {
     const counts = new Map<string, number>();
     for (const item of items) {
       const category = item.category ?? this.copy(locale, "categoryUncategorized");
@@ -2365,7 +2426,15 @@ export class CommercialFlowService {
       buttonLabel: this.copy(locale, "chooseButtonLabel"),
       options: top.map(([category]) => ({
         id: `category:${category}`,
-        title: this.truncate(`${this.copy(locale, "categoryPrefix")} ${category}`, 24),
+        // D-138/D-140 live finding: the project owner asked for the plain
+        // category name here by default ("Celulares", "Computadores") —
+        // that word was never load-bearing on this side (resolved by id
+        // above, never by reprocessing the tapped title as text) — but a
+        // tenant can still opt into its own word (Santos Tacos: "Menú
+        // Tacos") via bot_configurations.category_label_prefix, same
+        // per-tenant setting menuCategoriesReply() reads on the knowledge
+        // side.
+        title: this.truncate(categoryRowLabel(categoryLabelPrefix, category), 24),
       })),
     };
     return {
@@ -2385,6 +2454,7 @@ export class CommercialFlowService {
     locale: Locale,
     timezone: string,
     category: string,
+    categoryLabelPrefix: string | null,
   ): Promise<DeterministicReply | null> {
     const uncategorizedLabel = this.copy(locale, "categoryUncategorized");
     // catalogItems() already coalesces category to the localized label for
@@ -2397,7 +2467,7 @@ export class CommercialFlowService {
       (item) => (item.category ?? uncategorizedLabel) === category,
     );
     if (items.length === 0 || items.length > 10) return null;
-    return this.catalogChoiceReply(locale, items, "categoryItemsHeading", { category });
+    return this.catalogChoiceReply(locale, items, "categoryItemsHeading", { category }, categoryLabelPrefix);
   }
   // Final fallback when catalogChoiceReply() can't show the list itself
   // (an empty catalog, or a single category somehow still over WhatsApp's
@@ -2504,10 +2574,11 @@ export class CommercialFlowService {
   private async recommendationRequestReply(
     client: PoolClient,
     locale: Locale,
+    categoryLabelPrefix: string | null,
   ): Promise<DeterministicReply> {
     const items = await this.mostOrderedItems(client, locale);
     return (
-      this.catalogChoiceReply(locale, items, "recommendationSuggestion") ??
+      this.catalogChoiceReply(locale, items, "recommendationSuggestion", {}, categoryLabelPrefix) ??
       // Same "no quoted instruction, use the real button" rule D-095 set
       // for the empty/oversized-catalog case — this is the same situation
       // (nothing to show as a tappable list), so it reuses the identical

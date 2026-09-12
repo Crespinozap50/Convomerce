@@ -72,11 +72,50 @@ describe('DeterministicReplyService', () => {
       body: '',
       buttonLabel: 'Ver opciones',
       options: [
-        { id: 'Otros', title: 'Menú Otros' },
-        { id: 'Tacos', title: 'Menú Tacos' },
+        { id: 'menu-category:Otros', title: 'Otros' },
+        { id: 'menu-category:Tacos', title: 'Tacos' },
       ],
     });
     expect(reply.sources).toEqual([]);
+  });
+
+  it('prepends the tenant\'s own configured word to each category row instead of the default plain name (D-140)', async () => {
+    // The project owner's own follow-up to D-139: removing "Menú" globally
+    // was wrong for Santos Tacos, which should keep saying "Menú Tacos" —
+    // this is a per-tenant opt-in (bot_configurations.category_label_prefix,
+    // bot.categoryLabelPrefix here), not a global on/off. Absent (as in the
+    // test right above this one), the row shows the plain category name;
+    // set, it's prepended exactly as configured.
+    const filler = Array.from({ length: 10 }, (_, index) => ({
+      item_id: `filler-${index}`, name: `Relleno ${index}`, category: 'Otros',
+      variant_name: 'Unidad', price_minor: '100000', currency: 'COP',
+    }));
+    const client = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValue({
+          rowCount: 11,
+          rows: [
+            { item_id: 'item-1', name: 'Tacos de birria', category: 'Tacos', variant_name: 'Orden de 3 tacos con consomé', price_minor: '2290000', currency: 'COP' },
+            ...filler,
+          ],
+        }),
+    };
+    const service = new DeterministicReplyService();
+    const reply = await service.resolve(client as never, 'muéstrame el menú', {
+      locale: 'es',
+      welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
+      categoryLabelPrefix: 'Menú',
+    });
+    expect(reply.interactive).toEqual({
+      type: 'list',
+      body: '',
+      buttonLabel: 'Ver opciones',
+      options: [
+        { id: 'menu-category:Otros', title: 'Menú Otros' },
+        { id: 'menu-category:Tacos', title: 'Menú Tacos' },
+      ],
+    });
   });
 
   describe('a narrowed category still over 10 items paginates instead of dropping items or dead-ending (D-113/D-114)', () => {
@@ -105,7 +144,7 @@ describe('DeterministicReplyService', () => {
       variant_name: 'Unidad', price_minor: '950000', currency: 'COP',
     }));
 
-    it('page 1: shows the first 7 items plus Siguiente, not a truncated 9', async () => {
+    it('page 1: shows the first 6 items plus Siguiente, not a truncated 9', async () => {
       const client = {
         query: jest.fn()
           .mockResolvedValueOnce({ rows: [] })
@@ -122,9 +161,10 @@ describe('DeterministicReplyService', () => {
         body: '',
         buttonLabel: 'Ver opciones',
         options: [
-          ...Array.from({ length: 7 }, (_, index) => ({
+          ...Array.from({ length: 6 }, (_, index) => ({
             id: `taco-variant-${index}`, title: `Taco ${index}`, description: '$ 9.500',
           })),
+          { id: 'details:menu:Tacos:page:1', title: 'Ficha técnica' },
           { id: 'menu:Tacos:page:2', title: 'Siguiente' },
           { id: 'cart:view_catalog', title: 'Ver opciones' },
         ],
@@ -132,27 +172,30 @@ describe('DeterministicReplyService', () => {
       expect(reply.sources).toHaveLength(13);
     });
 
-    it('page 2 (last page, reached by tapping Siguiente): shows the remaining items plus Anterior, no Siguiente', async () => {
+    it('page 3 (last page, reached by tapping Siguiente twice): shows the remaining item plus Anterior, no Siguiente', async () => {
       // A pagination tap is routed straight to offeringReply's own catalog
       // query (skipping the specific-FAQ check) — only one query happens,
-      // unlike the other tests here.
+      // unlike the other tests here. 13 tacos at 6/page (D-138 shrank the
+      // page size from 7 to make room for the new "Ficha técnica" row on
+      // every page, including a middle one with both Anterior and
+      // Siguiente already present) means 3 pages, not 2 — page 3 is now
+      // the true last page.
       const client = {
         query: jest.fn().mockResolvedValue({ rowCount: tacos.length, rows: tacos }),
       };
       const reply = await new DeterministicReplyService().resolve(
         client as never, 'Siguiente',
         { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No se', handoffKeywords: [], timezone: 'UTC' },
-        'menu:Tacos:page:2',
+        'menu:Tacos:page:3',
       );
       expect(reply.interactive).toEqual({
         type: 'list',
         body: '',
         buttonLabel: 'Ver opciones',
         options: [
-          ...Array.from({ length: 6 }, (_, index) => ({
-            id: `taco-variant-${index + 7}`, title: `Taco ${index + 7}`, description: '$ 9.500',
-          })),
-          { id: 'menu:Tacos:page:1', title: 'Anterior' },
+          { id: 'taco-variant-12', title: 'Taco 12', description: '$ 9.500' },
+          { id: 'details:menu:Tacos:page:3', title: 'Ficha técnica' },
+          { id: 'menu:Tacos:page:2', title: 'Anterior' },
           { id: 'cart:view_catalog', title: 'Ver opciones' },
         ],
       });
@@ -166,7 +209,7 @@ describe('DeterministicReplyService', () => {
       const client = {
         query: jest.fn().mockResolvedValue({ rowCount: bigCategory.length, rows: bigCategory }),
       };
-      // Page 2 of ceil(30/7)=5: items 7-13, both directions available.
+      // Page 2 of ceil(30/6)=5: items 6-11, both directions available.
       const reply = await new DeterministicReplyService().resolve(
         client as never, 'Siguiente',
         { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No se', handoffKeywords: [], timezone: 'UTC' },
@@ -177,9 +220,10 @@ describe('DeterministicReplyService', () => {
         body: '',
         buttonLabel: 'Ver opciones',
         options: [
-          ...Array.from({ length: 7 }, (_, index) => ({
-            id: `variant-${index + 7}`, title: `Item ${index + 7}`, description: '$ 1.000',
+          ...Array.from({ length: 6 }, (_, index) => ({
+            id: `variant-${index + 6}`, title: `Item ${index + 6}`, description: '$ 1.000',
           })),
+          { id: 'details:menu:Grande:page:2', title: 'Ficha técnica' },
           { id: 'menu:Grande:page:1', title: 'Anterior' },
           { id: 'menu:Grande:page:3', title: 'Siguiente' },
           { id: 'cart:view_catalog', title: 'Ver opciones' },
@@ -315,23 +359,33 @@ describe('DeterministicReplyService', () => {
     expect(reply.sources).toEqual(['catalog_item:item-2']);
   });
 
-  it('lists a whole category when the question names only the category, not just the items repeating its word (live finding)', async () => {
-    // Found live tapping "Menú Tacos" on Santos Tacos' real menu: only the
-    // two "Orden x 3 Tacos ..." packages came back, because their names
-    // repeat the category word and outscored every individual taco.
-    const client = { query: jest.fn()
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValue({ rowCount: 3, rows: [
-        { item_id: 'item-1', variant_id: 'variant-1', name: 'Orden x 3 Tacos', category: 'Tacos', variant_name: 'Unidad', price_minor: '2550000', currency: 'COP' },
-        { item_id: 'item-2', variant_id: 'variant-2', name: 'Birria', category: 'Tacos', variant_name: 'Unidad', price_minor: '900000', currency: 'COP' },
-        { item_id: 'item-3', variant_id: 'variant-3', name: 'Agua fresca', category: 'Bebidas', variant_name: 'Vaso', price_minor: '700000', currency: 'COP' },
-      ] }) };
-    const reply = await new DeterministicReplyService().resolve(client as never, 'Menú Tacos', {
-      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
-    });
+  it('lists a whole category when a category row is tapped, not just the items repeating its word (live finding)', async () => {
+    // Found live tapping "Menú Tacos" on Santos Tacos' real menu (back when
+    // the row's title carried that word and the tap's reconstructed title
+    // text was what classifyMessage narrowed on): only the two "Orden x 3
+    // Tacos ..." packages came back, because their names repeat the
+    // category word and outscored every individual taco. D-138 dropped
+    // "Menú" from the title and moved tap resolution to the row's own id
+    // (D-139: "menu-category:{name}", see menuCategoriesReply) — simulated
+    // here the same way a real tap on that row now arrives.
+    // A tap resolved by id (see resolve()'s id-based shortcut) never runs
+    // the "specific FAQ" pre-check query classifyMessage's normal 'menu'
+    // dispatch does — offeringReply's own catalog query is the only one.
+    const client = { query: jest.fn().mockResolvedValue({ rowCount: 3, rows: [
+      { item_id: 'item-1', variant_id: 'variant-1', name: 'Orden x 3 Tacos', category: 'Tacos', variant_name: 'Unidad', price_minor: '2550000', currency: 'COP' },
+      { item_id: 'item-2', variant_id: 'variant-2', name: 'Birria', category: 'Tacos', variant_name: 'Unidad', price_minor: '900000', currency: 'COP' },
+      { item_id: 'item-3', variant_id: 'variant-3', name: 'Agua fresca', category: 'Bebidas', variant_name: 'Vaso', price_minor: '700000', currency: 'COP' },
+    ] }) };
+    const reply = await new DeterministicReplyService().resolve(
+      client as never,
+      'Tacos',
+      { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC' },
+      'menu-category:Tacos',
+    );
     expect(reply.interactive?.options).toEqual([
       expect.objectContaining({ title: 'Orden x 3 Tacos' }),
       expect.objectContaining({ title: 'Birria' }),
+      { id: 'details:menu:Tacos:page:1', title: 'Ficha técnica' },
       { id: 'cart:view_catalog', title: 'Ver opciones' },
     ]);
   });

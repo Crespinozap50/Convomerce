@@ -17,6 +17,11 @@ export interface UnderstoodFlowInput {
   displayName: string | null;
   assistantName?: string;
   businessName?: string;
+  // D-139/D-140: per-tenant opt-in word/phrase shown before each category
+  // row in the picker ("Menú Tacos" for Santos Tacos) — absent/undefined
+  // means no prefix at all (CrediCel Store's "Celulares"). See
+  // commercial-flow.service.ts's categoryPickerReply().
+  categoryLabelPrefix?: string;
   interactiveSelectionId?: string;
   understanding: ConversationUnderstanding;
   timezone?: string;

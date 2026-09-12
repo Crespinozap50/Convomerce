@@ -383,6 +383,10 @@ export default {
     messageRetentionDisabled: "Nunca",
     messageRetentionHelp:
       "Los mensajes más antiguos que este tiempo se borran permanentemente, incluso si la conversación sigue activa. Mínimo 7 días. Déjalo en blanco para no borrar nunca.",
+    categoryLabelPrefix: "Palabra antes de cada categoría en el menú",
+    categoryLabelPrefixDisabled: "Sin palabra (solo el nombre)",
+    categoryLabelPrefixHelp:
+      "Por ejemplo \"Menú\" para que se vea \"Menú Tacos\". Déjalo en blanco para mostrar solo el nombre de la categoría (ej. \"Celulares\").",
     aiRewriting: "Presupuesto de IA (redacción y recomendaciones)",
     aiRewritingHelp:
       "Un mismo presupuesto compartido para mejorar el tono de las respuestas y para las recomendaciones consultivas de productos (si están habilitadas en Conocimiento). Ninguna de las dos reemplaza el flujo determinista seguro.",

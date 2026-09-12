@@ -2001,6 +2001,56 @@ describe("CommercialFlowService", () => {
       body: "",
       buttonLabel: "Elegir",
       options: [
+        { id: "category:Otros", title: "Otros" },
+        { id: "category:Tacos", title: "Tacos" },
+      ],
+    });
+  });
+
+  it("prepends the tenant's own configured word to each category row instead of the default plain name (D-140)", async () => {
+    // The project owner's own follow-up to D-139: removing "Menú" globally
+    // was wrong for Santos Tacos, which should keep saying "Menú Tacos" —
+    // this is a per-tenant opt-in (bot_configurations.category_label_prefix,
+    // input.categoryLabelPrefix here), not a global on/off. Absent (as in
+    // the test right above this one), the row shows the plain category
+    // name; set, it's prepended exactly as configured.
+    const filler = Array.from({ length: 9 }, (_, index) => ({
+      item_id: `filler-${index}`, variant_id: `filler-${index}-v`, name: `Relleno ${index}`,
+      category: "Otros", variant_name: "Unidad", price_minor: "100000", currency: "COP",
+    }));
+    const catalogRows = {
+      rows: [
+        { item_id: "item-1", variant_id: "pastor-variant", name: "Tacos al pastor", category: "Tacos", variant_name: "Unidad", price_minor: "1890000", currency: "COP" },
+        { item_id: "item-2", variant_id: "birria-variant", name: "Tacos de birria", category: "Tacos", variant_name: "Unidad", price_minor: "2290000", currency: "COP" },
+        ...filler,
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_confirmation", context: {} },
+          ],
+        })
+        .mockResolvedValueOnce({ rows: [] }) // step() -> selecting_item
+        .mockResolvedValueOnce(catalogRows), // catalogItems()
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Agregar otro producto",
+      categoryLabelPrefix: "Menú",
+      understanding: await understand("Agregar otro producto"),
+    });
+
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
         { id: "category:Otros", title: "Menú Otros" },
         { id: "category:Tacos", title: "Menú Tacos" },
       ],
@@ -2056,6 +2106,29 @@ describe("CommercialFlowService", () => {
       body: "Siguiente",
       interactiveSelectionId: "menu:Tacos:page:2",
       understanding: await understand("Siguiente"),
+    });
+    expect(reply).toBeNull();
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
+  it("defers to the knowledge capability's own reply for a 'Ver menú' category-picker tap instead of matching the category name as a product (D-139, found live on Santos Tacos)", async () => {
+    // deterministic-reply.service.ts's menuCategoriesReply() (the "Ver
+    // menú" entry point, distinct from this file's own categoryPickerReply
+    // above) tags its rows "menu-category:{name}" — before that row's
+    // title stopped saying "Menú Tacos" (D-139, so a category shows as
+    // "Tacos" instead), the word "Menú" alone made this file's own
+    // `command === "catalog"` check true and it bailed out before ever
+    // reaching startNewOrder(). Once "Menú" was dropped from the title, a
+    // real tap on Santos Tacos' "Tacos" category tied against every
+    // catalog item whose name contains the word "tacos" instead — this
+    // must return null before checking for an active workflow at all, the
+    // same way the "menu:" pagination id above does.
+    const client = { query: jest.fn() };
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "Tacos",
+      interactiveSelectionId: "menu-category:Tacos",
+      understanding: await understand("Tacos"),
     });
     expect(reply).toBeNull();
     expect(client.query).not.toHaveBeenCalled();

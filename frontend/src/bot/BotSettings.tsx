@@ -164,6 +164,23 @@ export function BotSettings({
           />
           <small>{t("bot.messageRetentionHelp")}</small>
         </label>
+        <label>
+          {t("bot.categoryLabelPrefix")}
+          <input
+            type="text"
+            maxLength={30}
+            placeholder={t("bot.categoryLabelPrefixDisabled")}
+            value={form.categoryLabelPrefix ?? ""}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                categoryLabelPrefix:
+                  e.target.value === "" ? null : e.target.value,
+              })
+            }
+          />
+          <small>{t("bot.categoryLabelPrefixHelp")}</small>
+        </label>
         <div className="settings-section-title">
           <Bot size={18} />
           <span>
