@@ -401,26 +401,40 @@ export class CommercialFlowService {
     // "Tablet premium para diseño", adding 3 of them with no confirmation
     // — "3" misread from "3 millones"). looksLikeQuestion alone didn't
     // catch this, since the message never needs a "?" to be a
-    // description. When the match only says *part* of what the matched
-    // item is actually called (isWeakMatch, D-133 — missing more than one
-    // of the item's own name words), try the consultative recommendation
-    // first — it only ever picks from the real catalog too, so this can
-    // only make the outcome *more* deliberate, never less safe — and only
-    // fall back to trusting the weak match if that comes back empty
-    // (disabled tenant, too-short message, or the AI found nothing
-    // better). A confident bareNameStart match is untouched: it never
-    // reaches here.
+    // description. `questionOrNoMatch` is the *original* D-129 trigger,
+    // independent of match quality: no match at all, or a match phrased
+    // as a genuine question about the product (D-078) — either way, AI
+    // failing here means "answer like nothing was found", full stop,
+    // regardless of whether a match happened to exist underneath.
+    const questionOrNoMatch = !starts && !bareNameStart;
+    // D-133/D-134 live findings: separately, when the match only says
+    // *part* of what the matched item is actually called (isWeakMatch —
+    // missing more than one of the item's own name words), that's weak
+    // evidence regardless of how the message started or whether it reads
+    // as a question — "Quiero un computador para diseño gráfico" (starts
+    // via "quiero") and "Necesito un celular con buena cámara" (no
+    // question, bareNameStart would otherwise be true) both need the same
+    // protection questionOrNoMatch alone doesn't give them.
     const weakMatch = match !== null && this.isWeakMatch(match, input);
-    if (!starts && (!bareNameStart || weakMatch)) {
+    if (questionOrNoMatch || weakMatch) {
       const consultative = await this.tryConsultativeRecommendation(client, input);
       if (consultative) return consultative;
-      if (!bareNameStart) return null;
+      // questionOrNoMatch always answers like nothing was found (matches
+      // D-129 exactly, weakMatch or not). A weak-match-only trigger (this
+      // reads as neither a question nor a no-match — bareNameStart would
+      // otherwise have trusted it) falls through instead, to the same
+      // "didn't find that product" listing below as a genuine non-match
+      // — never silently trusting the weak match itself, which would
+      // undo the whole point of flagging it (D-134).
+      if (questionOrNoMatch) return null;
     }
     // Reaching here with `match` still null always means `starts` was true
-    // (the `!starts && !bareNameStart` guard above already returned
-    // otherwise, and bareNameStart requires match !== null) — the customer
-    // explicitly asked to order something, but nothing in the catalog
-    // matched it. Whether they actually named a (nonexistent) product, as
+    // (the `!starts && !bareNameStart && !weakMatch` guard above already
+    // returned otherwise, and bareNameStart requires match !== null) — the
+    // customer explicitly asked to order something, but nothing in the
+    // catalog confidently matched it (or only weakly did, per D-134,
+    // which lands here too). Whether they actually named a (nonexistent)
+    // product, as
     // opposed to a vague "quiero hacer un pedido" naming nothing at all,
     // decides which reply fits: "itemUnknown" says plainly that the named
     // product wasn't found (found live: "Quiero pedir una hamburguesa" used
@@ -431,12 +445,21 @@ export class CommercialFlowService {
     // "selecting_item" with nothing actually offered to select from,
     // permanently trapping every later message in that dead-end step
     // instead of letting a fresh order attempt through normally.
-    if (!match) {
-      // D-128: reached with an explicit purchase intent ("starts") but no
-      // catalog match — tried before falling to the generic "didn't find
-      // that product" reply, same gap as the !starts branch above.
-      const consultative = await this.tryConsultativeRecommendation(client, input);
-      if (consultative) return consultative;
+    if (!match || weakMatch) {
+      // D-134: a weak match must never fall back to being silently
+      // trusted just because the AI had nothing better to offer — that
+      // would defeat the entire point of flagging it as weak in the
+      // first place (D-133's original bug). It gets the exact same
+      // "didn't find that product" treatment as no match at all, below.
+      // Only retry the AI here when it genuinely hasn't run yet for this
+      // message (both triggers above were false — the starts===true &&
+      // match===null case, D-128's own original gap); a weak match or a
+      // question/no-match already went through it above, and failing
+      // twice costs budget for nothing.
+      if (!questionOrNoMatch && !weakMatch) {
+        const consultative = await this.tryConsultativeRecommendation(client, input);
+        if (consultative) return consultative;
+      }
       const namedSomething = this.searchTerms(input).length > 0;
       const key: CommercialCopyKey = namedSomething
         ? input.understanding.entities.hasGreeting === true
@@ -1752,6 +1775,35 @@ export class CommercialFlowService {
     previousTied: Item[],
     previousReasons: Map<string, string>,
   ): Promise<DeterministicReply> {
+    // D-134 live finding: blindly combining the two messages assumes a
+    // retype is always a *refinement* of the same need ("en realidad
+    // prefiero algo más barato") — but the customer can just as easily
+    // abandon that need mid-flow and describe a completely different one
+    // ("un computador para diseño gráfico" while a phone recommendation
+    // is still open). Combining two unrelated need-descriptions into one
+    // message confused the AI's own category rule
+    // (consultative-recommendation.service.ts rule (2)) into blending
+    // both, live: it recommended a phone for a computer request. Detect
+    // that case deterministically first — no AI budget spent either way,
+    // it only decides which message to spend the retry's one AI call on
+    // — and when detected, ask again with ONLY the new message, dropping
+    // the stale context instead of combining it.
+    if (await this.impliesDifferentCategory(client, input, previousTied)) {
+      const fresh = await this.consultativeRecommend(client, input, input.body);
+      if (fresh) {
+        await this.step(client, flow.id, "selecting_item", {
+          ...flow.context,
+          tiedItems: fresh.tied,
+          consultativeReasons: Object.fromEntries(fresh.reasons),
+          consultativeMessage: input.body,
+        });
+        return this.recommendationChoiceReply(input.locale, fresh.tied, fresh.reasons);
+      }
+      // Falls through to the combined-message attempt below — a false
+      // positive here (a generic refinement that happened to share no
+      // catalog vocabulary with the current picks) still gets the safe,
+      // context-preserving behavior instead of losing the reply outright.
+    }
     const previousMessage =
       typeof flow.context.consultativeMessage === "string" ? flow.context.consultativeMessage : "";
     const combinedMessage = previousMessage ? `${previousMessage}. ${input.body}` : input.body;
@@ -1765,6 +1817,42 @@ export class CommercialFlowService {
       consultativeMessage: combinedMessage,
     });
     return this.recommendationChoiceReply(input.locale, tied, reasons);
+  }
+  // D-134: deterministic (no AI call — this only decides which message
+  // the retry's own single AI call below should use) signal that the
+  // customer's retyped message names a real category the tenant sells
+  // that is DIFFERENT from every category already being recommended —
+  // not just "shares no words with it", which would also be true of an
+  // ordinary refinement like "más económico" that names no product at
+  // all and must still combine with the original context. Reuses the
+  // same token-normalization/stopword-filter discipline as isWeakMatch().
+  private async impliesDifferentCategory(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+    previousTied: Item[],
+  ): Promise<boolean> {
+    if (previousTied.length === 0) return false;
+    const messageTerms = new Set(this.searchTerms(input).map(singularize));
+    if (messageTerms.size === 0) return false;
+    const candidates = await this.consultativeCandidates(client, input.tenantId, input.locale);
+    if (candidates.length === 0) return false;
+    const ignored = new Set(mergedLanguageTerms("itemStopWords"));
+    const previousCategories = new Set(
+      previousTied.map((item) => norm(item.category ?? "")).filter((category) => category.length > 0),
+    );
+    const tokensOf = (text: string): string[] =>
+      norm(text)
+        .split(" ")
+        .filter((token) => (token.length > 2 || /^\d+$/.test(token)) && !ignored.has(token))
+        .map(singularize);
+    return candidates.some((item) => {
+      const category = norm(item.category ?? "");
+      if (!category || previousCategories.has(category)) return false;
+      return (
+        tokensOf(category).some((token) => messageTerms.has(token)) ||
+        tokensOf(item.name).some((token) => messageTerms.has(token))
+      );
+    });
   }
   // D-128: same positional id/selectionIndex convention as
   // itemChoiceInteractive (so a tap resolves through the exact same
@@ -2013,12 +2101,18 @@ export class CommercialFlowService {
           .map(singularize),
       );
       const { match, tied: candidates } = this.scoreCandidatesByTokens(catalog, tokens);
-      if (match) {
+      // D-135 live finding: a match this segment's own words only weakly
+      // support (e.g. "diseño" alone matching "Tablet premium para diseño"
+      // when the customer actually asked for "un computador para diseño
+      // gráfico") must never be added silently — treated as unmatched
+      // instead, same safe "no encontré: X" treatment as a segment naming
+      // nothing real, never a guess dressed up as a confident add.
+      if (match && !this.isWeakTokenMatch(match, tokens)) {
         matches.push({
           item: match,
           quantity: quantityExcludingItemName(parseQuantity(segment), match.name),
         });
-      } else if (candidates.length > 1) {
+      } else if (!match && candidates.length > 1) {
         tied.push({ segment, candidates, quantity: parseQuantity(segment) });
       } else {
         unmatched.push(segment);
@@ -3804,10 +3898,34 @@ export class CommercialFlowService {
   // re-checks it: a match missing more than one of its own name's words is
   // weak, regardless of how long or short the rest of the message is.
   private isWeakMatch(match: Item, input: UnderstoodFlowInput): boolean {
-    const searchTerms = new Set(this.searchTerms(input).map(singularize));
-    const nameTokens = norm(match.name).split(" ").filter(Boolean);
+    return this.isWeakTokenMatch(match, new Set(this.searchTerms(input).map(singularize)));
+  }
+  // D-135 live finding: matchItemMentions() (the comma/"y"-separated
+  // multi-item path — "un cargador USB-C y un computador para diseño
+  // gráfico") scores each segment through scoreCandidatesByTokens() the
+  // same way as the single-item path, but never ran the result through
+  // isWeakMatch() — a segment matching on a single shared word ("diseño")
+  // got added to the cart directly, no confirmation, same unsafe shape
+  // D-133/D-134 fixed for the single-item path but never extended here.
+  // Extracted so both paths share one definition of "weak": each segment
+  // in matchItemMentions() already computes its own filtered/singularized
+  // token Set (to feed scoreCandidatesByTokens itself), so it's passed in
+  // directly there instead of re-deriving it from entities.searchTerms.
+  private isWeakTokenMatch(match: Item, tokens: Set<string>): boolean {
+    // D-134 live finding: comparing against every raw token of the item's
+    // name double-counted words that entities.searchTerms() itself would
+    // never keep in the first place (itemStopWords like "orden"/"de", or
+    // single-char tokens like the "x" in "Orden x 3 Tacos") — inflating
+    // how much of the name looked "missing" from the message and flagging
+    // perfectly confident matches as weak. Filtering the item's own name
+    // the exact same way searchTerms() filters the message keeps the
+    // comparison to words that could actually have been said.
+    const ignored = new Set(mergedLanguageTerms("itemStopWords"));
+    const nameTokens = norm(match.name)
+      .split(" ")
+      .filter((token) => (token.length > 2 || /^\d+$/.test(token)) && !ignored.has(token));
     if (nameTokens.length === 0) return false;
-    const matchedTokens = nameTokens.filter((token) => searchTerms.has(singularize(token))).length;
+    const matchedTokens = nameTokens.filter((token) => tokens.has(singularize(token))).length;
     return matchedTokens < nameTokens.length - 1;
   }
 }

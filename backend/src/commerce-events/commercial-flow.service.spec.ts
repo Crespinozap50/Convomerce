@@ -444,6 +444,109 @@ describe("CommercialFlowService", () => {
     ).toBe(false);
   });
 
+  it("prefers the consultative recommendation over a weak match even with an explicit purchase verb (D-134 live finding)", async () => {
+    // The D-133 fix above only ever ran when `!starts` — "Quiero un
+    // computador para diseño gráfico" ("quiero" is a directDesire verb,
+    // so starts=true) skipped it entirely and would have fallen straight
+    // to trusting the same kind of weak match, same bug through a
+    // different door. isWeakMatch() must gate this regardless of starts.
+    const candidateRows = [
+      {
+        item_id: "item-camera-phone",
+        variant_id: "variant-camera-phone",
+        name: "Celular gama alta cámara profesional",
+        category: "celulares",
+        variant_name: "Único",
+        price_minor: "289000000",
+        currency: "COP",
+      },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return { rows: candidateRows.map((row) => ({ ...row, description: "Sistema de cámaras 108MP." })) };
+        if (sql.includes("from app.catalog_items item join app.item_variants"))
+          return { rows: candidateRows };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "variant-camera-phone", reason: "Tiene una cámara muy capaz." }]);
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: "Quiero un celular con buena cámara, tengo como un millón de pesos",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: {},
+        requestedAction: "start_order",
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalled();
+    expect(reply?.responsePlan).toMatchObject({ kind: "verified_content" });
+  });
+
+  it("falls back to the catalog listing, never silently adding it, when a weak match has no AI to fall back on (D-134)", async () => {
+    // The D-133/D-134 fallback must never resolve to "trust the weak
+    // match anyway" — that would defeat the entire reason it was flagged
+    // weak. It gets the same treatment as no match at all.
+    // No comma in the message on purpose — matchItemMentions() also calls
+    // catalogItems() first when the message splits into 2+ segments, and a
+    // purely positional mock would hand its own candidate row to the
+    // wrong call. SQL-matched instead, like the tests around it.
+    const candidateRows = [
+      {
+        item_id: "item-camera-phone",
+        variant_id: "variant-camera-phone",
+        name: "Celular gama alta cámara profesional",
+        variant_name: "Único",
+        price_minor: "289000000",
+        currency: "COP",
+      },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.catalog_items item join app.item_variants"))
+          return { rows: candidateRows };
+        return { rows: [] };
+      }),
+    };
+
+    const message = "Necesito un celular con buena cámara tengo como un millón de pesos";
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply).not.toBeNull();
+    expect(reply?.body).not.toContain("Celular gama alta cámara profesional");
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("insert into app.request_lines"),
+      ),
+    ).toBe(false);
+  });
+
   it("tries a consultative recommendation as a last resort when nothing matched by name, instead of the generic fallback (D-128)", async () => {
     // "necesito un computador para diseño gráfico, tengo 3 millones" names
     // no catalog item and isn't classified as start_order — today's
@@ -897,6 +1000,210 @@ describe("CommercialFlowService", () => {
           JSON.stringify(params).includes("variant-acer"),
       ),
     ).toBe(true);
+  });
+
+  it("asks the AI with only the new message, discarding stale context, when a retype names a different product category than what's being recommended (D-134 live finding)", async () => {
+    // Found live, verifying D-134's weak-match fix: with a phone
+    // recommendation still open, sending "necesito un computador para
+    // diseño gráfico" (a genuinely different need, not a refinement of
+    // the phone one) got combined with the original phone message —
+    // confusing the AI's own category rule into recommending a phone for
+    // a computer request. impliesDifferentCategory() must catch this and
+    // re-ask with only the new message instead of combining.
+    const tiedItems = [
+      {
+        item_id: "item-phone",
+        variant_id: "variant-phone",
+        name: "Celular gama alta cámara profesional",
+        category: "celulares",
+        variant_name: "Único",
+        price_minor: "289000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = { "variant-phone": "Tiene una cámara muy capaz." };
+    const originalMessage = "Necesito un celular con buena cámara, tengo un millón de pesos";
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons, consultativeMessage: originalMessage },
+              },
+            ],
+          };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return {
+            rows: [
+              {
+                item_id: "item-laptop",
+                variant_id: "variant-laptop",
+                name: "Portátil gama alta para creativos",
+                category: "computadores",
+                variant_name: "Único",
+                price_minor: "459000000",
+                currency: "COP",
+                description: "Tarjeta gráfica dedicada, pensado para diseño gráfico profesional.",
+              },
+              {
+                item_id: "item-phone",
+                variant_id: "variant-phone",
+                name: "Celular gama alta cámara profesional",
+                category: "celulares",
+                variant_name: "Único",
+                price_minor: "289000000",
+                currency: "COP",
+                description: "Sistema de cámaras 108MP.",
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "variant-laptop", reason: "Tarjeta gráfica dedicada para diseño." }]);
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-2",
+      body: "Necesito un computador para diseño gráfico",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { searchTerms: ["necesito", "computador", "diseno", "grafico"] },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalledWith(
+      expect.anything(),
+      "Necesito un computador para diseño gráfico",
+      expect.anything(),
+      "es",
+      client,
+    );
+    expect(reply?.responsePlan).toMatchObject({
+      kind: "verified_content",
+      interactive: expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({ id: "1", title: expect.stringContaining("Portátil") }),
+        ]),
+      }),
+    });
+    expect(
+      queries.some(
+        ({ sql, params }) =>
+          sql.includes("update app.conversation_workflows") &&
+          JSON.stringify(params).includes("variant-laptop") &&
+          !JSON.stringify(params).includes(originalMessage),
+      ),
+    ).toBe(true);
+  });
+
+  it("still combines the retype with the original message when it names no product at all, even with an active recommendation (regression)", async () => {
+    // A genuine refinement ("en realidad prefiero algo más barato") must
+    // keep combining with the original need — impliesDifferentCategory()
+    // only fires when the retype names real catalog vocabulary from a
+    // DIFFERENT category, never just because it shares no words with the
+    // current picks (that would also be true of this message, and losing
+    // the budget/need context on every plain refinement would regress
+    // D-131/D-132).
+    const tiedItems = [
+      {
+        item_id: "item-phone",
+        variant_id: "variant-phone",
+        name: "Celular gama alta cámara profesional",
+        category: "celulares",
+        variant_name: "Único",
+        price_minor: "289000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = { "variant-phone": "Tiene una cámara muy capaz." };
+    const originalMessage = "Necesito un celular con buena cámara, tengo un millón de pesos";
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons, consultativeMessage: originalMessage },
+              },
+            ],
+          };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return {
+            rows: [
+              {
+                item_id: "item-phone-b",
+                variant_id: "variant-phone-b",
+                name: "Celular gama económica",
+                category: "celulares",
+                variant_name: "Único",
+                price_minor: "99000000",
+                currency: "COP",
+                description: "Opción económica.",
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "variant-phone-b", reason: "Es la opción más económica." }]);
+
+    await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-2",
+      body: "En realidad prefiero algo más barato",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { searchTerms: ["realidad", "prefiero", "barato"] },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalledWith(
+      expect.anything(),
+      `${originalMessage}. En realidad prefiero algo más barato`,
+      expect.anything(),
+      "es",
+      client,
+    );
   });
 
   it("starts an order from a bare product name even when it collides with an FAQ keyword (regression)", async () => {
@@ -2058,6 +2365,64 @@ describe("CommercialFlowService", () => {
         { id: "2", title: "Chelita Envenenada" },
       ],
     });
+  });
+
+  it("never silently adds a segment matched on only one shared word, in a multi-item message (D-135 live finding)", async () => {
+    // Found live running a CrediCel battery: "Quiero un cargador rápido
+    // USB-C y también necesito un computador para diseño gráfico" — the
+    // second segment shares only "diseño" with "Tablet premium para
+    // diseño" (a phone/computer-adjacent but wrong catalog item) and used
+    // to get added to the cart directly, silently, same unsafe shape
+    // D-133/D-134 fixed for the single-item path but never extended to
+    // matchItemMentions()'s per-segment scoring. The confident segment
+    // (the charger) must still land in the cart — only the weak one must
+    // never be trusted blindly.
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "item-charger",
+          variant_id: "variant-charger",
+          name: "Cargador rápido USB-C",
+          variant_name: "Único",
+          price_minor: "6500000",
+          currency: "COP",
+        },
+        {
+          item_id: "item-tablet",
+          variant_id: "variant-tablet",
+          name: "Tablet premium para diseño",
+          variant_name: "Único",
+          price_minor: "245000000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return catalogRows;
+        return { rows: [] };
+      }),
+    };
+
+    const message = "Quiero un cargador rápido USB-C y también necesito un computador para diseño gráfico";
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    const insertCalls = client.query.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into app.request_lines"),
+    );
+    expect(insertCalls).toHaveLength(1);
+    expect(insertCalls[0][1]).toEqual(
+      expect.arrayContaining(["variant-charger"]),
+    );
+    expect(JSON.stringify(insertCalls)).not.toContain("variant-tablet");
+    expect(reply).not.toBeNull();
   });
 
   it("does not crash when every segment of a multi-item message ties, falling back to reporting the second tie as unmatched (D-100 deferred finding, edge case)", async () => {

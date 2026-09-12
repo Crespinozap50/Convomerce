@@ -328,8 +328,15 @@ export const applyRequirementValue = (
 // customers naturally order in plural ("quiero 2 quesadillas").
 export const singularize = (word: string): string => {
   if (word.length <= 3) return word;
-  if (/[aeiou]s$/.test(word)) return word.slice(0, -1);
+  // D-134 live finding: checked in this order, "computadores"/"celulares"
+  // (consonant + "es") were never reaching the second branch below — "e"
+  // is itself a vowel, so the general "[aeiou]s$" check above matched
+  // first and stripped only the trailing "s", leaving "computadore"/
+  // "celulare" instead of "computador"/"celular". The consonant+"es" case
+  // is strictly more specific (a "vowel+s" ending that happens to be
+  // "es" AND preceded by a consonant), so it must be checked first.
   if (/[^aeiou]es$/.test(word)) return word.slice(0, -2);
+  if (/[aeiou]s$/.test(word)) return word.slice(0, -1);
   return word;
 };
 

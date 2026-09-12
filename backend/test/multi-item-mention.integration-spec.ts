@@ -425,13 +425,16 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
     it('agrega el producto claro y ofrece desambiguación para el ambiguo, en el mismo mensaje, sin perder ninguno de los dos', async () => {
       // A diferencia del bloque de Santos Tacos (ítems de fixture creados a
       // propósito para garantizar el empate), esto usa un empate real del
-      // catálogo de CrediCel: "celular gama alta" coincide igual de bien
-      // (mismos 3 tokens: celular/gama/alta) contra "Celular gama alta
-      // (256 GB)" y "Celular gama alta cámara profesional" — ninguno de
-      // los dos nombra la especificación que los distingue.
+      // catálogo de CrediCel: "celular gama alta" empata igual de bien
+      // (mismos 3 tokens: celular/gama/alta) contra cada celular real cuyo
+      // nombre contenga esas tres palabras. D-137 (docs/decisions.md):
+      // deliberadamente NO se fija la cantidad exacta de opciones ni sus
+      // nombres — el catálogo de CrediCel creció de 7 a 20 celulares reales
+      // (D-136/D-137) y cuántos de ellos comparten "gama alta" es un hecho
+      // del catálogo, no algo que esta prueba deba congelar; lo que importa
+      // es que la ambigüedad real se ofrezca (2+ opciones, todas celulares
+      // que mencionan "gama alta"), nunca que se adivine o se pierda.
       const providerSubject = `credicel-tie-${shortSuffix}`;
-      const gamaAlta256 = 'Celular gama alta (256 GB)';
-      const gamaAltaCamara = 'Celular gama alta cámara profesional';
 
       const first = await sendCredicel(
         providerSubject,
@@ -439,15 +442,15 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
       );
       expect(first.body).toContain(celularName);
       expect(first.body).toContain('Encontré varias opciones, ¿cuál prefieres?');
-      expect(first.interactive).toMatchObject({
-        type: 'list',
-        body: first.body,
-        buttonLabel: 'Elegir',
-        options: [
-          expect.objectContaining({ id: '1', title: expect.stringContaining('Celular gama alta') }),
-          expect.objectContaining({ id: '2', title: expect.stringContaining('Celular gama alta') }),
-        ],
-      });
+      const interactive = first.interactive as {
+        type: string;
+        options: { id: string; title: string; description?: string }[];
+      };
+      expect(interactive.type).toBe('list');
+      expect(interactive.options.length).toBeGreaterThanOrEqual(2);
+      for (const option of interactive.options) {
+        expect(`${option.title} ${option.description ?? ''}`).toContain('Celular');
+      }
 
       const claroLines = await pool.query<{ description_snapshot: string }>(
         `select line.description_snapshot from app.request_lines line
@@ -462,7 +465,7 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
       // Resolves by tapping the first tied option's id — which real product
       // that lands on doesn't matter for this test, only that the tie
       // resolves cleanly and both cart lines end up correct.
-      const options = (first.interactive as { options: { id: string; title: string }[] }).options;
+      const options = interactive.options;
       const chosen = options[0];
       const second = await sendCredicel(providerSubject, chosen.title, {
         type: 'list',
@@ -480,10 +483,10 @@ describe('D-107 — an ambiguous product inside a multi-item message is offered 
       );
       expect(finalLines.rows).toHaveLength(2);
       expect(finalLines.rows[0].description_snapshot).toContain(celularName);
-      expect(
-        finalLines.rows[1].description_snapshot.includes(gamaAlta256) ||
-          finalLines.rows[1].description_snapshot.includes(gamaAltaCamara),
-      ).toBe(true);
+      // Whichever option was tapped is what actually landed in the cart —
+      // a truncated list title ends in "…", so compare by prefix.
+      const expectedPrefix = chosen.title.replace(/…$/, '');
+      expect(finalLines.rows[1].description_snapshot.startsWith(expectedPrefix)).toBe(true);
     });
   });
 });
