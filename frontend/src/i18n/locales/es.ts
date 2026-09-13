@@ -851,10 +851,24 @@ export default {
   inviteModal: {
     eyebrow: "NUEVO MIEMBRO",
     title: "Invitar al equipo",
-    created: "Invitación creada. En producción se enviará por correo.",
+    created: "Invitación creada y enviada por correo.",
     email: "Correo",
     role: "Rol",
     submit: "Crear invitación",
+  },
+  acceptInvite: {
+    eyebrow: "INVITACIÓN",
+    title: "Completa tu registro",
+    subtitle: "Elige tu nombre y una contraseña para unirte al equipo.",
+    displayName: "Tu nombre",
+    password: "Contraseña",
+    confirmPassword: "Confirma tu contraseña",
+    passwordMismatch: "Las contraseñas no coinciden.",
+    submit: "Crear mi cuenta",
+    busy: "Creando cuenta…",
+    success: "¡Listo! Tu cuenta fue creada. Ya puedes iniciar sesión.",
+    goToLogin: "Ir a iniciar sesión",
+    missingToken: "Este enlace de invitación no es válido.",
   },
   demo: { restaurant: "Restaurante demo", company: "Empresa {{id}}" },
   errors: {
@@ -886,6 +900,7 @@ export default {
     TENANT_INVITATION_DUPLICATE:
       "Ya existe una invitación o membresía para este correo.",
     TENANT_INVITATION_INVALID: "Esta invitación es inválida o ha vencido.",
+    TENANT_INVITATION_ACCEPTED: "Esta invitación ya fue aceptada anteriormente.",
     TENANT_LAST_OWNER: "No se puede modificar al propietario principal.",
     REQUIREMENT_NOT_FOUND: "El requisito no fue encontrado.",
     REQUIREMENT_OPTION_NOT_FOUND: "La opción no fue encontrada.",

@@ -31,6 +31,17 @@ services:
     volumes:
       - commerce_redis_data:/data
 
+  # D-157 (docs/decisions.md): local/dev stand-in for the real SMTP relay
+  # (Resend in production) — captures every outbound email instead of
+  # actually delivering it, so invitation/notification emails can be sent
+  # for real during development and integration tests without ever risking
+  # a message landing in a real inbox. Web UI at http://localhost:8025.
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "${SMTP_PORT:-51025}:1025"
+      - "${MAILHOG_UI_PORT:-58025}:8025"
+
 volumes:
   commerce_postgres_data:
   commerce_redis_data:

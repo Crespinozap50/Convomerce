@@ -31,6 +31,12 @@ export interface ValidatedEnvironment extends Record<string, unknown> {
   OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED:string;
   OPENAI_RECOMMENDATION_MODEL:string;
   DEV_HARNESS_ENABLED: string;
+  SMTP_HOST: string;
+  SMTP_PORT: number;
+  SMTP_SECURE: string;
+  SMTP_USER: string;
+  SMTP_PASSWORD: string;
+  EMAIL_FROM_ADDRESS: string;
 }
 
 export function validateEnvironment(source: Record<string, unknown>): ValidatedEnvironment {
@@ -98,6 +104,18 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
   // correctly set to 'production' later.
   const devHarnessEnabled=booleanString(source.DEV_HARNESS_ENABLED,false,'DEV_HARNESS_ENABLED');
   if(nodeEnvironment==='production'&&devHarnessEnabled==='true')throw new Error('Production does not allow the dev harness endpoints');
+  // D-157 (docs/decisions.md): defaults point at the local MailHog container
+  // (docker-compose.yml) — every outbound email lands there instead of a
+  // real inbox, so invitation email can be developed/tested for real
+  // without ever risking a message reaching an actual person. Refusing
+  // 'localhost' in production is the same fail-safe pattern as the fixture
+  // webhook secrets above: a forgotten/copied dev .env should not silently
+  // route real tenant-owner invitation emails into a container nobody's
+  // reading, either.
+  const smtpHost=stringValue(source.SMTP_HOST,'localhost');
+  if(nodeEnvironment==='production'&&(smtpHost==='localhost'||smtpHost==='mailhog'))throw new Error('Production must not point SMTP_HOST at the local/dev mail catcher');
+  const emailFromAddress=stringValue(source.EMAIL_FROM_ADDRESS,'onboarding@resend.dev');
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailFromAddress))throw new Error('EMAIL_FROM_ADDRESS must be a valid email address');
   return {
     ...source,
     NODE_ENV: nodeEnvironment,
@@ -134,6 +152,12 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
     OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED:consultativeRecommendationsEnabled,
     OPENAI_RECOMMENDATION_MODEL:stringValue(source.OPENAI_RECOMMENDATION_MODEL,'gpt-5.4-mini'),
     DEV_HARNESS_ENABLED: devHarnessEnabled,
+    SMTP_HOST: smtpHost,
+    SMTP_PORT: positiveInteger(source.SMTP_PORT, 51025, 'SMTP_PORT'),
+    SMTP_SECURE: booleanString(source.SMTP_SECURE, false, 'SMTP_SECURE'),
+    SMTP_USER: stringValue(source.SMTP_USER, ''),
+    SMTP_PASSWORD: stringValue(source.SMTP_PASSWORD, ''),
+    EMAIL_FROM_ADDRESS: emailFromAddress,
   };
 }
 

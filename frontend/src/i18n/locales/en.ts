@@ -845,10 +845,24 @@ export default {
   inviteModal: {
     eyebrow: "NEW MEMBER",
     title: "Invite to the team",
-    created: "Invitation created. In production it will be sent by email.",
+    created: "Invitation created and emailed.",
     email: "Email",
     role: "Role",
     submit: "Create invitation",
+  },
+  acceptInvite: {
+    eyebrow: "INVITATION",
+    title: "Complete your sign-up",
+    subtitle: "Choose your name and a password to join the team.",
+    displayName: "Your name",
+    password: "Password",
+    confirmPassword: "Confirm your password",
+    passwordMismatch: "Passwords don't match.",
+    submit: "Create my account",
+    busy: "Creating account…",
+    success: "Done! Your account was created. You can now log in.",
+    goToLogin: "Go to login",
+    missingToken: "This invitation link isn't valid.",
   },
   demo: { restaurant: "Demo restaurant", company: "Company {{id}}" },
   errors: {
@@ -882,6 +896,7 @@ export default {
     TENANT_INVITATION_DUPLICATE:
       "An invitation or membership already exists for this email.",
     TENANT_INVITATION_INVALID: "This invitation is invalid or has expired.",
+    TENANT_INVITATION_ACCEPTED: "This invitation has already been accepted.",
     TENANT_LAST_OWNER: "The primary owner cannot be modified.",
     REQUIREMENT_NOT_FOUND: "The requirement was not found.",
     REQUIREMENT_OPTION_NOT_FOUND: "The option was not found.",

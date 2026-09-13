@@ -50,6 +50,7 @@ import {
 import { playNotificationSound, showDesktopNotification, roleName } from "./dashboard/utils";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { Login } from "./auth/Login";
+import { AcceptInvite } from "./auth/AcceptInvite";
 import { ChangePassword } from "./auth/ChangePassword";
 import { TenantSelector } from "./companies/TenantSelector";
 import { Companies } from "./companies/Companies";
@@ -95,6 +96,17 @@ export default function App() {
       }
     }
   }, [session?.uiLanguage, i18n]);
+  // D-157 (docs/decisions.md): reachable before login on purpose — an
+  // invited person has no session yet. Checked ahead of the loading/session
+  // gates below so it never falls through to the login screen just because
+  // there's no session, the one state every invitee actually starts in.
+  // After every hook above (Rules of Hooks — this can't be an early return
+  // ahead of them without skipping a hook call on this specific route).
+  if (window.location.pathname === "/accept-invite") {
+    return (
+      <AcceptInvite token={new URLSearchParams(window.location.search).get("token")} />
+    );
+  }
   if (loading)
     return (
       <div className="center">

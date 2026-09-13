@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { DatabaseModule } from './database/database.module';
 import { SecretsModule } from './secrets/secrets.module';
+import { EmailModule } from './email/email.module';
 import { InboundMessagesModule } from './inbound-messages/inbound-messages.module';
 import { OutboxModule } from './outbox/outbox.module';
 import { CommerceEventsModule } from './commerce-events/commerce-events.module';
@@ -34,6 +35,7 @@ import { TenantMetricsModule } from './tenant-metrics/tenant-metrics.module';
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnvironment }),
     DatabaseModule,
     SecretsModule,
+    EmailModule,
     InboundMessagesModule,
     OutboxModule,
     CommerceEventsModule,

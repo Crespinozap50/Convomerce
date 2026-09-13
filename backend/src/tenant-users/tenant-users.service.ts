@@ -6,15 +6,22 @@ import { v7 as uuidv7 } from 'uuid';
 import { DatabaseService } from '../database/database.service';
 import { hashSessionToken } from '../auth/session-cookie';
 import { conflict, forbidden, unauthorized } from '../observability/http-errors';
+import { EmailService } from '../email/email.service';
 
 export type TenantRole = 'owner' | 'admin' | 'operator' | 'viewer';
 
 @Injectable()
 export class TenantUsersService {
   private readonly exposeToken: boolean;
+  private readonly frontendOrigin: string;
 
-  constructor(private readonly database: DatabaseService, config: ConfigService) {
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly email: EmailService,
+    config: ConfigService,
+  ) {
     this.exposeToken = config.get<string>('NODE_ENV') !== 'production';
+    this.frontendOrigin = config.get<string>('FRONTEND_ORIGIN', 'http://localhost:5173');
   }
 
   async list(tenantId: string, actorUserId: string) {
@@ -37,18 +44,35 @@ export class TenantUsersService {
     const token = randomBytes(32).toString('base64url');
     const invitationId = uuidv7();
     const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000);
+    let tenantName = 'Commerce AI';
     try {
       await this.database.withTenantTransaction(tenantId, async (client) => {
         await client.query(
           'select app.create_tenant_user_invitation($1,$2,$3,$4,$5,$6,$7)',
           [invitationId, actorUserId, email, role, hashSessionToken(token), expiresAt, uuidv7()],
         );
+        const tenant = await client.query<{ display_name: string }>(
+          'select display_name from app.tenants where id=$1', [tenantId],
+        );
+        if (tenant.rows[0]?.display_name) tenantName = tenant.rows[0].display_name;
       });
     } catch (error) {
       if (isPgCode(error, '42501')) throw forbidden('TENANT_USERS_FORBIDDEN', 'You cannot invite users to this tenant');
       if (isPgCode(error, '23505')) throw conflict('TENANT_INVITATION_DUPLICATE', 'An invitation or membership already exists for this email');
       throw error;
     }
+    // D-157 (docs/decisions.md): a real email, alongside (not instead of)
+    // the existing dev-only token exposure below — this used to be the
+    // only way an invited person could ever learn their token existed.
+    // send() never throws (see EmailService) — a bounced address still
+    // leaves a valid invitation the admin can see and revoke/resend.
+    const acceptUrl = `${this.frontendOrigin}/accept-invite?token=${token}`;
+    await this.email.send(
+      email,
+      `Te invitaron a unirte a ${tenantName}`,
+      `Te invitaron a unirte a ${tenantName} con el rol "${role}".\n\nCompleta tu registro aquí (válido por 72 horas):\n${acceptUrl}\n\nSi no esperabas esta invitación, puedes ignorar este correo.`,
+      `<p>Te invitaron a unirte a <strong>${tenantName}</strong> con el rol "${role}".</p><p><a href="${acceptUrl}">Completa tu registro aquí</a> (válido por 72 horas).</p><p>Si no esperabas esta invitación, puedes ignorar este correo.</p>`,
+    );
     return { invitationId, expiresAt, invitationToken: this.exposeToken ? token : undefined };
   }
 

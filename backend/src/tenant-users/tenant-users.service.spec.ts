@@ -20,10 +20,11 @@ describe("TenantUsersService", () => {
     return Object.assign(new Error("pg error"), { code });
   }
 
-  function service(query: jest.Mock, nodeEnv: string) {
+  function service(query: jest.Mock, nodeEnv: string, send: jest.Mock = jest.fn().mockResolvedValue(undefined)) {
     return new TenantUsersService(
       { withTenantTransaction: (_id: string, op: (c: unknown) => unknown) => op({ query }), withRuntimeTransaction: (op: (c: unknown) => unknown) => op({ query }) } as never,
-      { get: jest.fn().mockReturnValue(nodeEnv) } as never,
+      { send } as never,
+      { get: jest.fn((key: string) => (key === "NODE_ENV" ? nodeEnv : "http://localhost:5173")) } as never,
     );
   }
 
@@ -66,6 +67,34 @@ describe("TenantUsersService", () => {
       await expect(
         service(query, "test").invite(tenantId, actorUserId, "new@commerce.test", "admin"),
       ).rejects.toThrow("connection reset");
+    });
+
+    it("emails the invitee a real accept link naming the tenant and role, not just a bare token", async () => {
+      const query = jest.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes("from app.tenants")) return { rows: [{ display_name: "CrediCel Store" }] };
+        return { rows: [] };
+      });
+      const send = jest.fn().mockResolvedValue(undefined);
+
+      await service(query, "test", send).invite(tenantId, actorUserId, "invitee@example.com", "admin");
+
+      expect(send).toHaveBeenCalledTimes(1);
+      const [to, subject, text, html] = send.mock.calls[0];
+      expect(to).toBe("invitee@example.com");
+      expect(subject).toContain("CrediCel Store");
+      expect(text).toContain("http://localhost:5173/accept-invite?token=");
+      expect(html).toContain("http://localhost:5173/accept-invite?token=");
+      expect(text).toContain("admin");
+    });
+
+    it("still sends the invitation email even without an email a client could double-check (never blocks on it)", async () => {
+      const query = jest.fn().mockResolvedValue({ rows: [] });
+      const send = jest.fn().mockResolvedValue(undefined);
+
+      const result = await service(query, "test", send).invite(tenantId, actorUserId, "new@commerce.test", "viewer");
+
+      expect(result.invitationId).toEqual(expect.any(String));
+      expect(send).toHaveBeenCalled();
     });
   });
 

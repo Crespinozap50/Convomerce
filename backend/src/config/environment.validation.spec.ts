@@ -51,11 +51,29 @@ describe('validateEnvironment', () => {
       },
       'dev harness',
     ],
+    [
+      {
+        ...valid,
+        NODE_ENV: 'production',
+        WHATSAPP_WEBHOOK_VERIFY_TOKEN: 'genuine-verify-token-value',
+        WHATSAPP_APP_SECRET: 'genuine-app-secret-value',
+        METRICS_BEARER_TOKEN: 'genuine-metrics-token-long-enough-value',
+        WHATSAPP_ADAPTER_MODE: 'meta',
+        WHATSAPP_GRAPH_API_VERSION: 'v21.0',
+        SMTP_HOST: 'localhost',
+      },
+      'SMTP_HOST',
+    ],
+    [{ ...valid, EMAIL_FROM_ADDRESS: 'not-an-email' }, 'EMAIL_FROM_ADDRESS'],
   ])('rechaza configuración insegura', (environment, expected) => {
     expect(() => validateEnvironment(environment)).toThrow(expected);
   });
 
   it('cierra el harness de desarrollo por defecto, sin depender de NODE_ENV', () => {
     expect(validateEnvironment(valid)).toMatchObject({ DEV_HARNESS_ENABLED: 'false' });
+  });
+
+  it('apunta el correo saliente a MailHog local por defecto, no a un servidor real', () => {
+    expect(validateEnvironment(valid)).toMatchObject({ SMTP_HOST: 'localhost', SMTP_PORT: 51025 });
   });
 });
