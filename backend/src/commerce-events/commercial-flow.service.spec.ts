@@ -630,6 +630,116 @@ describe("CommercialFlowService", () => {
     ).toBe(true);
   });
 
+  it("combines a too-short follow-up with the customer's own previous message instead of giving up immediately (D-149 live finding)", async () => {
+    // "Y el 16 ?" alone (9 chars) is under the 15-char minimum meant to
+    // filter out "hola"/"ok" — but it's a genuine follow-up to the previous
+    // message in the same conversation, and no active tiedItems workflow
+    // exists yet to route it through the retry/combine logic (the first
+    // message found nothing to recommend, so it never created one).
+    const candidateRows = [
+      {
+        item_id: "item-16",
+        variant_id: "variant-16",
+        name: "iPhone 16",
+        category: "celulares",
+        variant_name: "Único",
+        price_minor: "420000000",
+        currency: "COP",
+        description: "128GB, chip A18.",
+      },
+    ];
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.messages"))
+          return { rows: [{ body: "Cuál son las especificaciones del iPhone 17 ?" }] };
+        if (sql.includes("from app.tenant_capabilities"))
+          return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return { rows: candidateRows };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "variant-16", reason: "Es el modelo más parecido al 17 que sí tenemos." }]);
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-2",
+      body: "Y el 16 ?",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "fallback",
+        confidence: 0,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalledWith(
+      { tenantId: input.tenantId, conversationId: input.conversationId, messageId: "message-2" },
+      "Cuál son las especificaciones del iPhone 17 ?. Y el 16 ?",
+      expect.arrayContaining([expect.objectContaining({ variantId: "variant-16" })]),
+      "es",
+      client,
+    );
+    expect(reply?.responsePlan).toMatchObject({
+      interactive: expect.objectContaining({
+        options: expect.arrayContaining([expect.objectContaining({ title: "iPhone 16" })]),
+      }),
+    });
+  });
+
+  it("still bails out on a too-short message with no recent previous message to combine it with (D-149)", async () => {
+    const recommend = jest.fn();
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.messages")) return { rows: [] };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: "ok",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "fallback",
+        confidence: 0,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).not.toHaveBeenCalled();
+    expect(reply).toBeNull();
+  });
+
   it("does not attempt a consultative recommendation when the tenant hasn't enabled the capability (D-128)", async () => {
     const recommend = jest.fn();
     const client = {

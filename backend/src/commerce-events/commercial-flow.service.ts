@@ -1804,8 +1804,34 @@ export class CommercialFlowService {
   ): Promise<{ tied: (Item & { description: string | null })[]; reasons: Map<string, string> } | null> {
     if (!this.consultativeRecommendations || !input.messageId) return null;
     // Avoids spending AI budget reasoning over a message too short to
-    // plausibly describe a real need ("hola", "ok").
-    if (message.trim().length < 15) return null;
+    // plausibly describe a real need ("hola", "ok"). D-149 live finding
+    // (Tecnología Demo/CrediCel): a short but genuinely meaningful follow-up
+    // ("Y el 16 ?" right after "Cuál son las especificaciones del iPhone
+    // 17 ?") used to be discarded here before ever checking capability or
+    // candidates — no active tiedItems workflow existed to route it through
+    // retryConsultativeRecommendation's combine logic, since the FIRST
+    // message itself found nothing to recommend and so never created one.
+    // Before giving up on a short message, look for the customer's own
+    // immediately-preceding message in this same conversation (not this
+    // flow's tiedItems context, which doesn't exist yet at this point) and
+    // combine the two — same "prior + new" pattern already used for a
+    // retype, just sourced from raw message history instead of workflow
+    // context. Only looks a few minutes back so an unrelated short message
+    // hours later ("ok", sent long after any product talk) still bails out
+    // exactly like before.
+    let effectiveMessage = message;
+    if (effectiveMessage.trim().length < 15) {
+      const recent = await client.query<{ body: string | null }>(
+        `select content->>'body' as body from app.messages
+           where conversation_id=$1 and direction='inbound' and id<>$2
+             and occurred_at > now() - interval '5 minutes'
+           order by created_at desc limit 1`,
+        [input.conversationId, input.messageId],
+      );
+      const previousBody = recent.rows[0]?.body;
+      effectiveMessage = previousBody ? `${previousBody}. ${message}` : message;
+      if (effectiveMessage.trim().length < 15) return null;
+    }
     const capability = await client.query<{ enabled: boolean }>(
       `select enabled from app.tenant_capabilities where tenant_id=$1 and capability='consultative_recommendations'`,
       [input.tenantId],
@@ -1815,7 +1841,7 @@ export class CommercialFlowService {
     if (candidates.length === 0) return null;
     const picks = await this.consultativeRecommendations.recommend(
       { tenantId: input.tenantId, conversationId: input.conversationId, messageId: input.messageId },
-      message,
+      effectiveMessage,
       candidates.map((item) => ({
         variantId: item.variant_id,
         name: item.name,
