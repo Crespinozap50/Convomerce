@@ -5,6 +5,7 @@ import {
   NotFoundException,
   Post,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { validate as isUuid } from "uuid";
 import { InboundMessagesService } from "./inbound-messages.service";
 import {
@@ -14,11 +15,25 @@ import {
 
 @Controller("v1/dev/inbound-messages")
 export class InboundMessagesController {
-  constructor(private readonly messages: InboundMessagesService) {}
+  constructor(
+    private readonly messages: InboundMessagesService,
+    private readonly config: ConfigService,
+  ) {}
+
+  // Security finding, this session: gating purely on NODE_ENV!=='production'
+  // left this unauthenticated fake-inbound-message endpoint open on the
+  // live pilot server, whose own .env has NODE_ENV=development (required
+  // elsewhere — no HTTPS yet, see environment.validation.ts). Closed by
+  // default regardless of NODE_ENV; see docs/decisions.md.
+  private assertEnabled(): void {
+    if (this.config.get<string>("DEV_HARNESS_ENABLED") !== "true") {
+      throw new NotFoundException();
+    }
+  }
 
   @Post()
   async receive(@Body() body: ReceiveInboundMessageCommand) {
-    if (process.env.NODE_ENV === "production") throw new NotFoundException();
+    this.assertEnabled();
     for (const field of ["tenantId", "channelId"] as const) {
       if (!body[field] || !isUuid(body[field]))
         throw new BadRequestException(`${field} must be a UUID`);
@@ -43,7 +58,7 @@ export class InboundMessagesController {
 
   @Post("reprocess")
   async reprocess(@Body() body: ReprocessInboundMessageCommand) {
-    if (process.env.NODE_ENV === "production") throw new NotFoundException();
+    this.assertEnabled();
     for (const field of ["tenantId", "conversationId", "messageId"] as const) {
       if (!body[field] || !isUuid(body[field])) {
         throw new BadRequestException(`${field} must be a UUID`);

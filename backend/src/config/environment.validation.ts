@@ -30,6 +30,7 @@ export interface ValidatedEnvironment extends Record<string, unknown> {
   OPENAI_OUTPUT_COST_MINOR_PER_MILLION:number;
   OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED:string;
   OPENAI_RECOMMENDATION_MODEL:string;
+  DEV_HARNESS_ENABLED: string;
 }
 
 export function validateEnvironment(source: Record<string, unknown>): ValidatedEnvironment {
@@ -83,6 +84,20 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
   if(responseRewritingEnabled==='true'&&openAiApiKey.length<20)throw new Error('OPENAI_API_KEY is required when response rewriting is enabled');
   const consultativeRecommendationsEnabled=booleanString(source.OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED,false,'OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED');
   if(consultativeRecommendationsEnabled==='true'&&openAiApiKey.length<20)throw new Error('OPENAI_API_KEY is required when consultative recommendations are enabled');
+  // Security finding, this session: the dev-only message-injection harness
+  // (/v1/dev/inbound-messages, /v1/dev/outbound-messages — no auth at all,
+  // lets anyone fabricate a "customer" message into any tenant's real
+  // conversation or trigger a real send) used to gate itself on
+  // `NODE_ENV!=='production'` alone. The live pilot server's own .env has
+  // NODE_ENV=development (needed elsewhere — HTTPS isn't set up yet, so
+  // secure cookies would break login under 'production') — meaning that
+  // gate was never actually closed against the real, live tenant data.
+  // DEV_HARNESS_ENABLED is a separate flag, closed by default regardless of
+  // NODE_ENV, that the two dev controllers check instead — and this second
+  // check makes it impossible to open even by mistake if NODE_ENV is ever
+  // correctly set to 'production' later.
+  const devHarnessEnabled=booleanString(source.DEV_HARNESS_ENABLED,false,'DEV_HARNESS_ENABLED');
+  if(nodeEnvironment==='production'&&devHarnessEnabled==='true')throw new Error('Production does not allow the dev harness endpoints');
   return {
     ...source,
     NODE_ENV: nodeEnvironment,
@@ -118,6 +133,7 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
     OPENAI_OUTPUT_COST_MINOR_PER_MILLION:nonNegativeInteger(source.OPENAI_OUTPUT_COST_MINOR_PER_MILLION,400,'OPENAI_OUTPUT_COST_MINOR_PER_MILLION'),
     OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED:consultativeRecommendationsEnabled,
     OPENAI_RECOMMENDATION_MODEL:stringValue(source.OPENAI_RECOMMENDATION_MODEL,'gpt-5.4-mini'),
+    DEV_HARNESS_ENABLED: devHarnessEnabled,
   };
 }
 

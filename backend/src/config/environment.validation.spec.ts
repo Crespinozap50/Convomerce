@@ -38,7 +38,24 @@ describe('validateEnvironment', () => {
     [{ ...valid, CREDENTIAL_ENCRYPTION_KEY: 'too-short' }, 'CREDENTIAL_ENCRYPTION_KEY'],
     [{ ...valid, OPENAI_RESPONSE_REWRITING_ENABLED: 'true' }, 'OPENAI_API_KEY'],
     [{ ...valid, OPENAI_RESPONSE_TIMEOUT_MS: 10001 }, 'OPENAI_RESPONSE_TIMEOUT_MS'],
+    [
+      {
+        ...valid,
+        NODE_ENV: 'production',
+        WHATSAPP_WEBHOOK_VERIFY_TOKEN: 'genuine-verify-token-value',
+        WHATSAPP_APP_SECRET: 'genuine-app-secret-value',
+        METRICS_BEARER_TOKEN: 'genuine-metrics-token-long-enough-value',
+        WHATSAPP_ADAPTER_MODE: 'meta',
+        WHATSAPP_GRAPH_API_VERSION: 'v21.0',
+        DEV_HARNESS_ENABLED: 'true',
+      },
+      'dev harness',
+    ],
   ])('rechaza configuración insegura', (environment, expected) => {
     expect(() => validateEnvironment(environment)).toThrow(expected);
+  });
+
+  it('cierra el harness de desarrollo por defecto, sin depender de NODE_ENV', () => {
+    expect(validateEnvironment(valid)).toMatchObject({ DEV_HARNESS_ENABLED: 'false' });
   });
 });

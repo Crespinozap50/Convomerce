@@ -2,6 +2,7 @@ import {
   Body, Controller, Get, HttpCode, Patch, Post, Req, Res, UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { Request, Response } from 'express';
 import { AuthenticatedRequest } from './authenticated-request';
 import { LocalAuthService } from './local-auth.service';
@@ -19,6 +20,8 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   async login(
     @Body() body: unknown, @Req() request: Request, @Res({ passthrough: true }) response: Response,
   ) {
