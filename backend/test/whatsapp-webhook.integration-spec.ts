@@ -49,6 +49,21 @@ describe('frontera HTTP del webhook de WhatsApp', () => {
 
   afterAll(async () => {
     if(restaurantChannelStatus)await pool.query(`update app.channels set status=$1 where id='0194f001-0000-7000-8000-000000000001'`,[restaurantChannelStatus]);
+    // D-151 (docs/decisions.md) live finding: this test's fixture message
+    // ("Mensaje completamente ficticio") always reads as an unanswered
+    // fallback, by design — every run logs (or bumps occurrence_count on)
+    // the same app.unresolved_customer_questions row, keyed by tenant +
+    // normalized question text rather than by this run's own
+    // sender/message ids. The rest of this cleanup deletes the message/
+    // conversation/contact this run created, but never that row, so 13
+    // runs across this project's history left one stale, never-answerable
+    // entry cluttering Santos Tacos' real admin review queue. Deleting it
+    // unconditionally (not gated on `stored` below, since it's identified
+    // by text, not by this run's ids) keeps a fresh copy from accumulating
+    // on the next run too.
+    await pool.query(
+      "delete from app.unresolved_customer_questions where tenant_id='0194f000-0000-7000-8000-000000000001' and normalized_question='mensaje completamente ficticio'",
+    );
     if (outboundExternalIds.length > 0) {
       const outbound = await pool.query<{ id: string }>(
         'select id from app.messages where external_message_id = any($1::text[])',
