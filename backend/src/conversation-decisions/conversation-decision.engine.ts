@@ -24,7 +24,14 @@ export class ConversationDecisionEngine {
       const commercial=await this.commerce.resolve(client,input);
       if(commercial)return this.toDecision('commerce','commercial_flow_matched',commercial,input);
     }
-    const knowledge=await this.knowledge.resolve(client,input.body,bot,input.interactiveSelectionId);
+    // D-164 (docs/decisions.md): messageId is optional on UnderstoodFlowInput
+    // (same reasoning as ConsultativeRecommendationService's own AI budget
+    // reservation, D-128) — the AI-FAQ fallback simply doesn't get a chance
+    // to run when it's absent, same as the capability being disabled.
+    const knowledge=await this.knowledge.resolve(
+      client,input.body,bot,input.interactiveSelectionId,
+      input.messageId?{tenantId:input.tenantId,conversationId:input.conversationId,messageId:input.messageId}:undefined,
+    );
     // 'fallback' alone doesn't mean unanswered — it can still be genuinely
     // answered via a knowledge_entries match on title/keywords (D-077,
     // D-078). Only report "no domain capability matched" when it's truly

@@ -32,6 +32,8 @@ export interface ValidatedEnvironment extends Record<string, unknown> {
   OPENAI_RECOMMENDATION_MODEL:string;
   OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION:number;
   OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION:number;
+  OPENAI_BUSINESS_FAQ_ENABLED:string;
+  OPENAI_BUSINESS_FAQ_MODEL:string;
   DEV_HARNESS_ENABLED: string;
   SMTP_HOST: string;
   SMTP_PORT: number;
@@ -92,6 +94,11 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
   if(responseRewritingEnabled==='true'&&openAiApiKey.length<20)throw new Error('OPENAI_API_KEY is required when response rewriting is enabled');
   const consultativeRecommendationsEnabled=booleanString(source.OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED,false,'OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED');
   if(consultativeRecommendationsEnabled==='true'&&openAiApiKey.length<20)throw new Error('OPENAI_API_KEY is required when consultative recommendations are enabled');
+  // D-164 (docs/decisions.md): answers hours/location/payments/price-style
+  // questions that classifyMessage()'s fixed keyword lists miss, grounded
+  // only in the tenant's own real business data — see business-faq.service.ts.
+  const businessFaqEnabled=booleanString(source.OPENAI_BUSINESS_FAQ_ENABLED,false,'OPENAI_BUSINESS_FAQ_ENABLED');
+  if(businessFaqEnabled==='true'&&openAiApiKey.length<20)throw new Error('OPENAI_API_KEY is required when the business FAQ AI is enabled');
   // Security finding, this session: the dev-only message-injection harness
   // (/v1/dev/inbound-messages, /v1/dev/outbound-messages — no auth at all,
   // lets anyone fabricate a "customer" message into any tenant's real
@@ -163,6 +170,10 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
     // actually set to on OpenAI's own pricing page and set these for real.
     OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION:nonNegativeInteger(source.OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION,100,'OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION'),
     OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION:nonNegativeInteger(source.OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION,400,'OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION'),
+    OPENAI_BUSINESS_FAQ_ENABLED:businessFaqEnabled,
+    // Same nano tier/rate as OPENAI_RESPONSE_MODEL by default — see the
+    // cost-rate comment in business-faq.service.ts's settle().
+    OPENAI_BUSINESS_FAQ_MODEL:stringValue(source.OPENAI_BUSINESS_FAQ_MODEL,'gpt-5.4-nano'),
     DEV_HARNESS_ENABLED: devHarnessEnabled,
     SMTP_HOST: smtpHost,
     SMTP_PORT: positiveInteger(source.SMTP_PORT, 51025, 'SMTP_PORT'),

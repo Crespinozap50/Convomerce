@@ -27,8 +27,8 @@
   "intents": {
     "delivery": ["domicilio", "domicilios", "envio", "cobertura", "entregan"],
     "hours": ["horario", "abren", "abierto", "cierran", "atienden"],
-    "location": ["ubicacion", "direccion", "donde quedan", "donde estan", "como llego"],
-    "payments": ["pagar", "pago", "efectivo", "transferencia", "tarjeta", "datafono"],
+    "location": ["ubicacion", "direccion", "donde quedan", "donde estan", "como llego", "que barrio", "en que barrio", "en donde quedan"],
+    "payments": ["pagar", "pago", "efectivo", "transferencia", "tarjeta", "datafono", "nequi", "daviplata", "bancolombia"],
     "price": ["precio", "cuanto cuesta", "cuando cuesta", "cuanto cuestan", "cuando cuestan", "cuanto vale", "valor"],
     "menu": ["menu", "carta", "catalogo", "opciones", "productos", "producto", "servicios", "servicio", "que tienen", "que venden", "que ofrecen", "que manejan", "tacos tienen"],
     "greeting": ["hola", "buenos dias", "buenas tardes", "buenas noches", "buenas"]

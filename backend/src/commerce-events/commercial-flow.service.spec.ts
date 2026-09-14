@@ -1118,6 +1118,137 @@ describe("CommercialFlowService", () => {
     ).toBe(true);
   });
 
+  // D-164 (docs/decisions.md) live finding: a customer abandoning a pending
+  // recommendation to ask an unrelated FAQ question ("hasta qué hora
+  // atienden?") used to get silently appended onto the original product
+  // request and re-sent to the AI as more product search, forever — the
+  // question never got a real answer. impliesDifferentCategory() (D-134)
+  // doesn't catch this: an hours/location/payments/price question shares no
+  // catalog vocabulary with any category the tenant sells.
+  it("defers to the FAQ/knowledge path instead of combining an unrelated hours question into the pending recommendation (regression)", async () => {
+    const tiedItems = [
+      {
+        item_id: "item-dell",
+        variant_id: "variant-dell",
+        name: "Portátil Dell para oficina",
+        category: "computadores",
+        variant_name: "Único",
+        price_minor: "238000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = { "variant-dell": "Buena opción de oficina." };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id")) {
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons, consultativeMessage: "portátil para oficina" },
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest.fn();
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-2",
+      body: "hasta que hora atienden hoy?",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "hours",
+        confidence: 0.9,
+        entities: {},
+        requestedAction: "hours",
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply).toBeNull();
+    expect(recommend).not.toHaveBeenCalled();
+  });
+
+  // D-164 (docs/decisions.md) live finding: understanding.requiresHuman
+  // reflects a tenant's own configured handoffKeywords (D-163, e.g.
+  // "reclamo"/"nunca llego") but was never actually read anywhere in this
+  // file — only the hardcoded classifyFlowCommand "humano/persona/asesor/
+  // agente" pattern escalated. A real complaint sent while a commercial
+  // flow step was active (here: a pending recommendation tie) got silently
+  // swallowed into that step's free-text handling instead of ever
+  // escalating to a human.
+  it("defers to the handoff path instead of swallowing a complaint into whatever flow step is active, even mid-recommendation (regression)", async () => {
+    const tiedItems = [
+      {
+        item_id: "item-dell",
+        variant_id: "variant-dell",
+        name: "Portátil Dell para oficina",
+        category: "computadores",
+        variant_name: "Único",
+        price_minor: "238000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = { "variant-dell": "Buena opción de oficina." };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id")) {
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons, consultativeMessage: "portátil para oficina" },
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest.fn();
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-2",
+      body: "mi pedido anterior nunca llego, que paso?",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "handoff",
+        confidence: 0.9,
+        entities: {},
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: true,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply).toBeNull();
+    expect(recommend).not.toHaveBeenCalled();
+  });
+
   it("asks the AI with only the new message, discarding stale context, when a retype names a different product category than what's being recommended (D-134 live finding)", async () => {
     // Found live, verifying D-134's weak-match fix: with a phone
     // recommendation still open, sending "necesito un computador para
@@ -1320,6 +1451,170 @@ describe("CommercialFlowService", () => {
       "es",
       client,
     );
+  });
+
+  // D-164 (docs/decisions.md) live finding: "venden carros usados?" mid-
+  // laptop-recommendation used to get combined onto the stale request and
+  // re-sent to the AI as more product search — the AI recommended laptops
+  // for a used-car question, violating its own instruction never to
+  // stretch an unrelated message into a recommendation (D-128 rule 1).
+  // impliesOffTopic() catches this deterministically (no AI call spent
+  // either way): the message shares no vocabulary with any category this
+  // tenant sells, once filler/quality words are filtered out.
+  it("defers instead of combining a message that names nothing this tenant sells at all (regression)", async () => {
+    const tiedItems = [
+      {
+        item_id: "item-hp",
+        variant_id: "variant-hp",
+        name: "Portátil HP para diseño gráfico intermedio",
+        category: "computadores",
+        variant_name: "Único",
+        price_minor: "359000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = { "variant-hp": "Tiene tarjeta gráfica dedicada." };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons, consultativeMessage: "portátil para diseño" },
+              },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return {
+            rows: [
+              {
+                item_id: "item-hp",
+                variant_id: "variant-hp",
+                name: "Portátil HP para diseño gráfico intermedio",
+                category: "computadores",
+                variant_name: "Único",
+                price_minor: "359000000",
+                currency: "COP",
+                description: "Buena tarjeta gráfica.",
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest.fn();
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-2",
+      body: "venden carros usados?",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "fallback",
+        confidence: 0,
+        entities: { searchTerms: ["venden", "carros", "usados"] },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply).toBeNull();
+    expect(recommend).not.toHaveBeenCalled();
+  });
+
+  // D-164 (docs/decisions.md) live finding: "¿cuál de esos me recomiendas
+  // más para tomar fotos de mis hijos jugando, se mueven mucho?" — a
+  // genuine, on-topic follow-up about the cameras just shown — got
+  // misclassified as off-topic and deferred by impliesOffTopic() above,
+  // because "fotos"/"hijos"/"jugando" share no literal token with the
+  // catalog vocabulary. A message that explicitly points back at what was
+  // shown ("esos") must never be treated as off-topic, regardless of the
+  // rest of its vocabulary.
+  it("never treats a message that explicitly refers back to the shown options as off-topic, even without catalog vocabulary (regression)", async () => {
+    const tiedItems = [
+      {
+        item_id: "item-camera",
+        variant_id: "variant-camera",
+        name: "Cámara réflex semiprofesional",
+        category: "camaras",
+        variant_name: "Único",
+        price_minor: "459000000",
+        currency: "COP",
+      },
+    ];
+    const consultativeReasons = { "variant-camera": "Buena para acción." };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "flow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems, consultativeReasons, consultativeMessage: "camara para fotos" },
+              },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return {
+            rows: [
+              {
+                item_id: "item-camera",
+                variant_id: "variant-camera",
+                name: "Cámara réflex semiprofesional",
+                category: "camaras",
+                variant_name: "Único",
+                price_minor: "459000000",
+                currency: "COP",
+                description: "Buena para acción.",
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "variant-camera", reason: "Buena para acción." }]);
+
+    await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-2",
+      body: "cual de esos me recomiendas mas para tomar fotos de mis hijos jugando, se mueven mucho",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: {
+          searchTerms: ["esos", "recomiendas", "tomar", "fotos", "hijos", "jugando", "mueven", "mucho"],
+        },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(recommend).toHaveBeenCalled();
   });
 
   it("starts an order from a bare product name even when it collides with an FAQ keyword (regression)", async () => {
@@ -1975,6 +2270,37 @@ describe("CommercialFlowService", () => {
       body: "",
       options: [{ id: "cart:view_catalog", title: "Ver menú" }],
     });
+  });
+
+  // D-164 (docs/decisions.md) live finding: "quiero un protector de
+  // pantalla para el iPhone 16" matched "iPhone 16" itself (both its name
+  // tokens present) instead of any screen protector — "iPhone 16" named
+  // only as compatibility context ("para X") must never win the match, so
+  // this must safely fall through to "no encontré" instead of confidently
+  // offering to sell another iPhone 16.
+  it("never matches a product named only as compatibility context in a 'para X' clause (regression)", async () => {
+    const catalogRows = {
+      rows: [
+        { item_id: "item-iphone", variant_id: "iphone16-variant", name: "iPhone 16", variant_name: "Único", price_minor: "420000000", currency: "COP" },
+        { item_id: "item-case", variant_id: "case-variant", name: "Funda protectora para portátil", variant_name: "Único", price_minor: "6500000", currency: "COP" },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] }) // no active workflow
+        .mockResolvedValueOnce(catalogRows) // matchItemCandidates() -> catalogItems()
+        .mockResolvedValueOnce(catalogRows), // catalogChoiceReply() -> catalogItems()
+    };
+    const message = "también quiero un protector de pantalla para el iPhone 16";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toBe("No encontré ese producto. Estas son nuestras opciones:");
   });
 
   it("shows the catalog as a tappable list instead of a bare text prompt when a named product wasn't found, and creates no request/workflow row", async () => {

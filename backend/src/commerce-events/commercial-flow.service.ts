@@ -347,6 +347,20 @@ export class CommercialFlowService {
       return this.recommendationRequestReply(client, input.locale, input.categoryLabelPrefix ?? null);
     }
     if (command === "handoff") return null;
+    // D-164 (docs/decisions.md) live finding: command==="handoff" only ever
+    // matches the hardcoded "humano/persona/asesor/agente" pattern
+    // (classifyFlowCommand) — a tenant's own configured handoffKeywords
+    // (bot_configurations.handoff_keywords, e.g. "reclamo"/"nunca llego",
+    // added in D-163 specifically so complaints escalate) are classified
+    // into understanding.requiresHuman by deterministic-understanding.
+    // provider.ts, but that flag was never actually read anywhere in this
+    // file — a real complaint sent while any commercial flow step was
+    // active (browsing, mid-order, a pending recommendation tie...) was
+    // silently swallowed into whatever that step does with free text
+    // instead of ever escalating. Checked here, before any flow-step
+    // routing, so it applies universally rather than needing a separate
+    // patch per step.
+    if (input.understanding.requiresHuman) return null;
     if (command === "help") return this.helpReply(input.locale);
     if (command === "catalog") return null;
     if (!flow && command === "cancel")
@@ -916,6 +930,27 @@ export class CommercialFlowService {
     // still never guesses, only falls back to the unchanged list if the
     // AI has nothing better to offer.
     if (tiedItems && consultativeReasonsRaw) {
+      // D-164 (docs/decisions.md) live finding: a customer can just as
+      // easily abandon a pending recommendation to ask something totally
+      // unrelated — an hours/location/payments/price FAQ question — as
+      // they can refine it or switch product category (both handled by
+      // retryConsultativeRecommendation/impliesDifferentCategory, D-134).
+      // Unlike those two, an FAQ question shares no catalog vocabulary
+      // impliesDifferentCategory could ever recognize, so it kept getting
+      // silently appended onto the original request and re-sent to the AI
+      // as more product search, forever — the customer's real question
+      // never got answered. Deferring to DeterministicReplyService (return
+      // null, same "not mine to handle" convention as every other branch
+      // in this file) leaves tiedItems/consultativeReasons untouched, so
+      // the pending recommendation is still there to resolve afterward.
+      const faqIntent = input.understanding.intent;
+      if (
+        faqIntent === "hours" ||
+        faqIntent === "location" ||
+        faqIntent === "payments" ||
+        faqIntent === "price"
+      )
+        return null;
       return this.retryConsultativeRecommendation(
         client,
         input,
@@ -1924,7 +1959,7 @@ export class CommercialFlowService {
     flow: Workflow,
     previousTied: Item[],
     previousReasons: Map<string, string>,
-  ): Promise<DeterministicReply> {
+  ): Promise<DeterministicReply | null> {
     // D-134 live finding: blindly combining the two messages assumes a
     // retype is always a *refinement* of the same need ("en realidad
     // prefiero algo más barato") — but the customer can just as easily
@@ -1954,6 +1989,21 @@ export class CommercialFlowService {
       // catalog vocabulary with the current picks) still gets the safe,
       // context-preserving behavior instead of losing the reply outright.
     }
+    // D-164 (docs/decisions.md) live finding: impliesDifferentCategory only
+    // catches a retype that names a DIFFERENT real category — a message
+    // that names no category at all ("venden carros usados?") shares no
+    // catalog vocabulary with anything, same as an ordinary refinement
+    // ("más económico"), so neither branch above ever caught it: it kept
+    // getting combined onto the stale request and re-sent to the AI as
+    // more product search, violating the AI's own instruction never to
+    // stretch an unrelated message into a recommendation (D-128 rule 1).
+    // impliesOffTopic() tells the two apart by filtering out common
+    // quality/price/condition adjectives (a closed, deliberately narrow
+    // list) before checking catalog-vocabulary overlap — an adjective
+    // missing from that list only ever causes the SAFER of the two
+    // outcomes (deferred to the knowledge/fallback path instead of
+    // combined), never a wrong recommendation.
+    if (await this.impliesOffTopic(client, input)) return null;
     const previousMessage =
       typeof flow.context.consultativeMessage === "string" ? flow.context.consultativeMessage : "";
     const combinedMessage = previousMessage ? `${previousMessage}. ${input.body}` : input.body;
@@ -2000,6 +2050,82 @@ export class CommercialFlowService {
       if (!category || previousCategories.has(category)) return false;
       return (
         tokensOf(category).some((token) => messageTerms.has(token)) ||
+        tokensOf(item.name).some((token) => messageTerms.has(token))
+      );
+    });
+  }
+  // D-164 (docs/decisions.md): deliberately narrow, closed list of common
+  // Spanish quality/price/condition adjectives — the only thing this list
+  // is used for is telling a bare refinement ("más económico") apart from
+  // a message that names something unrelated ("carros usados") when
+  // neither shares vocabulary with any category the tenant sells. Missing
+  // an adjective here only ever pushes a message toward the safer outcome
+  // (deferred instead of combined) in impliesOffTopic() below — it can
+  // never cause a wrong recommendation.
+  private static readonly REFINEMENT_ADJECTIVES = new Set([
+    "economico", "barato", "caro", "costoso", "bueno", "malo", "rapido", "lento",
+    "grande", "pequeno", "bonito", "feo", "nuevo", "usado", "mejor", "peor",
+    "similar", "parecido", "diferente", "liviano", "pesado", "potente", "basico",
+    "avanzado", "simple", "sencillo", "completo", "economica", "pequena",
+    // discourse/filler words found live in real retyped refinements ("EN
+    // REALIDAD PREFIERO ALGO más barato") — none carry product-identifying
+    // meaning on their own, so they belong in this same "safe to ignore"
+    // set even though they aren't adjectives.
+    "realidad", "prefiero", "quisiera", "queria", "algo", "pues", "digo",
+    "osea", "entonces", "digamos", "verdad", "mismo", "misma", "ahora",
+  ]);
+  // D-164 (docs/decisions.md) live finding: impliesDifferentCategory() only
+  // ever answers "does this name a DIFFERENT real category" — a message
+  // that names no category at all is indistinguishable from an ordinary
+  // refinement by that check alone (both share zero catalog vocabulary),
+  // so a genuinely off-topic message ("venden carros usados?" mid-laptop-
+  // recommendation) kept getting combined onto the stale request and
+  // re-sent to the AI as more product search — the AI then violated its
+  // own instruction never to stretch an unrelated message into a
+  // recommendation (D-128 rule 1). Filtering out REFINEMENT_ADJECTIVES
+  // before checking vocabulary overlap tells the two apart: "más
+  // económico" has nothing left to check (assumed a refinement, combine
+  // as before); "carros usados" still has "carros" left, which matches no
+  // category this tenant sells (assumed off-topic, defer instead).
+  // D-164 (docs/decisions.md) live finding: "¿cuál de esos me recomiendas
+  // más para tomar fotos de mis hijos jugando, se mueven mucho?" — a
+  // genuine, on-topic follow-up question about the list just shown — got
+  // misclassified as off-topic and deferred, because "fotos"/"hijos"/
+  // "jugando" share no literal token with the catalog vocabulary
+  // (impliesOffTopic can't know "fotos" implies "cámara" — it only checks
+  // exact word overlap). A message that explicitly points back at what was
+  // just shown ("esos", "esas", "ese"...) is never off-topic by
+  // definition, regardless of what vocabulary the rest of it uses —
+  // checked first, before the vocabulary-overlap heuristic even runs.
+  private static readonly BACK_REFERENCE_WORDS = new Set([
+    "esos", "esas", "ese", "esa", "eso", "estos", "estas", "este", "esta",
+    "aquellos", "aquellas", "aquel", "aquella",
+  ]);
+  private async impliesOffTopic(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+  ): Promise<boolean> {
+    const rawTokens = norm(input.body).split(" ");
+    if (rawTokens.some((token) => CommercialFlowService.BACK_REFERENCE_WORDS.has(token)))
+      return false;
+    const messageTerms = new Set(
+      this.searchTerms(input)
+        .map(singularize)
+        .filter((token) => !CommercialFlowService.REFINEMENT_ADJECTIVES.has(token)),
+    );
+    if (messageTerms.size === 0) return false;
+    const candidates = await this.consultativeCandidates(client, input.tenantId, input.locale);
+    if (candidates.length === 0) return false;
+    const ignored = new Set(mergedLanguageTerms("itemStopWords"));
+    const tokensOf = (text: string): string[] =>
+      norm(text)
+        .split(" ")
+        .filter((token) => (token.length > 2 || /^\d+$/.test(token)) && !ignored.has(token))
+        .map(singularize);
+    return !candidates.some((item) => {
+      const category = norm(item.category ?? "");
+      return (
+        (category.length > 0 && tokensOf(category).some((token) => messageTerms.has(token))) ||
         tokensOf(item.name).some((token) => messageTerms.has(token))
       );
     });
@@ -2130,9 +2256,31 @@ export class CommercialFlowService {
     input: UnderstoodFlowInput,
   ): { match: Item | null; tied: Item[] } {
     return this.scoreCandidatesByTokens(
-      rows,
+      this.excludeParaContextOnlyItems(rows, input.body),
       new Set(this.searchTerms(input).map(singularize)),
     );
+  }
+  // D-164 (docs/decisions.md) live finding: "también quiero un protector de
+  // pantalla para el iPhone 16" matched "iPhone 16" itself instead of any
+  // screen protector. scoreCandidatesByTokens only ever scores item.name —
+  // "iPhone 16" (both its name tokens present) outscored the actually
+  // desired item, whose name shares zero tokens with "protector"/"pantalla"
+  // (the closest real product, "Vidrio templado para celular", only carries
+  // that vocabulary in its *description*, never scored at all — a separate,
+  // deliberately unfixed gap, see D-164). A product named only inside a
+  // "para <that product>" clause is being named as compatibility context,
+  // not as what the customer wants to buy. Excluded from candidacy here —
+  // never adds a new (possibly wrong) match, only removes one, so the
+  // worst case is falling back to the existing, safe "no encontré" reply
+  // instead of confidently matching the wrong product.
+  private excludeParaContextOnlyItems(rows: Item[], rawMessage: string): Item[] {
+    const match = norm(rawMessage).match(/\bpara\b(.*)$/);
+    const context = match?.[1]?.trim();
+    if (!context) return rows;
+    return rows.filter((item) => {
+      const name = norm(item.name);
+      return !(name.length > 0 && context.includes(name));
+    });
   }
   private scoreCandidatesByTokens(
     rows: Item[],

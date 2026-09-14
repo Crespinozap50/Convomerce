@@ -12,6 +12,8 @@ import {
   stripLeadingGreeting,
 } from '../localization/localization';
 import { ResponsePlan } from '../response-composition/response-plan.types';
+import { AiRewriteContext } from '../response-composition/ai-usage-budget.service';
+import { BusinessFaqService } from './business-faq.service';
 
 // vegetarian/spicy/allergens/pickup/preparation_time used to be fixed,
 // globally-shared intents here — restaurant-shaped vocabulary baked into a
@@ -91,9 +93,23 @@ const capitalizeFirst = (value: string): string =>
 const categoryRowLabel = (prefix: string | null, category: string): string =>
   prefix ? `${prefix} ${category}` : capitalizeFirst(category);
 
+// D-164 (docs/decisions.md) live finding: a multi-word handoff phrase
+// ("producto dañado", D-163) only ever matched when typed exactly
+// adjacent — "el producto que me llegó la vez pasada estaba dañado" (a
+// completely natural way to say the same thing, just with the two words
+// far apart) silently never escalated. Requiring every word of the
+// phrase to appear somewhere in the message — not necessarily adjacent —
+// is a stronger signal than any single generic word alone (unaffected:
+// still true for the existing single-word entries) while catching this
+// natural phrasing too.
+const matchesHandoffPhrase = (text: string, phrase: string): boolean => {
+  const words = normalize(phrase).split(' ').filter(Boolean);
+  return words.length > 0 && words.every((word) => text.includes(word));
+};
+
 export function classifyMessage(message: string, handoffKeywords: string[] = [], locale: ConversationLocale = 'es'): ReplyIntent {
   const text = normalize(message);
-  if (handoffKeywords.some((word) => text.includes(normalize(word)))) return 'handoff';
+  if (handoffKeywords.some((phrase) => matchesHandoffPhrase(text, phrase))) return 'handoff';
   const intents=catalogFor(locale).intents;
   const fallbackIntents=catalogFor('en').intents;
   const ordered:MessageIntentKey[]=['delivery','hours','location','payments','price','menu'];
@@ -104,7 +120,19 @@ export function classifyMessage(message: string, handoffKeywords: string[] = [],
 
 @Injectable()
 export class DeterministicReplyService {
-  async resolve(client: PoolClient, message: string, bot: BotCopy, interactiveSelectionId?: string): Promise<DeterministicReply> {
+  // D-164 (docs/decisions.md): optional, same "gracefully skip when
+  // absent" convention as NaturalResponseRewriter's variants dependency —
+  // every existing test that constructs this service with no args keeps
+  // working unchanged; only a real caller that wires it up (and passes
+  // aiContext to resolve()) ever reaches the AI-FAQ path in knowledgeReply().
+  constructor(private readonly businessFaq?: BusinessFaqService) {}
+  async resolve(
+    client: PoolClient,
+    message: string,
+    bot: BotCopy,
+    interactiveSelectionId?: string,
+    aiContext?: AiRewriteContext,
+  ): Promise<DeterministicReply> {
     const localeCatalog=catalogFor(bot.locale);
     const copy = localeCatalog.bot;
     // D-114: a tap on a pagination row ("Siguiente"/"Anterior" within an
@@ -217,7 +245,7 @@ export class DeterministicReplyService {
     // universal fixed intents above — is answered purely from this tenant's
     // own published knowledge_entries (title or per-entry keywords), never
     // from a shared vertical-specific vocabulary. See D-078.
-    return this.knowledgeReply(client, message, intent, bot.fallbackMessage, bot.locale);
+    return this.knowledgeReply(client, message, intent, bot.fallbackMessage, bot.locale, aiContext);
   }
 
   private async offeringReply(
@@ -751,9 +779,30 @@ export class DeterministicReplyService {
       )[0]?.row;
   }
 
-  private async knowledgeReply(client: PoolClient, message: string, intent: ReplyIntent, fallback: string, locale: ConversationLocale): Promise<DeterministicReply> {
+  private async knowledgeReply(
+    client: PoolClient,
+    message: string,
+    intent: ReplyIntent,
+    fallback: string,
+    locale: ConversationLocale,
+    aiContext?: AiRewriteContext,
+  ): Promise<DeterministicReply> {
     const rows = await this.publishedKnowledgeEntries(client, locale);
     const entry = this.findSpecificKnowledgeEntry(rows, message);
-    return { intent, handoff: false, sources: entry ? [`knowledge_entry:${entry.id}`] : [], body: entry?.content ?? fallback };
+    if (entry)
+      return { intent, handoff: false, sources: [`knowledge_entry:${entry.id}`], body: entry.content };
+    // D-164 (docs/decisions.md): last resort, only reached once neither a
+    // fixed intent keyword nor a specific knowledge_entry answered this —
+    // grounded only in this tenant's own real business data (see
+    // BusinessFaqService), never invents anything. aiContext is only ever
+    // set by a real caller that wired the budget-tracked path through
+    // (see ConversationDecisionEngine) — every existing test/caller that
+    // doesn't pass it keeps today's exact fallback behavior.
+    if (aiContext && this.businessFaq) {
+      const aiAnswer = await this.businessFaq.answer(client, aiContext, message, locale);
+      if (aiAnswer?.answered && aiAnswer.response)
+        return { intent, handoff: false, sources: ['business_faq_ai'], body: aiAnswer.response };
+    }
+    return { intent, handoff: false, sources: [], body: fallback };
   }
 }

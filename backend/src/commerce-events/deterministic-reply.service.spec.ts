@@ -30,6 +30,18 @@ describe('DeterministicReplyService', () => {
     expect(classifyMessage(message, ['humano'])).toBe(expected);
   });
 
+  // D-164 (docs/decisions.md) live finding: a multi-word handoff phrase
+  // ("producto dañado", D-163) only matched when typed exactly adjacent —
+  // a completely natural way to say the same thing with the words apart
+  // ("el producto que me llegó estaba dañado") silently never escalated.
+  it.each([
+    ['el producto dañado que me llego, que hago?', true],
+    ['el producto que me llego la vez pasada estaba dañado', true],
+    ['este producto es excelente, muy bien fabricado', false],
+  ])('matches the multi-word handoff phrase "producto dañado" as handoff=%s regardless of word order/adjacency: "%s"', (message, expectHandoff) => {
+    expect(classifyMessage(message as string, ['producto dañado']) === 'handoff').toBe(expectHandoff);
+  });
+
   it.each([
     '¿Tienen algo vegetariano?',
     '¿Los tacos pican?',
@@ -585,6 +597,57 @@ describe('DeterministicReplyService', () => {
     });
     expect(reply.body).toBe('La cocina manipula gluten y otros alérgenos.');
     expect(reply.sources).toEqual(['knowledge_entry:policy-1']);
+  });
+
+  // D-164 (docs/decisions.md): classifyMessage()'s fixed keyword lists
+  // (hours/location/payments/price) miss real, natural phrasings ("¿aceptan
+  // Davivienda?") that never grow to cover every case — the AI-FAQ path is
+  // the last resort inside knowledgeReply(), only reached once no fixed
+  // intent AND no specific knowledge_entry answered it, grounded only in
+  // this tenant's own real business data (BusinessFaqService).
+  it('answers via the AI business FAQ path when nothing else matches, but only when aiContext is wired up', async () => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const businessFaq = {
+      answer: jest.fn().mockResolvedValue({ answered: true, response: 'Sí, aceptamos Davivienda.' }),
+    };
+    const aiContext = { tenantId: 'tenant-1', conversationId: 'conversation-1', messageId: 'message-1' };
+    const reply = await new DeterministicReplyService(businessFaq as never).resolve(
+      client as never,
+      '¿aceptan Davivienda?',
+      { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC' },
+      undefined,
+      aiContext,
+    );
+    expect(reply.body).toBe('Sí, aceptamos Davivienda.');
+    expect(reply.sources).toEqual(['business_faq_ai']);
+    expect(businessFaq.answer).toHaveBeenCalledWith(client, aiContext, '¿aceptan Davivienda?', 'es');
+  });
+
+  it('keeps the generic fallback when the AI business FAQ genuinely does not know either — never invents an answer', async () => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const businessFaq = { answer: jest.fn().mockResolvedValue({ answered: false, response: '' }) };
+    const aiContext = { tenantId: 'tenant-1', conversationId: 'conversation-1', messageId: 'message-1' };
+    const reply = await new DeterministicReplyService(businessFaq as never).resolve(
+      client as never,
+      '¿venden carros usados?',
+      { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC' },
+      undefined,
+      aiContext,
+    );
+    expect(reply.body).toBe('No sé');
+    expect(reply.sources).toEqual([]);
+  });
+
+  it('never attempts the AI business FAQ path when no aiContext was passed — same fallback behavior as before D-164', async () => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const businessFaq = { answer: jest.fn() };
+    const reply = await new DeterministicReplyService(businessFaq as never).resolve(
+      client as never,
+      '¿aceptan Davivienda?',
+      { locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC' },
+    );
+    expect(reply.body).toBe('No sé');
+    expect(businessFaq.answer).not.toHaveBeenCalled();
   });
 
   it('answers an exact cross-industry FAQ without a hardcoded intent', async () => {
