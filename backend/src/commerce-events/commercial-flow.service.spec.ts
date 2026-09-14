@@ -745,6 +745,80 @@ describe("CommercialFlowService", () => {
     expect(reply?.body).toContain("¿cuál prefieres?");
   });
 
+  it("tries the consultative recommendation when a tie spans more than one real category, even if some individual candidates score as a strong match (D-176 live finding, CrediCel)", async () => {
+    // Found live: "una cámara para tomar fotos deportivas" never reached
+    // the D-166 branch above — the real catalog also has phones named
+    // "Celular Xiaomi cámara 200MP" etc. tying on the same bare word, and
+    // a short name like "Cámara de acción" (2 meaningful words) only
+    // misses 1 of its own 2 words, which isWeakTokenMatch's own threshold
+    // scores as a STRONG match (not weak) — so `tied.every(isWeakMatch)`
+    // was false even though the tie spans 2 unrelated categories
+    // (celulares/cámaras) sharing only the word "cámara". A customer
+    // asking for a camera was never asking to see phone models too.
+    const tiedRows = [
+      {
+        item_id: "phone-xiaomi",
+        variant_id: "phone-xiaomi-variant",
+        name: "Celular Xiaomi cámara 200MP",
+        category: "celulares",
+        variant_name: "Único",
+        price_minor: "129000000",
+        currency: "COP",
+      },
+      {
+        item_id: "camara-accion",
+        variant_id: "camara-accion-variant",
+        name: "Cámara de acción",
+        category: "camaras",
+        variant_name: "Único",
+        price_minor: "65000000",
+        currency: "COP",
+      },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return {
+            rows: [
+              {
+                item_id: "camara-accion",
+                variant_id: "camara-accion-variant",
+                name: "Cámara de acción",
+                category: "camaras",
+                variant_name: "Único",
+                price_minor: "65000000",
+                currency: "COP",
+                description: "Resistente al agua, ideal para deportes extremos y actividades al aire libre.",
+              },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: tiedRows };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "camara-accion-variant", reason: "Resistente al agua, ideal para deportes." }]);
+    const message = "una cámara para tomar fotos deportivas";
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(recommend).toHaveBeenCalled();
+    expect(reply?.body).not.toContain("Celular Xiaomi");
+  });
+
   it("prefers the consultative recommendation over a weak match even with an explicit purchase verb (D-134 live finding)", async () => {
     // The D-133 fix above only ever ran when `!starts` — "Quiero un
     // computador para diseño gráfico" ("quiero" is a directDesire verb,

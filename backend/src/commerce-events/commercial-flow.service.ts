@@ -470,7 +470,26 @@ export class CommercialFlowService {
       // (D-128), which name-only scoring never sees. Falls back to
       // today's tied-list/category picker exactly as before whenever the
       // AI itself finds nothing better (never a worse result than today).
-      if (tied.every((item) => this.isWeakMatch(item, input))) {
+      // D-176 (docs/decisions.md) live finding (CrediCel): "una cámara para
+      // tomar fotos deportivas" itself never reached this branch — the
+      // catalog now also has phones named "... cámara nocturna"/"...
+      // cámara 200MP" etc. tying on the same bare word, and a short name
+      // like "Cámara de acción" (2 meaningful words: "cámara"/"acción")
+      // only misses 1 of its own 2 words, which isWeakTokenMatch's own
+      // threshold ("missing MORE than 1 word") counts as a strong match —
+      // so `every` was false even though the tie is exactly the vague,
+      // unhelpful kind this guard exists for. A tie spanning more than one
+      // real category (celulares/cámaras/protectores/accesorios, all
+      // sharing only "cámara") is that same vague-generic-word shape,
+      // regardless of each individual candidate's weak/strong score — a
+      // customer asking for a camera was never asking to see phone models
+      // too. Same safety guarantee as the weak-match branch: only ever
+      // tries the AI first, still falls back to today's picker unchanged
+      // whenever it finds nothing better.
+      if (
+        tied.every((item) => this.isWeakMatch(item, input)) ||
+        new Set(tied.map((item) => item.category)).size > 1
+      ) {
         const consultative = await this.tryConsultativeRecommendation(client, input);
         if (consultative) return consultative;
       }
