@@ -188,7 +188,8 @@ describe("CommercialFlowService", () => {
               currency: "COP",
             },
           ],
-        }),
+        })
+        .mockResolvedValue({ rows: [] }),
     };
 
     const reply = await service().resolve(client as never, {
@@ -605,6 +606,91 @@ describe("CommercialFlowService", () => {
     expect(
       queries.some(({ sql }) => sql.includes("insert into app.request_lines")),
     ).toBe(false);
+  });
+
+  it("falls back to the catalog listing, never silently trusting the match, when the message names a real brand this tenant sells under a DIFFERENT product (D-177 live finding, CrediCel)", async () => {
+    // Found live: "quiero un portátil Samsung económico" — CrediCel sells
+    // no Samsung laptop (only Acer/Apple/Asus/Dell/HP/Lenovo/MSI) — silently
+    // matched "Portátil Lenovo económico" on "portátil"/"económico" alone.
+    // isWeakMatch's "missing at most 1 word" tolerance treated the missing
+    // "Samsung" the same as any other generic missing word, with no idea it
+    // names a real brand this tenant sells, just under a different product
+    // ("Celular Samsung plegable"). productBrands() (D-177) closes this the
+    // same way categoryNouns() (D-169) closes the equivalent gap for
+    // category conflicts.
+    const lenovo = {
+      item_id: "laptop-lenovo",
+      variant_id: "laptop-lenovo-variant",
+      name: "Portátil Lenovo económico",
+      category: "computadores",
+      variant_name: "Único",
+      price_minor: "180000000",
+      currency: "COP",
+    };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("select item.name from app.catalog_items"))
+          return { rows: [{ name: lenovo.name }, { name: "Celular Samsung plegable" }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants"))
+          return { rows: [lenovo] };
+        return { rows: [] };
+      }),
+    };
+    const message = "quiero un portátil Samsung económico";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply).not.toBeNull();
+    expect(reply?.body).not.toContain("Lenovo");
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(false);
+  });
+
+  it("still adds the match normally when the named brand is the one that actually matched, never a false positive (D-177 regression guard)", async () => {
+    // productBrands()'s conflict check must only ever fire when the
+    // message names a DIFFERENT real brand than the one that matched — a
+    // genuine, correctly-branded order can never be flagged just because
+    // some other product in the catalog happens to carry a different
+    // brand word somewhere else.
+    const lenovo = {
+      item_id: "laptop-lenovo",
+      variant_id: "laptop-lenovo-variant",
+      name: "Portátil Lenovo económico",
+      category: "computadores",
+      variant_name: "Único",
+      price_minor: "180000000",
+      currency: "COP",
+    };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("select item.name from app.catalog_items"))
+          return { rows: [{ name: lenovo.name }, { name: "Celular Samsung plegable" }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants"))
+          return { rows: [lenovo] };
+        return { rows: [] };
+      }),
+    };
+    const message = "quiero un portátil Lenovo económico";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(true);
   });
 
   it("tries the consultative recommendation instead of a bare tied-item picker when every tied match only shares one generic word with its own name (D-166 live finding)", async () => {
@@ -2117,6 +2203,7 @@ describe("CommercialFlowService", () => {
             },
           ],
         })
+        .mockResolvedValueOnce({ rows: [] }) // productBrands (D-177)
         .mockResolvedValueOnce({ rows: [] }) // insert commercial_requests
         .mockResolvedValueOnce({ rows: [] }) // insert conversation_workflows
         .mockResolvedValueOnce({ rows: [] }) // addItem: existing-line lookup
@@ -2169,6 +2256,7 @@ describe("CommercialFlowService", () => {
             },
           ],
         }) // matchItemCandidates
+        .mockResolvedValueOnce({ rows: [] }) // productBrands (D-177)
         .mockResolvedValueOnce({ rows: [] }) // insert commercial_requests
         .mockResolvedValueOnce({ rows: [] }) // insert conversation_workflows
         .mockResolvedValueOnce({ rows: [] }) // addItem: existing-line lookup

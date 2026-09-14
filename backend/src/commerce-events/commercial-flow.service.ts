@@ -559,7 +559,32 @@ export class CommercialFlowService {
     // question, bareNameStart would otherwise be true) both need the same
     // protection questionOrNoMatch alone doesn't give them.
     const weakMatch = match !== null && this.isWeakMatch(match, input);
-    if (questionOrNoMatch || weakMatch) {
+    // D-177 (docs/decisions.md) live finding (CrediCel): "quiero un
+    // portátil Samsung económico" (CrediCel sells no Samsung laptop —
+    // only Acer/Apple/Asus/Dell/HP/Lenovo/MSI) silently matched "Portátil
+    // Lenovo económico" — isWeakMatch's "missing at most 1 word" tolerance
+    // treated the missing "Samsung" the same as any other generic missing
+    // word, with no idea it names a real brand this tenant sells, just
+    // under a DIFFERENT product. Same shape as matchItemMentions()'s own
+    // categoryNouns() check (D-169), extended to brand: there's no
+    // dedicated "brand" column, so productBrands() derives it the same way
+    // this tenant's own names spell it — the second significant word of
+    // each product name, exactly where every branded product in the
+    // catalogs tested live puts it ("Celular Samsung plegable", "Portátil
+    // Lenovo económico"). Only ever rejects a match; never invents one.
+    // Skipped entirely when questionOrNoMatch is already true — that alone
+    // already forces the same "try AI, then defer" outcome below regardless
+    // of a brand conflict, so the extra query would only ever be wasted.
+    let namesConflictingBrand = false;
+    if (!questionOrNoMatch && match !== null) {
+      const productBrands = await this.productBrands(client, input.tenantId);
+      const searchTokens = new Set(this.searchTerms(input).map(singularize));
+      namesConflictingBrand = [...searchTokens].some(
+        (token) => productBrands.has(token) && token !== this.brandToken(match.name),
+      );
+    }
+    const untrustedMatch = weakMatch || namesConflictingBrand;
+    if (questionOrNoMatch || untrustedMatch) {
       const consultative = await this.tryConsultativeRecommendation(client, input);
       if (consultative) return consultative;
       // questionOrNoMatch always answers like nothing was found (matches
@@ -588,18 +613,18 @@ export class CommercialFlowService {
     // "selecting_item" with nothing actually offered to select from,
     // permanently trapping every later message in that dead-end step
     // instead of letting a fresh order attempt through normally.
-    if (!match || weakMatch) {
-      // D-134: a weak match must never fall back to being silently
-      // trusted just because the AI had nothing better to offer — that
-      // would defeat the entire point of flagging it as weak in the
-      // first place (D-133's original bug). It gets the exact same
-      // "didn't find that product" treatment as no match at all, below.
-      // Only retry the AI here when it genuinely hasn't run yet for this
-      // message (both triggers above were false — the starts===true &&
-      // match===null case, D-128's own original gap); a weak match or a
-      // question/no-match already went through it above, and failing
-      // twice costs budget for nothing.
-      if (!questionOrNoMatch && !weakMatch) {
+    if (!match || untrustedMatch) {
+      // D-134: a weak match (or D-177's brand conflict) must never fall
+      // back to being silently trusted just because the AI had nothing
+      // better to offer — that would defeat the entire point of flagging
+      // it in the first place (D-133's original bug). It gets the exact
+      // same "didn't find that product" treatment as no match at all,
+      // below. Only retry the AI here when it genuinely hasn't run yet for
+      // this message (both triggers above were false — the starts===true
+      // && match===null case, D-128's own original gap); an untrusted
+      // match or a question/no-match already went through it above, and
+      // failing twice costs budget for nothing.
+      if (!questionOrNoMatch && !untrustedMatch) {
         const consultative = await this.tryConsultativeRecommendation(client, input);
         if (consultative) return consultative;
       }
@@ -2045,6 +2070,32 @@ export class CommercialFlowService {
         .map((row) => singularize(norm(row.category ?? "").split(" ")[0] ?? ""))
         .filter(Boolean),
     );
+  }
+  // D-177: brand's own equivalent of categoryNouns() above — used by
+  // startNewOrder()'s single-item path to reject a match that only scores
+  // as confident because the ONE word it's missing (isWeakTokenMatch's
+  // "missing at most 1 word" tolerance) happens to be a real brand this
+  // tenant sells, just under a different product ("portátil Samsung" ties
+  // to "Portátil Lenovo económico" — CrediCel sells no Samsung laptop).
+  // There's no dedicated "brand" column (unlike category), so this derives
+  // it the same way every branded product name in the catalogs tested live
+  // actually spells it: the second significant word of the name, after the
+  // same itemStopWords/length filter brandToken() below and
+  // isWeakTokenMatch's own nameTokens already use.
+  private async productBrands(client: PoolClient, tenantId: string): Promise<Set<string>> {
+    const result = await client.query<{ name: string }>(
+      `select item.name from app.catalog_items item
+       where item.tenant_id=$1 and item.status='active' and item.customer_orderable`,
+      [tenantId],
+    );
+    return new Set(result.rows.map((row) => this.brandToken(row.name)).filter(Boolean));
+  }
+  private brandToken(name: string): string {
+    const ignored = new Set(mergedLanguageTerms("itemStopWords"));
+    const words = norm(name)
+      .split(" ")
+      .filter((token) => token.length > 2 && !ignored.has(token));
+    return singularize(words[1] ?? "");
   }
   // D-128: separate from catalogItems() on purpose — this is the one
   // query in the file that reads item.description, needed only by
