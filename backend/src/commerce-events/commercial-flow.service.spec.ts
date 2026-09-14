@@ -413,6 +413,128 @@ describe("CommercialFlowService", () => {
     ).toBe(true);
   });
 
+  it("saves 'sin X' as a customer note when adding an item, since no modifier can express removing a base ingredient (D-171 live finding, Santos Tacos)", async () => {
+    // Found live: "quiero una cochinita sin cebolla" added the taco, but
+    // "sin cebolla" went nowhere — no modifier group can express removing
+    // a base ingredient (Adiciones/Salsas only ever add), and nothing
+    // captured the customer's own words anywhere a human preparing the
+    // order could see them. app.commercial_requests.customer_notes
+    // already exists for exactly this; nothing wrote to it before.
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "cochinita",
+          variant_id: "cochinita-variant",
+          name: "Cochinita",
+          variant_name: "Unidad",
+          price_minor: "950000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return catalogRows;
+        if (sql.includes("select customer_notes from app.commercial_requests")) return { rows: [{ customer_notes: null }] };
+        return { rows: [] };
+      }),
+    };
+    const message = "quiero una cochinita sin cebolla";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    const noteUpdate = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.commercial_requests set customer_notes"),
+    );
+    expect(noteUpdate).toBeDefined();
+    expect(noteUpdate?.[1]).toEqual(expect.arrayContaining([message]));
+  });
+
+  it("appends a second 'sin X' note instead of overwriting the first one already saved on the same order (D-171 follow-up)", async () => {
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "pastor",
+          variant_id: "pastor-variant",
+          name: "Tacos al pastor",
+          variant_name: "Orden de 3 tacos",
+          price_minor: "1890000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return catalogRows;
+        if (sql.includes("select customer_notes from app.commercial_requests"))
+          return { rows: [{ customer_notes: "sin cebolla en el primero" }] };
+        return { rows: [] };
+      }),
+    };
+    const message = "y unos tacos al pastor sin cilantro porfa";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    const noteUpdate = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.commercial_requests set customer_notes"),
+    );
+    expect(noteUpdate?.[1]).toEqual(
+      expect.arrayContaining([`sin cebolla en el primero\n${message}`]),
+    );
+  });
+
+  it("never queries or writes a customer note for an ordinary message with no 'sin' in it (regression, D-171)", async () => {
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "pastor",
+          variant_id: "pastor-variant",
+          name: "Tacos al pastor",
+          variant_name: "Orden de 3 tacos",
+          price_minor: "1890000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return catalogRows;
+        return { rows: [] };
+      }),
+    };
+    const message = "quiero unos tacos al pastor";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("customer_notes")),
+    ).toBe(false);
+  });
+
   it("tries the consultative recommendation instead of trusting a match that only names part of the product (D-133 live finding)", async () => {
     // Found live: "Necesito un celular con buena cámara, tengo como un
     // millón de pesos" matched "Celular gama alta cámara profesional"

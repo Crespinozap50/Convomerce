@@ -423,6 +423,7 @@ export class CommercialFlowService {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, requestId, item, quantity);
       }
+      await this.captureCustomerNote(client, input.tenantId, requestId, input.body);
       const reply = await this.afterMultiItemMatch(client, input, requestId, flowId, {}, multi);
       return input.understanding.entities.hasGreeting === true
         ? this.prependGreeting(
@@ -613,6 +614,7 @@ export class CommercialFlowService {
       match,
       quantityExcludingItemName(this.quantity(input), match.name),
     );
+    await this.captureCustomerNote(client, input.tenantId, requestId, input.body);
     const reply = await this.afterAddItem(client, input, requestId, flowId, match);
     return input.understanding.entities.hasGreeting === true
       ? this.prependGreeting(
@@ -998,6 +1000,7 @@ export class CommercialFlowService {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, flow.commercial_request_id, item, quantity);
       }
+      await this.captureCustomerNote(client, input.tenantId, flow.commercial_request_id, input.body);
       return this.afterMultiItemMatch(
         client,
         input,
@@ -1042,6 +1045,7 @@ export class CommercialFlowService {
         ? (flow.context.replaceItemId as string | undefined)
         : undefined,
     );
+    await this.captureCustomerNote(client, input.tenantId, flow.commercial_request_id, input.body);
     return this.afterAddItem(client, input, flow.commercial_request_id, flow.id, match);
   }
 
@@ -1063,6 +1067,7 @@ export class CommercialFlowService {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, flow.commercial_request_id, item, quantity);
       }
+      await this.captureCustomerNote(client, input.tenantId, flow.commercial_request_id, input.body);
       return this.afterMultiItemMatch(
         client,
         input,
@@ -1111,6 +1116,7 @@ export class CommercialFlowService {
         match,
         quantityExcludingItemName(this.quantity(input), match.name),
       );
+      await this.captureCustomerNote(client, input.tenantId, flow.commercial_request_id, input.body);
       return this.afterAddItem(client, input, flow.commercial_request_id, flow.id, match);
     }
     // D-095 already set the rule ("no debería aparecer nada entre
@@ -3264,6 +3270,43 @@ export class CommercialFlowService {
         interactive,
       },
     };
+  }
+  // D-171 (docs/decisions.md) live finding (Santos Tacos): "quiero una
+  // cochinita sin cebolla" added the taco but "sin cebolla" went nowhere —
+  // no modifier group here can express *removing* a base ingredient
+  // (Adiciones/Salsas only ever add), and nothing captured the customer's
+  // own words anywhere a human preparing the order could ever see them.
+  // app.commercial_requests.customer_notes already exists for exactly
+  // this (surfaced in the admin panel today, see
+  // commercial-requests.service.ts), just never written to anywhere.
+  // Deliberately narrow: only the literal word "sin" ("without") is
+  // treated as a signal worth capturing — a real customer instruction,
+  // not general chit-chat — and the raw message is stored verbatim rather
+  // than trying to parse out just the relevant fragment, since a human
+  // reading it benefits more from the full context than a trimmed phrase
+  // would give them. Idempotent (checked against what's already stored)
+  // so a retried/duplicate call from the same message never repeats
+  // itself; appends rather than overwrites so more than one such message
+  // across the same order isn't lost.
+  private static readonly CUSTOMER_NOTE_PATTERN = /\bsin\b/i;
+  private async captureCustomerNote(
+    client: PoolClient,
+    tenantId: string,
+    requestId: string,
+    message: string,
+  ): Promise<void> {
+    const note = message.trim();
+    if (!note || !CommercialFlowService.CUSTOMER_NOTE_PATTERN.test(note)) return;
+    const existing = await client.query<{ customer_notes: string | null }>(
+      `select customer_notes from app.commercial_requests where tenant_id=$1 and id=$2`,
+      [tenantId, requestId],
+    );
+    const current = existing.rows[0]?.customer_notes ?? "";
+    if (current.includes(note)) return;
+    await client.query(
+      `update app.commercial_requests set customer_notes=$3, updated_at=now() where tenant_id=$1 and id=$2`,
+      [tenantId, requestId, current ? `${current}\n${note}` : note],
+    );
   }
   private async addItem(
     client: PoolClient,
