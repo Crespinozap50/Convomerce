@@ -100,7 +100,6 @@ export class ConsultativeRecommendationService {
     );
     if (!budget.allowed || !budget.reservation) return null;
     const reservation = budget.reservation;
-    const validIds = new Set(candidates.map((item) => item.variantId));
     const startedAt = Date.now();
     const budgetHint = extractBudgetMinor(customerMessage);
     // D-128 audit finding: with the original single-paragraph instruction,
@@ -139,12 +138,25 @@ export class ConsultativeRecommendationService {
           store: false,
           max_output_tokens: 500,
           instructions,
+          // D-161 (docs/decisions.md) token-optimization finding: this used
+          // to send each candidate's full 36-char UUID as `variantId`, AND
+          // list every one of those same UUIDs again in the schema's
+          // `enum` below (the enum is what makes an invented id
+          // structurally impossible — see the class comment above; it
+          // can't just be dropped). For a 200-candidate catalog that's
+          // ~400 UUIDs in one request body. A plain array-position index
+          // (0..N-1) gives the model the exact same structural guarantee —
+          // it still can only pick a slot that exists — for a fraction of
+          // the characters. Confirmed against real recorded calls
+          // (13,072-4,365 input tokens) that this id text alone was a
+          // meaningful share of input tokens, independent of catalog
+          // `description` length.
           input: JSON.stringify({
             locale,
             customerMessage,
             approximateBudgetMinorUnits: budgetHint,
-            catalog: candidates.map((item) => ({
-              variantId: item.variantId,
+            catalog: candidates.map((item, index) => ({
+              id: index,
               name: item.name,
               category: item.category,
               description: item.description,
@@ -166,10 +178,10 @@ export class ConsultativeRecommendationService {
                     items: {
                       type: "object",
                       properties: {
-                        variantId: { type: "string", enum: [...validIds] },
+                        id: { type: "integer", enum: candidates.map((_, index) => index) },
                         reason: { type: "string" },
                       },
-                      required: ["variantId", "reason"],
+                      required: ["id", "reason"],
                       additionalProperties: false,
                     },
                   },
@@ -212,9 +224,9 @@ export class ConsultativeRecommendationService {
         await this.settle(reservation, model, startedAt, false, "invalid_output", payload, client);
         return null;
       }
-      // Defense in depth: the json_schema enum already makes an unknown
-      // variantId structurally impossible, but never trust a single layer
-      // alone — same discipline as protectedFacts() in
+      // Defense in depth: the json_schema enum already makes an
+      // out-of-range index structurally impossible, but never trust a
+      // single layer alone — same discipline as protectedFacts() in
       // natural-response.rewriter.ts. Also drops duplicates and caps the
       // free-text reason length, in case the model ignores the "under 200
       // characters" instruction.
@@ -224,13 +236,15 @@ export class ConsultativeRecommendationService {
         if (
           typeof raw !== "object" ||
           raw === null ||
-          typeof (raw as { variantId?: unknown }).variantId !== "string" ||
+          typeof (raw as { id?: unknown }).id !== "number" ||
           typeof (raw as { reason?: unknown }).reason !== "string"
         )
           continue;
-        const variantId = (raw as { variantId: string }).variantId;
+        const index = (raw as { id: number }).id;
         const reason = (raw as { reason: string }).reason.trim();
-        if (!validIds.has(variantId) || seen.has(variantId) || !reason) continue;
+        if (!Number.isInteger(index) || index < 0 || index >= candidates.length || !reason) continue;
+        const variantId = candidates[index].variantId;
+        if (seen.has(variantId)) continue;
         seen.add(variantId);
         verified.push({
           variantId,
@@ -258,6 +272,17 @@ export class ConsultativeRecommendationService {
     return "";
   }
 
+  // D-160 (docs/decisions.md) live finding: this used to charge every call
+  // the flat reservation placeholder (app.ai_response_policies.
+  // reservation_cost_minor, default $0.01) as its final "actual" cost,
+  // regardless of real usage — confirmed live against CrediCel's real
+  // traffic: every one of 13 real calls recorded exactly the same
+  // estimated_cost_minor=1, from a 0-token failed call to one with 13,072
+  // input tokens, making the AI-usage panel (D-148) built specifically to
+  // show real spend actually show a number disconnected from it. Now
+  // computed from the real token counts OpenAI returned, same formula as
+  // NaturalResponseRewriter.settle() (natural-response.rewriter.ts) — the
+  // one other place in the project that already does this correctly.
   private settle(
     reservation: Parameters<AiUsageBudgetService["settle"]>[0],
     model: string,
@@ -267,12 +292,28 @@ export class ConsultativeRecommendationService {
     payload?: { usage?: { input_tokens?: number; output_tokens?: number } },
     client?: PoolClient,
   ) {
+    const inputTokens = payload?.usage?.input_tokens ?? 0;
+    const outputTokens = payload?.usage?.output_tokens ?? 0;
+    const inputRate = this.config.get<number>("OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION", 100);
+    const outputRate = this.config.get<number>("OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION", 400);
+    const calculated = Math.ceil((inputTokens * inputRate + outputTokens * outputRate) / 1_000_000);
+    // D-160 (docs/decisions.md) live finding #2: a $0.01 floor made sense
+    // when every call was charged that flat amount anyway, but applying it
+    // unconditionally here would still overcharge every provider_error/
+    // timeout failure (no `payload` at all — recommend()'s `!response.ok`
+    // and `catch` branches both pass `undefined`) as if OpenAI had billed
+    // something for it, when there's no evidence it did. Only floor to the
+    // minimum when a payload actually came back (even a malformed one,
+    // like invalid_output — the response API still bills for the tokens it
+    // generated to produce that unusable output); a pure network/timeout
+    // failure with no payload is recorded at its real, computed cost of 0.
+    const actualCostMinor = payload ? Math.max(1, calculated) : calculated;
     return this.budgets.settle(reservation, {
       provider: "openai",
       model,
-      inputTokens: payload?.usage?.input_tokens ?? 0,
-      outputTokens: payload?.usage?.output_tokens ?? 0,
-      actualCostMinor: reservation.reservedCostMinor,
+      inputTokens,
+      outputTokens,
+      actualCostMinor,
       latencyMs: Date.now() - startedAt,
       success,
       failureReason,

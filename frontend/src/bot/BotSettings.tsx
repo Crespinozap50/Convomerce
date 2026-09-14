@@ -19,7 +19,19 @@ export function BotSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [usage, setUsage] = useState<AiUsageSummary | null>(null);
-  useEffect(() => setForm(value), [value]);
+  // D-163 (docs/decisions.md): kept as raw text while editing, not parsed
+  // into form.handoffKeywords on every keystroke — re-splitting/trimming/
+  // filtering per keystroke silently dropped a trailing ", " the instant it
+  // was typed (an empty trailing segment fails .filter(Boolean)), so the
+  // input snapped back and ate the separator before the next word could be
+  // typed. Only parsed into the array once, on submit.
+  const [handoffKeywordsText, setHandoffKeywordsText] = useState(
+    value.handoffKeywords.join(", "),
+  );
+  useEffect(() => {
+    setForm(value);
+    setHandoffKeywordsText(value.handoffKeywords.join(", "));
+  }, [value]);
   // D-148 (docs/decisions.md): loaded once on open — this is a point-in-time
   // snapshot for orientation ("am I close to the limit right now"), not a
   // live dashboard; the project owner can reopen this panel to refresh it,
@@ -42,12 +54,19 @@ export function BotSettings({
     e.preventDefault();
     setBusy(true);
     setError("");
+    const payload = {
+      ...form,
+      handoffKeywords: handoffKeywordsText
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean),
+    };
     try {
       await api(`/v1/admin/tenants/${tenant}/bot`, {
         method: "PUT",
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
-      onSaved(form);
+      onSaved(payload);
     } catch (x) {
       setError((x as Error).message);
     } finally {
@@ -134,16 +153,8 @@ export function BotSettings({
         <label>
           {t("bot.handoff")}
           <input
-            value={form.handoffKeywords.join(", ")}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                handoffKeywords: e.target.value
-                  .split(",")
-                  .map((x) => x.trim())
-                  .filter(Boolean),
-              })
-            }
+            value={handoffKeywordsText}
+            onChange={(e) => setHandoffKeywordsText(e.target.value)}
           />
           <small>{t("bot.handoffHelp")}</small>
         </label>

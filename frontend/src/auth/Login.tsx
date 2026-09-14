@@ -73,6 +73,7 @@ export function Login({ onLogin }: { onLogin: (s: Session) => void }) {
             {busy ? t("login.busy") : t("login.submit")}
           </button>
         </form>
+        <a href="/forgot-password">{t("login.forgotPassword")}</a>
         <small>{t("login.secure")}</small>
       </section>
     </main>

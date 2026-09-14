@@ -34,6 +34,24 @@ export class AuthController {
     return { authenticated: true, expiresAt: session.expiresAt, mustChangePassword: session.mustChangePassword };
   }
 
+  @Post('password-reset/request')
+  @HttpCode(204)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  async requestPasswordReset(@Body() body: unknown, @Req() request: Request): Promise<void> {
+    const { email } = parseEmailOnly(body);
+    await this.auth.requestPasswordReset(email, request.ip || null);
+  }
+
+  @Post('password-reset/confirm')
+  @HttpCode(204)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  async confirmPasswordReset(@Body() body: unknown): Promise<void> {
+    const input = parsePasswordReset(body);
+    await this.auth.resetPassword(input.token, input.password);
+  }
+
   @Post('logout')
   @HttpCode(204)
   async logout(@Req() request: Request, @Res({ passthrough: true }) response: Response): Promise<void> {
@@ -87,6 +105,27 @@ function parseCredentials(body: unknown): { email: string; password: string } {
     throw badRequest('VALIDATION_ERROR', 'Password must be between 12 and 256 characters');
   }
   return { email, password };
+}
+
+function parseEmailOnly(body: unknown): { email: string } {
+  if (!body || typeof body !== 'object') throw badRequest('VALIDATION_ERROR', 'Invalid request');
+  const { email } = body as Record<string, unknown>;
+  if (typeof email !== 'string' || email.length > 320 || !/^\S+@\S+\.\S+$/.test(email)) {
+    throw badRequest('VALIDATION_ERROR', 'Invalid email');
+  }
+  return { email };
+}
+
+function parsePasswordReset(body: unknown): { token: string; password: string } {
+  if (!body || typeof body !== 'object') throw badRequest('VALIDATION_ERROR', 'Invalid password reset');
+  const { token, password } = body as Record<string, unknown>;
+  if (typeof token !== 'string' || token.length < 32 || token.length > 256) {
+    throw badRequest('VALIDATION_ERROR', 'Invalid token');
+  }
+  if (typeof password !== 'string' || password.length < 12 || password.length > 256) {
+    throw badRequest('VALIDATION_ERROR', 'Password must be between 12 and 256 characters');
+  }
+  return { token, password };
 }
 
 function parsePasswordChange(body: unknown): { currentPassword: string; newPassword: string } {

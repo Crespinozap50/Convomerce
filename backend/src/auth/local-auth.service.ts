@@ -6,6 +6,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { DatabaseService } from '../database/database.service';
 import { hashSessionToken } from './session-cookie';
 import { badRequest, unauthorized } from '../observability/http-errors';
+import { EmailService } from '../email/email.service';
 
 interface LoginRecord {
   user_id: string;
@@ -37,9 +38,15 @@ const DUMMY_HASH = '$argon2id$v=19$m=65536,t=3,p=4$NgJmJmX9A2dcOTxG8Uc7rg$LxWgIu
 @Injectable()
 export class LocalAuthService {
   private readonly sessionTtlHours: number;
+  private readonly frontendOrigin: string;
 
-  constructor(private readonly database: DatabaseService, config: ConfigService) {
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly email: EmailService,
+    config: ConfigService,
+  ) {
     this.sessionTtlHours = config.get<number>('SESSION_TTL_HOURS') ?? 8;
+    this.frontendOrigin = config.get<string>('FRONTEND_ORIGIN', 'http://localhost:5173');
   }
 
   async login(email: string, password: string, sourceIp: string | null, userAgent: string): Promise<{
@@ -120,6 +127,49 @@ export class LocalAuthService {
     if (!changed) throw unauthorized('AUTH_PASSWORD_CHANGED', 'The password changed during the operation');
   }
 
+  // D-159 (docs/decisions.md): there was no self-service way to recover a
+  // forgotten password at all before this — only hand-editing a hash
+  // directly in the database. Deliberately resolves the same way whether
+  // or not the email matches a real account (request_password_reset()
+  // itself returns that boolean, but it never crosses this method's
+  // boundary) — the standard defense against an attacker using "did I get
+  // a reset email" as a way to enumerate which emails have accounts here.
+  async requestPasswordReset(email: string, sourceIp: string | null): Promise<void> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const token = randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    const created = await this.database.withRuntimeTransaction(async (client) => {
+      const result = await client.query<{ created: boolean }>(
+        'select app.request_password_reset($1,$2,$3,$4,$5) as created',
+        [uuidv7(), normalizedEmail, hashSessionToken(token), expiresAt, sourceIp],
+      );
+      return result.rows[0]?.created ?? false;
+    });
+    if (created) {
+      const resetUrl = `${this.frontendOrigin}/reset-password?token=${token}`;
+      await this.email.send(
+        normalizedEmail,
+        'Recupera tu contraseña',
+        `Solicitaste recuperar tu contraseña.\n\nElige una nueva aquí (válido por 1 hora):\n${resetUrl}\n\nSi no fuiste tú, puedes ignorar este correo — tu contraseña sigue igual.`,
+        `<p>Solicitaste recuperar tu contraseña.</p><p><a href="${resetUrl}">Elige una nueva aquí</a> (válido por 1 hora).</p><p>Si no fuiste tú, puedes ignorar este correo — tu contraseña sigue igual.</p>`,
+      );
+    }
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const newHash = await argon2.hash(newPassword, { type: argon2.argon2id });
+    try {
+      await this.database.withRuntimeTransaction(async (client) => {
+        await client.query('select app.reset_password($1,$2)', [hashSessionToken(token), newHash]);
+      });
+    } catch (error) {
+      if (isPgCode(error, '28000')) {
+        throw unauthorized('AUTH_RESET_TOKEN_INVALID', 'Invalid or expired password reset link');
+      }
+      throw error;
+    }
+  }
+
   async updateInterfaceLocale(userId: string, sessionId: string, locale: 'en' | 'es'): Promise<void> {
     const updated = await this.database.withRuntimeTransaction(async (client) => {
       const result = await client.query<{ updated: boolean }>(
@@ -129,4 +179,8 @@ export class LocalAuthService {
     });
     if (!updated) throw unauthorized('AUTH_SESSION_INVALID', 'Invalid session');
   }
+}
+
+function isPgCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === code);
 }

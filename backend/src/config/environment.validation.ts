@@ -30,6 +30,8 @@ export interface ValidatedEnvironment extends Record<string, unknown> {
   OPENAI_OUTPUT_COST_MINOR_PER_MILLION:number;
   OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED:string;
   OPENAI_RECOMMENDATION_MODEL:string;
+  OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION:number;
+  OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION:number;
   DEV_HARNESS_ENABLED: string;
   SMTP_HOST: string;
   SMTP_PORT: number;
@@ -151,6 +153,16 @@ export function validateEnvironment(source: Record<string, unknown>): ValidatedE
     OPENAI_OUTPUT_COST_MINOR_PER_MILLION:nonNegativeInteger(source.OPENAI_OUTPUT_COST_MINOR_PER_MILLION,400,'OPENAI_OUTPUT_COST_MINOR_PER_MILLION'),
     OPENAI_CONSULTATIVE_RECOMMENDATIONS_ENABLED:consultativeRecommendationsEnabled,
     OPENAI_RECOMMENDATION_MODEL:stringValue(source.OPENAI_RECOMMENDATION_MODEL,'gpt-5.4-mini'),
+    // D-160 (docs/decisions.md) live finding: gpt-5.4-mini (this call) is a
+    // different, pricier tier than gpt-5.4-nano (OPENAI_RESPONSE_MODEL,
+    // response rewriting) — sharing one rate pair between both would price
+    // the more expensive model as if it were the cheap one. Separate rate
+    // so each is configured against its own real OpenAI pricing; defaults
+    // here are placeholders (same numbers as the nano defaults) — verify
+    // the real number for whichever model OPENAI_RECOMMENDATION_MODEL is
+    // actually set to on OpenAI's own pricing page and set these for real.
+    OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION:nonNegativeInteger(source.OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION,100,'OPENAI_RECOMMENDATION_INPUT_COST_MINOR_PER_MILLION'),
+    OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION:nonNegativeInteger(source.OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION,400,'OPENAI_RECOMMENDATION_OUTPUT_COST_MINOR_PER_MILLION'),
     DEV_HARNESS_ENABLED: devHarnessEnabled,
     SMTP_HOST: smtpHost,
     SMTP_PORT: positiveInteger(source.SMTP_PORT, 51025, 'SMTP_PORT'),

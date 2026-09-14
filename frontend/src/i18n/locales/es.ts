@@ -43,6 +43,31 @@ export default {
     busy: "Ingresando…",
     submit: "Ingresar al panel",
     secure: "Acceso seguro · Sesión protegida",
+    forgotPassword: "¿Olvidaste tu contraseña?",
+  },
+  forgotPassword: {
+    eyebrow: "RECUPERAR ACCESO",
+    title: "¿Olvidaste tu contraseña?",
+    subtitle: "Escribe tu correo y te enviamos un enlace para elegir una nueva.",
+    email: "Correo electrónico",
+    submit: "Enviar enlace",
+    busy: "Enviando…",
+    success:
+      "Si ese correo tiene una cuenta, te enviamos un enlace para recuperar tu contraseña.",
+    backToLogin: "Volver a iniciar sesión",
+  },
+  resetPassword: {
+    eyebrow: "NUEVA CONTRASEÑA",
+    title: "Elige una nueva contraseña",
+    subtitle: "Tu enlace de recuperación es válido por 1 hora.",
+    password: "Nueva contraseña",
+    confirmPassword: "Confirma tu nueva contraseña",
+    passwordMismatch: "Las contraseñas no coinciden.",
+    submit: "Guardar contraseña",
+    busy: "Guardando…",
+    success: "¡Listo! Tu contraseña fue actualizada. Ya puedes iniciar sesión.",
+    goToLogin: "Ir a iniciar sesión",
+    missingToken: "Este enlace de recuperación no es válido.",
   },
   password: {
     eyebrow: "PRIMER ACCESO",
@@ -877,6 +902,8 @@ export default {
     AUTH_SESSION_REQUIRED: "Debes iniciar sesión para continuar.",
     AUTH_SESSION_INVALID: "Tu sesión es inválida o ha vencido.",
     AUTH_INVALID_CREDENTIALS: "Correo o contraseña incorrectos.",
+    AUTH_RESET_TOKEN_INVALID:
+      "Este enlace de recuperación es inválido o ha vencido.",
     AUTH_PASSWORD_CHANGE_REQUIRED:
       "Debes cambiar la contraseña temporal antes de continuar.",
     AUTH_CURRENT_PASSWORD_INVALID: "La contraseña actual es incorrecta.",

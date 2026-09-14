@@ -51,6 +51,8 @@ import { playNotificationSound, showDesktopNotification, roleName } from "./dash
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
 import { Login } from "./auth/Login";
 import { AcceptInvite } from "./auth/AcceptInvite";
+import { ForgotPassword } from "./auth/ForgotPassword";
+import { ResetPassword } from "./auth/ResetPassword";
 import { ChangePassword } from "./auth/ChangePassword";
 import { TenantSelector } from "./companies/TenantSelector";
 import { Companies } from "./companies/Companies";
@@ -105,6 +107,16 @@ export default function App() {
   if (window.location.pathname === "/accept-invite") {
     return (
       <AcceptInvite token={new URLSearchParams(window.location.search).get("token")} />
+    );
+  }
+  // D-159 (docs/decisions.md): same reasoning as /accept-invite above — a
+  // password reset (and the request to start one) must be reachable with no
+  // session at all, since forgetting your password usually means you can't
+  // create one right now either.
+  if (window.location.pathname === "/forgot-password") return <ForgotPassword />;
+  if (window.location.pathname === "/reset-password") {
+    return (
+      <ResetPassword token={new URLSearchParams(window.location.search).get("token")} />
     );
   }
   if (loading)

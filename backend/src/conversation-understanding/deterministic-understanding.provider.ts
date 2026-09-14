@@ -20,6 +20,19 @@ import {
 } from "./conversation-understanding.types";
 
 const PROVIDER_VERSION = "deterministic-v1";
+const ORDINAL_WORD_INDEX: Record<string, number> = {
+  primera: 1,
+  primero: 1,
+  primer: 1,
+  segunda: 2,
+  segundo: 2,
+  tercera: 3,
+  tercero: 3,
+  cuarta: 4,
+  cuarto: 4,
+  quinta: 5,
+  quinto: 5,
+};
 const normalize = (value: string) =>
   value
     .normalize("NFD")
@@ -109,10 +122,28 @@ export class DeterministicUnderstandingProvider implements ConversationUnderstan
     if (requestedDate) entities.requestedDate = requestedDate;
     // Same reasoning: a tapped list row's id is the option's 1-based index
     // itself, so it's tried first, before the bare-digit-body fallback.
-    const selectionIndex =
+    // D-163 (docs/decisions.md) live finding: a customer replying to a
+    // just-shown list very naturally writes "la 2", "opción 2", or "la
+    // segunda" instead of a bare digit — none of those matched before,
+    // silently falling through to a brand-new item-name search over the
+    // whole catalog instead of resolving against the list they were just
+    // shown (flow.step === "selecting_item"'s tiedItems, shared by both a
+    // name-matching tie and a consultative-recommendation list — see
+    // tryConsultativeRecommendation).
+    const digitSelection =
       input.interactiveSelectionId?.match(/^(\d{1,2})$/)?.[1] ??
-      text.match(/^\s*(\d{1,2})\s*$/)?.[1];
-    if (selectionIndex) entities.selectionIndex = Number(selectionIndex);
+      text.match(/^\s*(?:la|el|opcion|numero|num)?\s*(\d{1,2})\s*$/)?.[1];
+    const ordinalWordSelection = digitSelection
+      ? null
+      : text.match(
+          /^\s*(?:la|el)?\s*(primera|primero|primer|segunda|segundo|tercera|tercero|cuarta|cuarto|quinta|quinto)\s*$/,
+        )?.[1];
+    const selectionIndex = digitSelection
+      ? Number(digitSelection)
+      : ordinalWordSelection
+        ? ORDINAL_WORD_INDEX[ordinalWordSelection]
+        : undefined;
+    if (selectionIndex) entities.selectionIndex = selectionIndex;
     if (matchesConversationRule(text, "anyResource"))
       entities.anyResource = true;
     entities.searchTerms = this.searchTerms(text);

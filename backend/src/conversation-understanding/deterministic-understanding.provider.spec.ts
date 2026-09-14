@@ -149,6 +149,38 @@ describe("DeterministicUnderstandingProvider", () => {
     expect(result.entities.selectionIndex).toBe(3);
   });
 
+  // D-163 (docs/decisions.md) live finding: a bare digit already resolved to
+  // a previously shown list option, but the far more natural phrasing a
+  // real customer types ("la 2", "la segunda") silently fell through to a
+  // fresh item search instead — the same tiedItems mechanism whether the
+  // list came from a name-matching tie or a consultative recommendation.
+  it.each([
+    ["la 2", 2],
+    ["el 2", 2],
+    ["opcion 2", 2],
+    ["la segunda", 2],
+    ["el segundo", 2],
+    ["la primera", 1],
+    ["el primero", 1],
+    ["la tercera", 3],
+  ])("resolves %j to selectionIndex %i", async (message, expected) => {
+    const result = await provider.understand({
+      ...base,
+      message,
+      configuredLocale: "es-CO",
+    });
+    expect(result.entities.selectionIndex).toBe(expected);
+  });
+
+  it("does not treat an ordinal word inside a longer sentence as a list selection", async () => {
+    const result = await provider.understand({
+      ...base,
+      message: "es mi segunda vez comprando aqui",
+      configuredLocale: "es-CO",
+    });
+    expect(result.entities.selectionIndex).toBeUndefined();
+  });
+
   it("marks unknown messages with zero confidence", async () => {
     const result = await provider.understand({
       ...base,
