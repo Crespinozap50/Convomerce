@@ -365,6 +365,15 @@ export class CommercialFlowService {
     if (command === "catalog") return null;
     if (!flow && command === "cancel")
       return this.localizedReply(input.locale, "nothingToCancel");
+    // D-169 (docs/decisions.md) live finding (Santos Tacos): "quita el
+    // burrito de mi pedido" with no active order at all still fell
+    // through to startNewOrder() below, which — having no idea the intent
+    // was ever "remove" — matched "burrito" against the full catalog like
+    // any other product mention and tried to sell it back as a
+    // recommendation instead of saying there was nothing to remove. Same
+    // fix shape as the cancel guard directly above.
+    if (!flow && command === "remove_item")
+      return this.localizedReply(input.locale, "nothingToRemove");
     if (!flow) return this.startNewOrder(client, input);
     const globalResult = await this.handleGlobalCommand(client, input, flow, command, negative);
     if (globalResult !== undefined) return globalResult;
@@ -393,7 +402,7 @@ export class CommercialFlowService {
     // carry real signal (a confident match or a genuine tie) — that's a
     // strong enough signal of ordering intent on its own, regardless of
     // what the rest of the message also mentions.
-    const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC", input.locale);
+    const multi = await this.matchItemMentions(client, input.tenantId, input.body, input.timezone ?? "UTC", input.locale);
     if (multi) {
       const requestId = uuidv7(),
         flowId = uuidv7();
@@ -435,6 +444,26 @@ export class CommercialFlowService {
     // is always null here, so it lands on the bareNameStart check below
     // and returns null), letting the knowledge layer answer it instead.
     if (tied.length > 1 && (starts || !looksLikeQuestion(input.body))) {
+      // D-166 live finding: a tie built entirely from one shared *generic*
+      // word in each item's own name — "protector de pantalla para el
+      // iPhone 16" ties every "... pantalla grande" phone/laptop/tablet on
+      // the bare word "pantalla" (the actual screen-protector product,
+      // "Vidrio templado para celular", never ties at all — its name
+      // shares nothing with the message, only its *description* does);
+      // "una cámara para tomar fotos deportivas" ties all ~20 "Cámara ..."
+      // products on the bare word "cámara" — reads exactly like a
+      // confident tie, but isWeakTokenMatch (D-133/D-134/D-135) already
+      // has a name for this shape of match: every tied candidate barely
+      // reflects its own name. When that's true for literally every tied
+      // candidate, try the same consultative AI used below for a single
+      // weak match first — it can reason over full item descriptions
+      // (D-128), which name-only scoring never sees. Falls back to
+      // today's tied-list/category picker exactly as before whenever the
+      // AI itself finds nothing better (never a worse result than today).
+      if (tied.every((item) => this.isWeakMatch(item, input))) {
+        const consultative = await this.tryConsultativeRecommendation(client, input);
+        if (consultative) return consultative;
+      }
       // Persists the tie so a tap next turn can resolve it directly by
       // index (see selecting_item's tiedItems handling) — re-matching the
       // tapped text by name alone can never break a tie between two
@@ -963,7 +992,7 @@ export class CommercialFlowService {
     // batch of new ones — multi-item extraction doesn't apply there.
     const multi =
       flow.context.replaceItem !== true
-        ? await this.matchItemMentions(client, input.body, input.timezone ?? "UTC", input.locale)
+        ? await this.matchItemMentions(client, input.tenantId, input.body, input.timezone ?? "UTC", input.locale)
         : null;
     if (multi) {
       for (const { item, quantity } of multi.matches) {
@@ -1029,7 +1058,7 @@ export class CommercialFlowService {
         this.localizedReply(input.locale, "item")
       );
     }
-    const multi = await this.matchItemMentions(client, input.body, input.timezone ?? "UTC", input.locale);
+    const multi = await this.matchItemMentions(client, input.tenantId, input.body, input.timezone ?? "UTC", input.locale);
     if (multi) {
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, flow.commercial_request_id, item, quantity);
@@ -1782,6 +1811,26 @@ export class CommercialFlowService {
     );
     return result.rows;
   }
+  // D-169: used by matchItemMentions()'s cross-category-conflict check —
+  // deliberately its own query, not derived from catalogItems() above,
+  // which is time-window-filtered (D-097/D-120). A category that's
+  // simply off the menu right now (Santos Tacos' Burritos/Bowls are
+  // lunch-only) is still a real category this tenant sells; a customer
+  // naming it should never be silently reinterpreted as naming something
+  // else just because catalogItems() happens to have nothing from it
+  // available this instant.
+  private async categoryNouns(client: PoolClient, tenantId: string): Promise<Set<string>> {
+    const result = await client.query<{ category: string | null }>(
+      `select distinct item.category from app.catalog_items item
+       where item.tenant_id=$1 and item.status='active' and item.customer_orderable`,
+      [tenantId],
+    );
+    return new Set(
+      result.rows
+        .map((row) => singularize(norm(row.category ?? "").split(" ")[0] ?? ""))
+        .filter(Boolean),
+    );
+  }
   // D-128: separate from catalogItems() on purpose — this is the one
   // query in the file that reads item.description, needed only by
   // ConsultativeRecommendationService to reason over specs written in
@@ -2332,6 +2381,17 @@ export class CommercialFlowService {
   // other product the customer mentioned in the same message.
   private static readonly ITEM_MENTION_SEPARATOR =
     /\s*,\s*|\s+(?:y|e|tambien|ademas|and|also)\s+/;
+  // D-169 (docs/decisions.md) live finding (Santos Tacos): "quiero 3
+  // tacos al pastor, no espera mejor 2 de pollo y una cerveza" added
+  // BOTH the pastor and the pollo — every segment below is treated as an
+  // independent addition, with no way to know the customer took back
+  // what they'd just said right before a correction marker like "no,
+  // espera, mejor...". Kept as a short, explicit list of marker phrases
+  // (same style as REFINEMENT_ADJECTIVES/BACK_REFERENCE_WORDS below)
+  // rather than a general "sounds like a correction" heuristic — narrow
+  // on purpose, so it only ever fires on an unambiguous self-correction.
+  private static readonly CORRECTION_MARKER_PATTERN =
+    /\b(?:no,? espera|espera,? no|mejor no|no mejor|cambia(?:lo)? (?:eso )?por|en vez de eso|olvida eso)\b,?\s*/;
   private splitItemMentions(text: string): string[] {
     // Split on the comma BEFORE norm() strips it (norm()'s punctuation
     // removal would otherwise erase the very separator being split on) —
@@ -2342,7 +2402,16 @@ export class CommercialFlowService {
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase();
-    return accentless
+    // Only the text AFTER the marker reflects what's actually being
+    // ordered \u2014 the part before it is discarded outright instead of
+    // combined with the rest, same as the rest of this function never
+    // silently guesses: dropping a stale mention is always safer than
+    // adding it back in.
+    const correction = accentless.match(CommercialFlowService.CORRECTION_MARKER_PATTERN);
+    const effective = correction
+      ? accentless.slice((correction.index ?? 0) + correction[0].length)
+      : accentless;
+    return effective
       .split(CommercialFlowService.ITEM_MENTION_SEPARATOR)
       .map((segment) => norm(segment))
       .filter(Boolean);
@@ -2365,6 +2434,7 @@ export class CommercialFlowService {
   // excluded from it.
   private async matchItemMentions(
     client: PoolClient,
+    tenantId: string,
     message: string,
     timezone: string,
     locale: Locale,
@@ -2385,6 +2455,22 @@ export class CommercialFlowService {
     if (segments.length < 2) return null;
     const catalog = await this.catalogItems(client, timezone, locale);
     const ignored = new Set(mergedLanguageTerms("itemStopWords"));
+    // D-169 live finding (Santos Tacos): "un burrito de pollo con extra
+    // queso" (no such product) matched "Tacos de pollo" — isWeakTokenMatch's
+    // "missing at most 1 word" tolerance let it through even though the one
+    // missing word ("tacos") was the item's own dish-type noun, and the
+    // segment explicitly named a DIFFERENT one ("burrito") that is itself
+    // a real category in this tenant's own catalog. Built once from the
+    // tenant's own real categories — never a hardcoded, tenant-specific
+    // word list, so this applies the same way to CrediCel's categories
+    // (celulares/portátiles/tablets/accesorios) as to a food menu. Queried
+    // separately from `catalog` on purpose, without catalogItems()'s own
+    // time-window filter (D-097/D-120): Burritos/Bowls are lunch-only at
+    // Santos Tacos, so at 11pm `catalog` itself never contains a single
+    // burrito to notice the conflict against — "burrito" is still a real
+    // category this tenant sells, just not resellable this instant, and
+    // the wrong-dish-type mistake is exactly as wrong either way.
+    const categoryNouns = await this.categoryNouns(client, tenantId);
     const matches: { item: Item; quantity: number }[] = [];
     const unmatched: string[] = [];
     const tied: { segment: string; candidates: Item[]; quantity: number }[] = [];
@@ -2399,13 +2485,24 @@ export class CommercialFlowService {
           .map(singularize),
       );
       const { match, tied: candidates } = this.scoreCandidatesByTokens(catalog, tokens);
+      // A segment that names another real category's own noun outright
+      // (see categoryNouns above) is stronger evidence of "wrong dish/
+      // product type" than isWeakTokenMatch's generic 1-word tolerance
+      // can see — rejected the same way a weak match is, never silently
+      // trusted just because a different word happened to line up.
+      const matchCategoryNoun = match
+        ? singularize(norm(match.category ?? "").split(" ")[0] ?? "")
+        : "";
+      const namesConflictingCategory =
+        match !== null &&
+        [...tokens].some((token) => categoryNouns.has(token) && token !== matchCategoryNoun);
       // D-135 live finding: a match this segment's own words only weakly
       // support (e.g. "diseño" alone matching "Tablet premium para diseño"
       // when the customer actually asked for "un computador para diseño
       // gráfico") must never be added silently — treated as unmatched
       // instead, same safe "no encontré: X" treatment as a segment naming
       // nothing real, never a guess dressed up as a confident add.
-      if (match && !this.isWeakTokenMatch(match, tokens)) {
+      if (match && !this.isWeakTokenMatch(match, tokens) && !namesConflictingCategory) {
         matches.push({
           item: match,
           quantity: quantityExcludingItemName(parseQuantity(segment), match.name),

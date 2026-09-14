@@ -34,6 +34,7 @@
   "yesNo": "Please answer yes or no.",
   "help": "You can choose any of these options:",
   "nothingToCancel": "There is no active process to cancel.",
+  "nothingToRemove": "You don't have an active order to remove items from.",
   "cancelled": "Process cancelled. No charge was made.",
   "changeWhat": "What would you like to change?",
   "addressNotRequired": "The selected method does not require an address. You can change delivery or continue.",

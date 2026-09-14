@@ -2,7 +2,7 @@
   "patterns": {
     "viewOrder": ["\\b(ver|mostrar|muestrame|resumen)\\b.*\\b(pedido|carrito|orden)\\b"],
     "addItem": ["\\b(agregar|agrega|agregame|anadir|anade|anademe|otro|otra)\\b.*\\b(producto|articulo|item|plato|bebida)\\b"],
-    "removeItem": ["\\b(quitar|eliminar|remover)\\b"],
+    "removeItem": ["\\b(quitar|quita|quitame|eliminar|elimina|remover|remueve)\\b"],
     "changeQuantity": ["\\b(cambiar|cambia|cambiame|ajustar|ajusta|modificar|modifica)\\b.*\\b(cantidad|unidades)\\b"],
     "finishItems": ["^(no[,\\s]+)?(listo|terminar|finalizar|continuar|eso es todo|nada mas)\\b"],
     "catalog": ["\\b(menu|catalogo|carta|productos|opciones|servicios)\\b", "\\bque (tienen|venden|ofrecen|manejan)\\b"],

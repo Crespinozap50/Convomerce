@@ -84,6 +84,12 @@ describe("CommercialFlowService", () => {
     ["Agregar otro producto", "add_item"],
     ["Quitar producto", "remove_item"],
     ["Quitar tacos de birria", "remove_item"],
+    // D-169 (docs/decisions.md) live finding: the rule only ever matched
+    // the infinitive "quitar" — the natural imperative "quita" (as in
+    // "quita el burrito de mi pedido") never classified as remove_item at
+    // all, unlike every sibling rule in this file (addItem/cancel/
+    // changeQuantity already list both forms).
+    ["Quita el burrito de mi pedido", "remove_item"],
     ["Cambiar cantidad", "change_quantity"],
     ["Cambia la cantidad a tres", "change_quantity"],
     ["Listo", "finish_items"],
@@ -192,6 +198,27 @@ describe("CommercialFlowService", () => {
         String(sql).includes("insert into app.commercial_requests"),
       ),
     ).toBe(false);
+  });
+
+  it("says there is nothing to remove instead of trying to sell it, when asked to remove an item with no active order (D-169 live finding, Santos Tacos)", async () => {
+    // Found live: "quita el burrito de mi pedido" with no active order at
+    // all fell straight into startNewOrder() — which has no idea the
+    // customer's intent was ever "remove" — matched "burrito" against the
+    // catalog like any other product mention and tried to recommend
+    // something instead of saying there was simply nothing to remove.
+    // Same fix shape as the existing !flow-and-"cancel" guard right above
+    // it in commercial-flow.service.ts.
+    const client = { query: jest.fn().mockResolvedValueOnce({ rows: [] }) };
+    const message = "quita el burrito de mi pedido";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toContain("No tienes ningún pedido activo");
+    expect(client.query).toHaveBeenCalledTimes(1);
   });
 
   it("orders one package, not three, when the package's own name embeds a number (regression, D-099 live finding)", async () => {
@@ -448,6 +475,144 @@ describe("CommercialFlowService", () => {
     expect(
       queries.some(({ sql }) => sql.includes("insert into app.request_lines")),
     ).toBe(false);
+  });
+
+  it("tries the consultative recommendation instead of a bare tied-item picker when every tied match only shares one generic word with its own name (D-166 live finding)", async () => {
+    // Found live: "necesito un protector de pantalla" tied "Celular ZTE
+    // económico pantalla grande" and "Portátil Asus gamer pantalla
+    // grande" — both name-matched on the bare word "pantalla" alone,
+    // nothing else — and short-circuited straight to a tied-item picker
+    // showing an unrelated phone and laptop, never reaching the AI. The
+    // actual desired product ("Vidrio templado para celular") never even
+    // entered the tie: its own name shares nothing with the message, only
+    // its description does. Each tied candidate here is weak by the same
+    // isWeakTokenMatch definition D-133/D-134/D-135 already established
+    // (missing more than one of its own name's words), so this must defer
+    // to the same AI path used for a single weak match, instead of asking
+    // the customer to disambiguate between two things they didn't ask for.
+    const tiedRows = [
+      {
+        item_id: "phone-a",
+        variant_id: "phone-a-variant",
+        name: "Celular ZTE económico pantalla grande",
+        category: "celulares",
+        variant_name: "Único",
+        price_minor: "89000000",
+        currency: "COP",
+      },
+      {
+        item_id: "laptop-a",
+        variant_id: "laptop-a-variant",
+        name: "Portátil Asus gamer pantalla grande",
+        category: "portatiles",
+        variant_name: "Único",
+        price_minor: "450000000",
+        currency: "COP",
+      },
+    ];
+    const queries: { sql: string }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        queries.push({ sql });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return {
+            rows: [
+              {
+                item_id: "protector-a",
+                variant_id: "protector-a-variant",
+                name: "Vidrio templado para celular",
+                category: "accesorios",
+                variant_name: "Único",
+                price_minor: "3500000",
+                currency: "COP",
+                description: "Protector de pantalla en vidrio templado 9H, instalación incluida en tienda.",
+              },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: tiedRows };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "protector-a-variant", reason: "Protege la pantalla del celular." }]);
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: "necesito un protector de pantalla",
+      understanding: await understand("necesito un protector de pantalla"),
+    });
+
+    expect(recommend).toHaveBeenCalled();
+    expect(reply?.body).not.toContain("Celular ZTE");
+    expect(reply?.body).not.toContain("Portátil Asus");
+  });
+
+  it("still asks which product when a tie is genuinely confident, without ever spending an AI call (regression guard for D-166)", async () => {
+    // Same shape as the test above (tied.length > 1, AI capability
+    // enabled, messageId present) but the tied candidates each match
+    // *most* of their own name — isWeakMatch is false for both, so the
+    // D-166 deferral above must never fire here. The AI is a fallback for
+    // a weak/coincidental tie only, never a replacement for a genuine one.
+    const queries: { sql: string }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        queries.push({ sql });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return { rows: [] };
+        if (sql.includes("from app.catalog_items item join app.item_variants"))
+          return {
+            rows: [
+              {
+                item_id: "pastor",
+                variant_id: "pastor-variant",
+                name: "Tacos al pastor",
+                category: "tacos",
+                variant_name: "Orden de 3",
+                price_minor: "1890000",
+                currency: "COP",
+              },
+              {
+                item_id: "birria",
+                variant_id: "birria-variant",
+                name: "Tacos de birria",
+                category: "tacos",
+                variant_name: "Orden de 3",
+                price_minor: "2290000",
+                currency: "COP",
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest.fn();
+    const message = "Quiero unos tacos";
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(recommend).not.toHaveBeenCalled();
+    expect(reply?.body).toContain("¿cuál prefieres?");
   });
 
   it("prefers the consultative recommendation over a weak match even with an explicit purchase verb (D-134 live finding)", async () => {
@@ -3072,6 +3237,150 @@ describe("CommercialFlowService", () => {
       expect.arrayContaining(["variant-charger"]),
     );
     expect(JSON.stringify(insertCalls)).not.toContain("variant-tablet");
+    expect(reply).not.toBeNull();
+  });
+
+  it("drops the corrected-away mention instead of adding it too, when the customer self-corrects mid-message (D-169 live finding, Santos Tacos)", async () => {
+    // Found live: "quiero 3 tacos al pastor, no espera mejor 2 de pollo y
+    // una cerveza" added BOTH the pastor and the pollo — every segment
+    // used to be treated as an independent addition, with no way to know
+    // the customer took back what they'd just said right before "no,
+    // espera, mejor...".
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "item-pastor",
+          variant_id: "variant-pastor",
+          name: "Tacos al pastor",
+          category: "Tacos",
+          variant_name: "Orden de 3 tacos",
+          price_minor: "1890000",
+          currency: "COP",
+        },
+        {
+          item_id: "item-pollo",
+          variant_id: "variant-pollo",
+          name: "Tacos de pollo",
+          category: "Tacos",
+          variant_name: "Orden de 3 tacos",
+          price_minor: "1790000",
+          currency: "COP",
+        },
+        {
+          item_id: "item-cerveza",
+          variant_id: "variant-cerveza",
+          name: "Cerveza",
+          category: "Cervezas",
+          variant_name: "Unidad",
+          price_minor: "800000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return catalogRows;
+        return { rows: [] };
+      }),
+    };
+
+    const message = "quiero 3 tacos al pastor, no espera mejor 2 de pollo y una cerveza";
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    const insertCalls = client.query.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into app.request_lines"),
+    );
+    expect(JSON.stringify(insertCalls)).not.toContain("variant-pastor");
+    expect(JSON.stringify(insertCalls)).toContain("variant-pollo");
+    expect(JSON.stringify(insertCalls)).toContain("variant-cerveza");
+    expect(reply).not.toBeNull();
+  });
+
+  it("never silently matches a segment that names another real category's own noun, even when only one word is missing (D-169 live finding, Santos Tacos)", async () => {
+    // Found live: "un burrito de pollo con extra queso" (no such product)
+    // silently matched "Tacos de pollo" — isWeakTokenMatch's "missing at
+    // most 1 word" tolerance let it through even though the missing word
+    // ("tacos") was the item's own dish-type noun, and the segment named
+    // a DIFFERENT one ("burrito") that is itself a real category in this
+    // tenant's catalog (categoryNouns is built from the tenant's own real
+    // categories — the "Burritos" category item below exists only to
+    // populate it, its own name deliberately shares no token with the
+    // message so it can never win the tie on its own).
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "item-birria",
+          variant_id: "variant-birria",
+          name: "Tacos de birria",
+          category: "Tacos",
+          variant_name: "Orden de 3 tacos con consomé",
+          price_minor: "2290000",
+          currency: "COP",
+        },
+        {
+          item_id: "item-pollo",
+          variant_id: "variant-pollo",
+          name: "Tacos de pollo",
+          category: "Tacos",
+          variant_name: "Orden de 3 tacos",
+          price_minor: "1790000",
+          currency: "COP",
+        },
+        {
+          item_id: "item-burrito",
+          variant_id: "variant-burrito",
+          name: "Especial de la casa",
+          category: "Burritos",
+          variant_name: "Unidad",
+          price_minor: "2400000",
+          currency: "COP",
+        },
+        {
+          item_id: "item-cerveza",
+          variant_id: "variant-cerveza",
+          name: "Cerveza",
+          category: "Cervezas",
+          variant_name: "Unidad",
+          price_minor: "800000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        // D-169: categoryNouns() is deliberately its own query, separate
+        // from catalogItems() — see the real method's own comment for why
+        // (a category can be off the menu right now, D-097/D-120, and
+        // still be a real category this tenant sells).
+        if (sql.includes("select distinct item.category from app.catalog_items"))
+          return { rows: [{ category: "Tacos" }, { category: "Burritos" }, { category: "Cervezas" }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return catalogRows;
+        return { rows: [] };
+      }),
+    };
+
+    const message = "quiero 2 tacos de birria, un burrito de pollo y una cerveza";
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    const insertCalls = client.query.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into app.request_lines"),
+    );
+    expect(JSON.stringify(insertCalls)).toContain("variant-birria");
+    expect(JSON.stringify(insertCalls)).toContain("variant-cerveza");
+    expect(JSON.stringify(insertCalls)).not.toContain("variant-pollo");
+    expect(JSON.stringify(insertCalls)).not.toContain("variant-burrito");
     expect(reply).not.toBeNull();
   });
 

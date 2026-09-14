@@ -34,6 +34,7 @@
   "yesNo": "Por favor responde sí o no.",
   "help": "Puedes elegir cualquiera de estas opciones:",
   "nothingToCancel": "No tienes un proceso activo para cancelar.",
+  "nothingToRemove": "No tienes ningún pedido activo del que quitar productos.",
   "cancelled": "Proceso cancelado. No se realizó ningún cobro.",
   "changeWhat": "¿Qué deseas cambiar?",
   "addressNotRequired": "La modalidad elegida no requiere dirección. Puedes cambiar la entrega o continuar.",
