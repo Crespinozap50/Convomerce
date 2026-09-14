@@ -1122,9 +1122,18 @@ export class CommercialFlowService {
     // option whose name is long enough to truncate. Resolving the tap's
     // own id first avoids relying on the reconstructed (and possibly
     // truncated) title at all.
+    // D-163 (docs/decisions.md) live finding: a real customer replying with
+    // extra words around the option's name ("sí, guacamole" instead of the
+    // bare tapped title "Guacamole") never matched the old exact-equality
+    // check — the same message was re-shown forever, with no way out via
+    // free text. Falls back to substring containment (same forgiving
+    // matching philosophy as product-name search elsewhere in this file),
+    // only once the exact match already failed.
+    const normalizedBody = norm(input.body);
     const picked =
       remaining.find((option) => option.option_id === input.interactiveSelectionId) ??
-      remaining.find((option) => norm(option.name) === norm(input.body));
+      remaining.find((option) => norm(option.name) === normalizedBody) ??
+      remaining.find((option) => normalizedBody.includes(norm(option.name)));
     if (!picked) return remaining.length > 0 ? this.modifierChoiceReply(input.locale, remaining) : finish();
     await this.addModifier(
       client,
@@ -1573,11 +1582,21 @@ export class CommercialFlowService {
     });
     const cart = await this.cart(client, requestId, input.locale);
     const interactive = this.itemChoiceInteractive(input.locale, multi.tie.candidates);
+    // D-163 (docs/decisions.md) live finding: "itemsNotFound" unconditionally
+    // claims "Agregué el resto a tu pedido" — true when other mentions in
+    // the same message already matched cleanly (multi.matches, added before
+    // this runs — see the class comment above), but false and directly
+    // contradicted by the cart shown right below it when the ONLY other
+    // mention was itself this unresolved tie (multi.matches empty): nothing
+    // has actually been added yet, the customer still has to pick one.
     const withCart = multi.unmatched.length
       ? this.content(input.locale, [
           {
             kind: "template",
-            template: { namespace: "commercial", key: "itemsNotFound" },
+            template: {
+              namespace: "commercial",
+              key: multi.matches.length > 0 ? "itemsNotFound" : "itemsNotFoundPendingTie",
+            },
             values: { items: multi.unmatched.join(", ") },
           },
           { kind: "line_break" },

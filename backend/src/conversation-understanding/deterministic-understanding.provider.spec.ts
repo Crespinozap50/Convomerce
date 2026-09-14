@@ -149,7 +149,7 @@ describe("DeterministicUnderstandingProvider", () => {
     expect(result.entities.selectionIndex).toBe(3);
   });
 
-  // D-163 (docs/decisions.md) live finding: a bare digit already resolved to
+  // D-162 (docs/decisions.md) live finding: a bare digit already resolved to
   // a previously shown list option, but the far more natural phrasing a
   // real customer types ("la 2", "la segunda") silently fell through to a
   // fresh item search instead — the same tiedItems mechanism whether the

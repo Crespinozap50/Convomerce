@@ -9,6 +9,7 @@
   "greetingItemUnknown": "¡Hola! Soy {{assistant}}, el asistente virtual de {{business}}. No encontré ese producto. Estas son nuestras opciones:",
   "viewMenuButton": "Ver menú",
   "itemsNotFound": "No encontré: {{items}}. Agregué el resto a tu pedido.",
+  "itemsNotFoundPendingTie": "No encontré: {{items}}. Antes de continuar, dime cuál de estas opciones prefieres para lo que sí encontré:",
   "itemChoice": "Encontré varias opciones, ¿cuál prefieres?",
   "modifierChoice": "¿Quieres agregar alguna adición?",
   "modifierAdded": "Agregué {{item}}. ¿Quieres agregar otra adición?",

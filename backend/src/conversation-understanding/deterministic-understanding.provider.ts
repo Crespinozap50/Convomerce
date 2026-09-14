@@ -122,7 +122,7 @@ export class DeterministicUnderstandingProvider implements ConversationUnderstan
     if (requestedDate) entities.requestedDate = requestedDate;
     // Same reasoning: a tapped list row's id is the option's 1-based index
     // itself, so it's tried first, before the bare-digit-body fallback.
-    // D-163 (docs/decisions.md) live finding: a customer replying to a
+    // D-162 (docs/decisions.md) live finding: a customer replying to a
     // just-shown list very naturally writes "la 2", "opción 2", or "la
     // segunda" instead of a bare digit — none of those matched before,
     // silently falling through to a brand-new item-name search over the

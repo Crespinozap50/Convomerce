@@ -87,6 +87,12 @@ describe("CommercialFlowService", () => {
     ["Cambiar cantidad", "change_quantity"],
     ["Cambia la cantidad a tres", "change_quantity"],
     ["Listo", "finish_items"],
+    // D-163 (docs/decisions.md) live finding: "no, listo" (declining an
+    // offer and finishing in the same breath — a very natural real reply)
+    // never matched the old start-anchored pattern because of the leading
+    // "no," — stuck the customer re-asking the same question forever.
+    ["no, listo", "finish_items"],
+    ["no listo", "finish_items"],
     ["Volver", "back"],
   ])("classifies the global command “%s”", (message, command) => {
     expect(classifyFlowCommand(message)).toBe(command);
@@ -1673,6 +1679,63 @@ describe("CommercialFlowService", () => {
     expect(reply?.body).toContain("¿Quieres agregar algo más?");
   });
 
+  // D-163 (docs/decisions.md) live finding: a real customer answering
+  // "¿Quieres agregar alguna adición?" with "sí, guacamole" instead of
+  // tapping the exact button title got stuck — the old exact-equality
+  // check re-showed the identical question forever, with no way out via
+  // free text.
+  it("resolves a modifier option named within a longer free-text reply, not just an exact match (regression)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "selecting_modifiers",
+              context: { requestLineId: "line-1" },
+            },
+          ],
+        }) // active workflow lookup
+        .mockResolvedValueOnce({
+          rows: [
+            { option_id: "guacamole", group_id: "adiciones", selection_type: "multiple", name: "Guacamole", price_delta_minor: "300000", currency: "COP" },
+          ],
+        }) // remainingModifiers
+        .mockResolvedValueOnce({ rows: [] }) // addModifier: insert request_line_modifiers
+        .mockResolvedValueOnce({ rows: [] }) // addModifier: recalculate
+        .mockResolvedValueOnce({ rows: [] }) // remainingModifiers (2nd call): none left
+        .mockResolvedValueOnce({ rows: [] }) // step() -> awaiting_more_items
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "line-1",
+              description_snapshot: "Chorizo",
+              quantity: "1",
+              line_total_minor: "950000",
+              total_minor: "1250000",
+              currency: "COP",
+            },
+          ],
+        }) // afterCartChange -> cart() lines
+        .mockResolvedValue({ rows: [] }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "si, guacamole",
+      understanding: await understand("si, guacamole"),
+    });
+
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("insert into app.request_line_modifiers"),
+      ),
+    ).toBe(true);
+    expect(reply?.body).toContain("¿Quieres agregar algo más?");
+  });
+
   it("resolves a tapped modifier option by its id, not the (possibly truncated) reconstructed title (regression)", async () => {
     // Same bug class as D-066: a WhatsApp button title is capped at 20
     // chars — a modifier option name longer than that gets truncated with
@@ -2723,6 +2786,11 @@ describe("CommercialFlowService", () => {
       client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
     ).toBe(false);
     expect(reply?.body).toContain("No encontré");
+    // D-163 (docs/decisions.md) live finding: this used to always claim
+    // "Agregué el resto a tu pedido" here too, directly contradicted by the
+    // (correctly empty) cart shown right below it — nothing was actually
+    // added yet, both mentions are still unresolved ties.
+    expect(reply?.body).not.toContain("Agregué el resto");
     const stepUpdate = client.query.mock.calls.find(([sql]) =>
       String(sql).includes("update app.conversation_workflows"),
     );

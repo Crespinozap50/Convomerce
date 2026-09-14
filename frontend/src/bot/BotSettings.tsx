@@ -19,7 +19,7 @@ export function BotSettings({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [usage, setUsage] = useState<AiUsageSummary | null>(null);
-  // D-163 (docs/decisions.md): kept as raw text while editing, not parsed
+  // D-162 (docs/decisions.md): kept as raw text while editing, not parsed
   // into form.handoffKeywords on every keystroke — re-splitting/trimming/
   // filtering per keystroke silently dropped a trailing ", " the instant it
   // was typed (an empty trailing segment fails .filter(Boolean)), so the

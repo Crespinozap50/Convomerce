@@ -9,6 +9,7 @@
   "greetingItemUnknown": "Hi! I'm {{assistant}}, the virtual assistant for {{business}}. I could not find that product. Here are our options:",
   "viewMenuButton": "View menu",
   "itemsNotFound": "I could not find: {{items}}. I added the rest to your order.",
+  "itemsNotFoundPendingTie": "I could not find: {{items}}. Before continuing, tell me which of these options you'd like for what I did find:",
   "itemChoice": "I found a few matching options, which one would you like?",
   "modifierChoice": "Would you like to add anything extra?",
   "modifierAdded": "Added {{item}}. Would you like to add anything else?",
