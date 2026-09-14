@@ -3764,6 +3764,63 @@ describe("CommercialFlowService", () => {
     ).toBe(false);
   });
 
+  it("removes an already-cart item found among a freshly-retyped tie while awaiting more items, when the retyped negation text is itself ambiguous in the catalog (D-174 follow-up live finding, CrediCel)", async () => {
+    // Same gap as handleSelectingItem's own D-174 follow-up, found live
+    // against CrediCel's real catalog: "celular Honor" itself ties between
+    // two variants, so with one already in the cart, "ya no quiero el
+    // celular Honor, mejor no" kept re-showing the same disambiguation
+    // list instead of removing it — tied.length > 1 short-circuited before
+    // the single-match negation guard below ever ran.
+    const honorUnico = {
+      item_id: "honor",
+      variant_id: "honor-unico",
+      name: "Celular Honor batería extendida gamer",
+      variant_name: "Único",
+      price_minor: "119000000",
+      currency: "COP",
+    };
+    const honor256 = {
+      item_id: "honor",
+      variant_id: "honor-256",
+      name: "Celular Honor batería extendida gamer",
+      variant_name: "256 GB",
+      price_minor: "139000000",
+      currency: "COP",
+    };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants"))
+          return { rows: [honorUnico, honor256] };
+        if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+          return { rows: [honorUnico] };
+        return { rows: [] };
+      }),
+    };
+    const message = "ya no quiero el celular Honor, mejor no";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("update app.request_lines set status='removed'"),
+      ),
+    ).toBe(true);
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(false);
+  });
+
   it("still adds a genuinely new item on a negation-flavored message, when that item was never in the cart to begin with (D-172 regression guard)", async () => {
     // The guard above only ever fires when the named product is already
     // in the cart — a coincidental "no quiero" in a message that actually

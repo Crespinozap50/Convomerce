@@ -1128,6 +1128,20 @@ export class CommercialFlowService {
     // guard is startNewOrder's too: "¿los tacos pican?" ties just as
     // easily and must still fall through to the knowledge layer.
     if (tied.length > 1 && !looksLikeQuestion(input.body)) {
+      // D-174 follow-up (docs/decisions.md) live finding (CrediCel): the
+      // same gap found and fixed in handleSelectingItem's own tied branch
+      // — the retyped text can itself be ambiguous in the catalog ("celular
+      // Honor" ties between its two variants), so the D-172 negation guard
+      // below never runs (it needs a single unambiguous `match`) and the
+      // customer negating an already-in-cart item saw the same
+      // disambiguation list again instead of it being removed. Checking the
+      // freshly tied candidates against the cart before re-asking — same
+      // never-a-false-positive criterion as D-172/D-174.
+      if (CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
+        const cart = await this.cartItems(client, flow.commercial_request_id, input.locale);
+        const cartMatch = tied.find((candidate) => cart.some((line) => line.variant_id === candidate.variant_id));
+        if (cartMatch) return this.removeItem(client, flow, input.locale, cartMatch);
+      }
       await this.step(client, flow.id, "selecting_item", {
         ...flow.context,
         tiedItems: tied,
