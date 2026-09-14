@@ -114,6 +114,13 @@ describe("CommercialFlowService", () => {
     // oz" added 16 of them instead of 1.
     ["una agua fresca de 16 oz", 1],
     ["2 tacos al pastor y una agua fresca de 16 oz", 2],
+    // D-169 (docs/decisions.md) live finding (Santos Tacos): "una docena
+    // de cervezas sol" silently added quantity 1, not 12 — "una" tested
+    // (and matched) before "docena" ever got a chance, since quantityWords
+    // had no entry for it at all. "media docena" must win over the bare
+    // "docena" entry too, so it's tested first in the map.
+    ["me mandas una docena de cervezas sol", 12],
+    ["media docena de cervezas", 6],
   ])("extracts quantity from “%s”", (message, quantity) => {
     expect(parseQuantity(message)).toBe(quantity);
   });
@@ -3931,6 +3938,55 @@ describe("CommercialFlowService", () => {
     );
     expect(String(stepUpdate?.[1])).toContain("selecting_item");
     expect(JSON.stringify(stepUpdate?.[1])).toContain("tiedItems");
+  });
+
+  it("defers to the knowledge/price layer instead of silently adding the item, when a price question ties unambiguously while a cart is open (D-169 live finding, Santos Tacos)", async () => {
+    // Found live: with an order already in progress, "¿cuánto cuesta la
+    // orden de 3 tacos de birria?" matched "Tacos de birria" cleanly (no
+    // tie at all) and got added straight to the cart — the comment on the
+    // tied-branch right above this one already says the question guard
+    // applies here "the same way [it does in] startNewOrder", but it was
+    // only ever wired into that tied branch, never into this single-match
+    // one right below it.
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "birria",
+          variant_id: "birria-variant",
+          name: "Tacos de birria",
+          variant_name: "Orden de 3 tacos con consomé",
+          price_minor: "2290000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: "workflow-1",
+              commercial_request_id: "request-1",
+              step: "awaiting_more_items",
+              context: {},
+            },
+          ],
+        })
+        .mockResolvedValue(catalogRows),
+    };
+    const message = "cuanto cuesta la orden de 3 tacos de birria?";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply).toBeNull();
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(false);
   });
 
   it("resolves the cart row tapped to change its quantity by index, instead of looping on a name that ties (live finding)", async () => {

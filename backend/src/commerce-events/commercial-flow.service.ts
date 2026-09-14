@@ -1094,6 +1094,15 @@ export class CommercialFlowService {
       });
       return this.itemChoiceOrCategoryReply(input.locale, tied, input.categoryLabelPrefix ?? null);
     }
+    // D-169 (docs/decisions.md) live finding (Santos Tacos): the comment
+    // right above already states the question guard applies here the same
+    // way it does in startNewOrder — but it was only ever wired into the
+    // tied branch above, never into this single, unambiguous match. "¿cuánto
+    // cuesta la orden de 3 tacos de birria?" mid-order silently added a
+    // third item to the cart instead of answering the price. Deferring
+    // (returning null) here lets the knowledge/price layer answer instead,
+    // exactly like startNewOrder's own questionOrNoMatch guard already does.
+    if (match && looksLikeQuestion(input.body)) return null;
     if (match) {
       await this.addItem(
         client,
