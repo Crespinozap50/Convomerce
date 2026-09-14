@@ -8,6 +8,7 @@ import {
 } from "./commercial-flow.service";
 import { DeterministicUnderstandingProvider } from "../conversation-understanding/deterministic-understanding.provider";
 import { PendingRequirement } from "./requirement-loop";
+import { formatMoney } from "../localization/localization";
 
 describe("CommercialFlowService", () => {
   const addressRequirement: PendingRequirement = {
@@ -4917,6 +4918,109 @@ describe("CommercialFlowService", () => {
     expect(replaceLookup?.[1]).toEqual(["request-1", "variant-2"]);
   });
 
+  it("removes an already-cart item on a plain negation with no 'quitar' verb, while retyping instead of tapping during selecting_item (D-174 follow-up to D-172)", async () => {
+    // Same guard as handleAwaitingMoreItems (D-172), extended here: the
+    // customer can just as easily retype a negation instead of tapping
+    // one of the disambiguation options offered mid-tie. Only ever fires
+    // when the named product is already in the cart, so a genuine
+    // disambiguation answer or "Cambiar producto" replacement is
+    // untouched.
+    const beer = {
+      item_id: "cerveza",
+      variant_id: "cerveza-variant",
+      name: "Cerveza Sol",
+      variant_name: "Unidad",
+      price_minor: "800000",
+      currency: "COP",
+    };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems: [beer] },
+              },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [beer] };
+        if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+          return { rows: [beer] };
+        return { rows: [] };
+      }),
+    };
+    const message = "ya no quiero la cerveza, se me olvido que estoy manejando";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("update app.request_lines set status='removed'"),
+      ),
+    ).toBe(true);
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(false);
+  });
+
+  it("removes an already-cart item found among a freshly-retyped tie, when the retyped negation text is itself ambiguous in the catalog (D-174 follow-up live finding)", async () => {
+    // Found live at Santos Tacos: "agua" itself ties between "Agua" and
+    // "Agua fresca" in the catalog, so a customer negating an already-cart
+    // "Agua" ("ya no quiero el agua") while mid-disambiguation of an
+    // unrelated tie got the SAME tie re-asked forever — matchItemCandidates
+    // re-ties on the retyped text before the single-match guard above ever
+    // runs (tied.length > 1 short-circuits before `match` is ever set).
+    // Checking the freshly tied candidates against the cart closes that gap
+    // without ever touching a genuine new tie (no candidate in the cart) or
+    // a real disambiguation answer/replacement.
+    const agua = { item_id: "agua-item", variant_id: "agua-variant", name: "Agua", variant_name: "Unidad", price_minor: "600000", currency: "COP" };
+    const aguaFresca = { item_id: "aguafresca-item", variant_id: "aguafresca-variant", name: "Agua fresca", variant_name: "Vaso de 16 oz", price_minor: "900000", currency: "COP" };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems: [aguaFresca] },
+              },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [agua, aguaFresca] };
+        if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+          return { rows: [agua] };
+        return { rows: [] };
+      }),
+    };
+    const message = "ya no quiero el agua, olvidalo";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("update app.request_lines set status='removed'"),
+      ),
+    ).toBe(true);
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(false);
+  });
+
   it("resolves a tie between same-named variants by the option index instead of re-matching text (D-050 follow-up)", async () => {
     // "Agua fresca" 12oz vs 16oz share every name token — re-matching the
     // tapped option's text by name alone can never break this tie; it
@@ -5096,6 +5200,210 @@ describe("CommercialFlowService", () => {
         String(sql).includes("status='cancelled'"),
       ),
     ).toBe(true);
+  });
+
+  it("says there is nothing to cancel when there is no active draft and no confirmed order either (D-173 regression)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] }) // no active workflow
+        .mockResolvedValue({ rows: [] }), // no 'ready' requests either
+    };
+    const message = "cancela mi pedido";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toBe("No tienes un proceso activo para cancelar.");
+  });
+
+  it("offers to cancel a confirmed order that the business hasn't accepted yet, when asked with no active draft (D-173 live finding)", async () => {
+    // Found live: "cancela mi pedido" right after a real confirmation
+    // always answered "no tienes un proceso activo para cancelar" — true
+    // about the draft/workflow concept, but plainly wrong from the
+    // customer's perspective, who does have something real to cancel.
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.commercial_requests") && sql.includes("status='ready'"))
+          return { rows: [{ id: "0194f000-0000-7000-8000-0000000ABCDE", total_minor: "3580000", currency: "COP" }] };
+        return { rows: [] };
+      }),
+    };
+    const message = "cancela mi pedido";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toBe("Tienes un pedido confirmado. ¿Quieres cancelarlo?");
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "1", title: "Pedido #000ABCDE", description: formatMoney("3580000", "COP", "es") },
+        { id: "2", title: "No, dejar así" },
+      ],
+    });
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("'selecting_cancel_ready'"),
+      ),
+    ).toBe(true);
+  });
+
+  it("cancels the confirmed order tapped from the list, re-checking it's still cancellable at that exact moment (D-173 live finding)", async () => {
+    const readyRequests = [
+      { id: "req-ready-1", reference: "REQREADY", totalMinor: "3580000", currency: "COP" },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: null,
+                step: "selecting_cancel_ready",
+                context: { readyRequests },
+              },
+            ],
+          };
+        if (sql.includes("update app.commercial_requests set status='cancelled'"))
+          return { rows: [], rowCount: 1 };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "1",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { selectionIndex: 1 },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply?.body).toBe(
+      `Tu pedido #REQREADY (${formatMoney("3580000", "COP", "es")}) fue cancelado. No se realizó ningún cobro.`,
+    );
+    const cancelUpdate = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.commercial_requests set status='cancelled'"),
+    );
+    expect(cancelUpdate?.[1]).toEqual(expect.arrayContaining(["req-ready-1"]));
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("update app.conversation_workflows set status='completed'"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the order and never touches it, when the customer taps 'No, dejar así' (D-173 follow-up)", async () => {
+    const readyRequests = [
+      { id: "req-ready-1", reference: "REQREADY", totalMinor: "3580000", currency: "COP" },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: null,
+                step: "selecting_cancel_ready",
+                context: { readyRequests },
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "2",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { selectionIndex: 2 },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply?.body).toBe("Entendido, tu pedido sigue confirmado.");
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("status='cancelled'")),
+    ).toBe(false);
+  });
+
+  it("says the order can no longer be cancelled here, instead of falsely claiming success, when the business already accepted it in the meantime (D-173 race guard)", async () => {
+    const readyRequests = [
+      { id: "req-ready-1", reference: "REQREADY", totalMinor: "3580000", currency: "COP" },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: null,
+                step: "selecting_cancel_ready",
+                context: { readyRequests },
+              },
+            ],
+          };
+        if (sql.includes("update app.commercial_requests set status='cancelled'"))
+          return { rows: [], rowCount: 0 };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "1",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { selectionIndex: 1 },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply?.body).toContain("ya no se puede cancelar");
   });
 
   const fulfillmentUnderstanding = (requestedAction: string) => ({

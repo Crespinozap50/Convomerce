@@ -363,8 +363,16 @@ export class CommercialFlowService {
     if (input.understanding.requiresHuman) return null;
     if (command === "help") return this.helpReply(input.locale);
     if (command === "catalog") return null;
-    if (!flow && command === "cancel")
-      return this.localizedReply(input.locale, "nothingToCancel");
+    // D-173 (docs/decisions.md): "cancela mi pedido" with no active draft
+    // always answered nothingToCancel, even when the customer had a real,
+    // just-confirmed order sitting in 'ready' status — the business
+    // hasn't accepted/started preparing it yet, so self-cancelling is
+    // still safe. Self-service cancellation stops being offered the
+    // moment status moves past 'ready' (accepted/in_progress/...),
+    // matching what the admin panel-only path already enforces for every
+    // other status — cancelReadyOrderReply only ever looks at 'ready'
+    // rows, never anything further along.
+    if (!flow && command === "cancel") return this.cancelReadyOrderReply(client, input);
     // D-169 (docs/decisions.md) live finding (Santos Tacos): "quita el
     // burrito de mi pedido" with no active order at all still fell
     // through to startNewOrder() below, which — having no idea the intent
@@ -378,6 +386,7 @@ export class CommercialFlowService {
     const globalResult = await this.handleGlobalCommand(client, input, flow, command, negative);
     if (globalResult !== undefined) return globalResult;
     if (flow.step === "selecting_replace_target") return this.handleSelectingReplaceTarget(client, input, flow);
+    if (flow.step === "selecting_cancel_ready") return this.handleSelectingCancelReadyOrder(client, input, flow);
     if (flow.step === "selecting_item") return this.handleSelectingItem(client, input, flow);
     if (flow.step === "awaiting_more_items") return this.handleAwaitingMoreItems(client, input, flow, affirmative);
     if (flow.step === "removing_item") return this.handleRemovingItem(client, input, flow);
@@ -1012,6 +1021,21 @@ export class CommercialFlowService {
     }
     const { match, tied } = await this.matchItemCandidates(client, input);
     if (tied.length > 1) {
+      // D-174 follow-up (docs/decisions.md) live finding: the retyped text
+      // itself can be ambiguous in the catalog ("agua" ties between
+      // Agua/Agua fresca/Aguas Frescas at Santos Tacos) — the D-174 guard
+      // below never runs in that case since it needs a single unambiguous
+      // `match`, so a customer negating an already-in-cart item ("ya no
+      // quiero el agua") got stuck seeing the same disambiguation list
+      // forever instead of the item being removed. Checking whether any of
+      // the *freshly* tied candidates is already a real cart line — before
+      // re-asking the same question — only ever fires on a genuine
+      // negation naming something truly in the cart, same as D-172/D-174.
+      if (CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
+        const cart = await this.cartItems(client, flow.commercial_request_id, input.locale);
+        const cartMatch = tied.find((candidate) => cart.some((line) => line.variant_id === candidate.variant_id));
+        if (cartMatch) return this.removeItem(client, flow, input.locale, cartMatch);
+      }
       await this.step(client, flow.id, "selecting_item", {
         ...flow.context,
         tiedItems: tied,
@@ -1034,6 +1058,18 @@ export class CommercialFlowService {
         this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), "itemUnknown", {}, input.categoryLabelPrefix ?? null) ??
         this.catalogButtonReply(input.locale, "itemUnknown")
       );
+    // D-174 (docs/decisions.md): same guard as handleAwaitingMoreItems
+    // (D-172) — a customer who retypes instead of tapping while
+    // disambiguating/replacing can just as easily be negating something
+    // already in the cart ("ya no quiero la cerveza") as naming a new
+    // product. Only ever fires when the named product is already in the
+    // cart, so it can never misfire on a genuine new item or replacement.
+    if (match && CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
+      const cart = await this.cartItems(client, flow.commercial_request_id, input.locale);
+      if (cart.some((line) => line.variant_id === match.variant_id)) {
+        return this.removeItem(client, flow, input.locale, match);
+      }
+    }
     await this.addItem(
       client,
       input.tenantId,
@@ -1649,6 +1685,118 @@ export class CommercialFlowService {
       return this.changeWhatReply(input.locale);
     }
     return this.confirmOrderReply(input.locale);
+  }
+  // D-173: "cancela mi pedido" with no active draft — looks only at this
+  // tenant's own 'ready' requests for this exact conversation/contact
+  // (never anything further along, see the call site's own comment for
+  // why). No new commercial_request is created here (unlike every other
+  // workflow-starting branch in this file) — commercial_request_id is
+  // left null on purpose, since this workflow isn't building a new order,
+  // just tracking which already-real one the customer is about to cancel.
+  private async cancelReadyOrderReply(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+  ): Promise<DeterministicReply> {
+    const ready = await client.query<{ id: string; total_minor: string; currency: string }>(
+      `select id,total_minor::text,currency from app.commercial_requests
+       where tenant_id=$1 and conversation_id=$2 and contact_id=$3 and status='ready'
+       order by confirmed_at desc`,
+      [input.tenantId, input.conversationId, input.contactId],
+    );
+    if (ready.rows.length === 0) return this.localizedReply(input.locale, "nothingToCancel");
+    const readyRequests = ready.rows.map((row) => ({
+      id: row.id,
+      reference: row.id.slice(-8).toUpperCase(),
+      totalMinor: row.total_minor,
+      currency: row.currency,
+    }));
+    const flowId = uuidv7();
+    await client.query(
+      `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,operation_type,step,context) values($1,$2,$3,$4,'order','selecting_cancel_ready',$5::jsonb)`,
+      [flowId, input.tenantId, input.conversationId, input.contactId, JSON.stringify({ readyRequests })],
+    );
+    return this.cancelReadyChoiceReply(input.locale, readyRequests);
+  }
+  private cancelReadyChoiceReply(
+    locale: Locale,
+    readyRequests: { id: string; reference: string; totalMinor: string; currency: string }[],
+  ): DeterministicReply {
+    // Never forces the customer to type/remember the reference number
+    // back — it's only ever shown here to tell two real orders apart
+    // when there happen to be more than one; tapping is always enough.
+    const options: InteractiveMessage["options"] = readyRequests.slice(0, 9).map((request, index) => ({
+      id: String(index + 1),
+      title: this.truncate(`Pedido #${request.reference}`, 24),
+      description: formatMoney(request.totalMinor, request.currency, locale),
+    }));
+    options.push({
+      id: String(options.length + 1),
+      title: this.copy(locale, "cancelReadyKeep"),
+    });
+    const bodyKey: CommercialCopyKey =
+      readyRequests.length > 1 ? "cancelReadyChoiceMany" : "cancelReadyChoiceOne";
+    const body = this.copy(locale, bodyKey);
+    return {
+      ...this.reply(body),
+      responsePlan: {
+        kind: "verified_content",
+        body,
+        interactive: {
+          type: "list",
+          body: "",
+          buttonLabel: this.copy(locale, "chooseButtonLabel"),
+          options,
+        },
+      },
+    };
+  }
+  private async handleSelectingCancelReadyOrder(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+    flow: Workflow,
+  ): Promise<DeterministicReply | null> {
+    const readyRequests = (flow.context.readyRequests ?? []) as {
+      id: string;
+      reference: string;
+      totalMinor: string;
+      currency: string;
+    }[];
+    const selectionIndex = input.understanding.entities.selectionIndex;
+    const keepIndex = readyRequests.length + 1;
+    if (typeof selectionIndex === "number" && selectionIndex === keepIndex) {
+      await client.query(
+        `update app.conversation_workflows set status='completed',updated_at=now() where id=$1`,
+        [flow.id],
+      );
+      return this.localizedReply(input.locale, "cancelReadyKept");
+    }
+    const chosen =
+      typeof selectionIndex === "number" ? readyRequests[selectionIndex - 1] : undefined;
+    await client.query(
+      `update app.conversation_workflows set status='completed',updated_at=now() where id=$1`,
+      [flow.id],
+    );
+    if (!chosen) {
+      // Free text that doesn't resolve to a tap never leaves this pending
+      // step blocking every future message — cleared above, then deferred
+      // (return null), same "not mine to handle" convention every other
+      // step in this file already uses.
+      return null;
+    }
+    // Re-checks status='ready' at the moment of cancelling, not just when
+    // the list was built — the business may have accepted it in the time
+    // between the list being shown and this tap arriving. rowCount===0
+    // means exactly that race happened; never claimed as cancelled when
+    // it wasn't.
+    const cancelled = await client.query(
+      `update app.commercial_requests set status='cancelled',updated_at=now() where tenant_id=$1 and id=$2 and status='ready'`,
+      [input.tenantId, chosen.id],
+    );
+    if (cancelled.rowCount === 0) return this.localizedReply(input.locale, "cancelReadyTooLate");
+    return this.localizedReply(input.locale, "cancelReadyCancelled", {
+      reference: chosen.reference,
+      total: formatMoney(chosen.totalMinor, chosen.currency, input.locale),
+    });
   }
   // Applied after matchItemMentions() finds a decomposition — its matched
   // items are already in the cart (addItem already ran on multi.matches) by
