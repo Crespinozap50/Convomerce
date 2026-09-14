@@ -159,12 +159,43 @@ describe('D-128/D-129 — recomendación consultiva de CrediCel Store (tecnologi
     await pool.end();
   });
 
+  // D-178 (docs/decisions.md) live finding: consultativeRecommendations.
+  // recommend() (D-161) sends the real request as a catalog ARRAY-POSITION
+  // `id` per item (never the raw variantId — see
+  // consultative-recommendation.service.ts's own D-161 comment: the id
+  // text alone was a meaningful share of input tokens on a large catalog)
+  // and expects the response picks shaped the same way ({ id, reason }),
+  // verifying each `id` against the real candidate list before ever
+  // resolving it back to a variantId. This mock used to respond with
+  // { variantId, reason } directly — a shape the real code never accepts
+  // (`typeof raw.id !== "number"` rejects every single mocked pick
+  // silently) — so every test using it always got an effectively empty
+  // recommendation, whether or not the fixture data or flow logic was
+  // actually correct. Fixed by reading the REAL request body (the id
+  // position depends on real DB query order, never assumed fixed) and
+  // translating each desired variantId to whatever position it actually
+  // landed at, via the two known fixture names below.
+  const variantNames = new Map<string, string>([
+    [equipoPortatilDemo.variantId, equipoPortatilDemo.name],
+    [portatilAcer.variantId, portatilAcer.name],
+  ]);
+
   function mockAiPicks(picks: { variantId: string; reason: string }[] | null) {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: jest.fn().mockResolvedValue({
-        output_text: JSON.stringify({ picks: picks ?? [] }),
-      }),
+    global.fetch = jest.fn().mockImplementation(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body) as { input: string };
+      const requestInput = JSON.parse(body.input) as { catalog: { id: number; name: string }[] };
+      const nameToId = new Map(requestInput.catalog.map((item) => [item.name, item.id]));
+      const translated = (picks ?? [])
+        .map((pick) => {
+          const name = variantNames.get(pick.variantId);
+          const id = name !== undefined ? nameToId.get(name) : undefined;
+          return id === undefined ? null : { id, reason: pick.reason };
+        })
+        .filter((pick): pick is { id: number; reason: string } => pick !== null);
+      return {
+        ok: true,
+        json: async () => ({ output_text: JSON.stringify({ picks: translated }) }),
+      };
     }) as never;
   }
 
