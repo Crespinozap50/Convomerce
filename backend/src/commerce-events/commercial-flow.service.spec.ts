@@ -3714,6 +3714,101 @@ describe("CommercialFlowService", () => {
     ).toBe(false);
   });
 
+  it("removes an already-cart item on a plain negation with no 'quitar' verb at all, instead of adding a second one (D-172 live finding, Santos Tacos)", async () => {
+    // Found live: with a beer already in the cart, "ya no quiero la
+    // cerveza, se me olvido que estoy manejando" matched "Cerveza Sol"
+    // through the exact same single-item add path a genuine new order
+    // uses, and got added AGAIN — doubling the quantity instead of
+    // removing it. classifyFlowCommand's removeItem pattern only ever
+    // recognizes an explicit verb ("quitar/quita/eliminar/remover"), and
+    // this message has none.
+    const beer = {
+      item_id: "cerveza",
+      variant_id: "cerveza-variant",
+      name: "Cerveza Sol",
+      variant_name: "Unidad",
+      price_minor: "800000",
+      currency: "COP",
+    };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [beer] };
+        if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+          return { rows: [beer] };
+        return { rows: [] };
+      }),
+    };
+    const message = "ya no quiero la cerveza, se me olvido que estoy manejando";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("update app.request_lines set status='removed'"),
+      ),
+    ).toBe(true);
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(false);
+  });
+
+  it("still adds a genuinely new item on a negation-flavored message, when that item was never in the cart to begin with (D-172 regression guard)", async () => {
+    // The guard above only ever fires when the named product is already
+    // in the cart — a coincidental "no quiero" in a message that actually
+    // names something new must still add it normally, never silently
+    // drop it just because the word "no" appears somewhere in the text.
+    const soda = {
+      item_id: "soda",
+      variant_id: "soda-variant",
+      name: "Soda",
+      variant_name: "Unidad",
+      price_minor: "600000",
+      currency: "COP",
+    };
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+            ],
+          };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [soda] };
+        if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+          return { rows: [] };
+        return { rows: [] };
+      }),
+    };
+    const message = "ya no quiero soda";
+
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+    ).toBe(true);
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("update app.request_lines set status='removed'"),
+      ),
+    ).toBe(false);
+  });
+
   it("resolves a remove-item tie between same-named cart variants by the option index (D-051 follow-up)", async () => {
     // Same structural bug as the add-item case (D-050/D-051): two "Agua
     // fresca" variants both active in the cart share every name token, so

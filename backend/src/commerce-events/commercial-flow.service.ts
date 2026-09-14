@@ -1108,6 +1108,25 @@ export class CommercialFlowService {
     // (returning null) here lets the knowledge/price layer answer instead,
     // exactly like startNewOrder's own questionOrNoMatch guard already does.
     if (match && looksLikeQuestion(input.body)) return null;
+    // D-172 (docs/decisions.md) live finding (Santos Tacos): "ya no quiero
+    // la cerveza, se me olvido que estoy manejando" — a natural negation
+    // with no "quitar/quita" verb at all — matched "Cerveza Sol" through
+    // this exact same single-item path a genuine new addition uses, and
+    // got added AGAIN, doubling the quantity instead of removing it.
+    // classifyFlowCommand's removeItem pattern only recognizes an
+    // explicit removal verb, and widening that pattern globally would
+    // risk misclassifying something unrelated ("ya no quiero domicilio,
+    // prefiero recogida" — removeItem is checked before changeFulfillment
+    // there). Scoped instead to exactly the one case that can never be a
+    // false positive: a negation marker naming a product that is ALREADY
+    // in this cart — never fires for a genuine new item, which can't
+    // possibly already be in the cart under the same variant.
+    if (match && CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
+      const cart = await this.cartItems(client, flow.commercial_request_id, input.locale);
+      if (cart.some((line) => line.variant_id === match.variant_id)) {
+        return this.removeItem(client, flow, input.locale, match);
+      }
+    }
     if (match) {
       await this.addItem(
         client,
@@ -2389,6 +2408,13 @@ export class CommercialFlowService {
       ? { match: tiedByVariant[0].item, tied: [] }
       : { match: null, tied: equallyRelevant.map((candidate) => candidate.item) };
   }
+  // D-172: see the live finding comment at its one call site
+  // (handleAwaitingMoreItems) for why this is scoped so narrowly —
+  // "no quiero" alone is far too common in unrelated contexts (declining
+  // an upsell, a fulfillment preference) to ever classify as a removal on
+  // its own; only paired with "already in the cart" is it unambiguous.
+  private static readonly NEGATION_MARKER_PATTERN =
+    /\b(?:ya no quiero|no quiero mas|no quiero ya|olvida el|olvida la|mejor sin)\b/;
   // Splits "nachos y 3 tacos vegetarianos" into ["nachos", "3 tacos
   // vegetarianos"] so each product mention can be matched and quantified on
   // its own — scoring the whole message as one flat token bag (searchTerms)
