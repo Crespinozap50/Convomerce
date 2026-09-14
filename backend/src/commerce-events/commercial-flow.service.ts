@@ -2766,9 +2766,27 @@ export class CommercialFlowService {
       const matchCategoryNoun = match
         ? singularize(norm(match.category ?? "").split(" ")[0] ?? "")
         : "";
+      // D-178 (docs/decisions.md) live finding (CrediCel, integration
+      // tests): "una Funda protectora para celular" (category
+      // "accesorios") false-positived here — "celular" is a real category
+      // noun (the tenant also sells "celulares"), so the original check
+      // rejected an otherwise-perfect match even though "celular" is
+      // legitimately part of the matched item's OWN name (it names the
+      // device the case is compatible with, not a wrong category). The
+      // burrito/tacos bug this check was built for (D-169) never had this
+      // shape: "Tacos de pollo" never contains the word "burrito" anywhere
+      // in its own name. Excluding any token already present in the
+      // matched item's own name keeps the original guard intact for a
+      // genuine conflict while never rejecting a product whose real name
+      // simply mentions what it's for.
+      const matchNameTokens = match
+        ? new Set(norm(match.name).split(" ").map(singularize))
+        : new Set<string>();
       const namesConflictingCategory =
         match !== null &&
-        [...tokens].some((token) => categoryNouns.has(token) && token !== matchCategoryNoun);
+        [...tokens].some(
+          (token) => categoryNouns.has(token) && token !== matchCategoryNoun && !matchNameTokens.has(token),
+        );
       // D-135 live finding: a match this segment's own words only weakly
       // support (e.g. "diseño" alone matching "Tablet premium para diseño"
       // when the customer actually asked for "un computador para diseño

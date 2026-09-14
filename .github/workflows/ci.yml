@@ -39,8 +39,13 @@ jobs:
       # Reuses the exact same Docker Compose services and scripts a developer
       # runs locally (see README.md) instead of GitHub Actions' native
       # "services:" containers, so CI and local dev never drift apart.
-      - name: Start Postgres and Redis
-        run: docker compose up -d --wait postgres redis
+      # mailhog is required too: password-reset/email-invitation integration
+      # tests send real emails through it and poll its API for them — this
+      # step used to start only postgres/redis, so every run here failed
+      # those two suites with ECONNREFUSED on localhost:51025, even though
+      # docker-compose.yml already declares the service.
+      - name: Start Postgres, Redis and MailHog
+        run: docker compose up -d --wait postgres redis mailhog
       - name: Apply migrations
         run: ./database/scripts/migrate.sh
       - name: Load seed data

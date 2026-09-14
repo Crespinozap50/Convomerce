@@ -3676,6 +3676,66 @@ describe("CommercialFlowService", () => {
     expect(reply).not.toBeNull();
   });
 
+  it("never rejects a match whose own name legitimately contains a real category noun describing what it's compatible with (D-178 follow-up to D-169, CrediCel)", async () => {
+    // Found live/in CI: "una Funda protectora para celular" (category
+    // "Accesorios") false-positived the D-169 category-conflict guard —
+    // "celular" is a real category noun (this tenant also sells
+    // "Celulares"), so the original check rejected an otherwise-perfect
+    // match even though "celular" is legitimately part of the matched
+    // item's OWN name (it names the device the case is compatible with,
+    // not a wrong category claim). The original burrito/tacos bug never
+    // had this shape: "Tacos de pollo" never contains the word "burrito"
+    // anywhere in its own name — "Funda protectora para celular" DOES
+    // contain "celular". Excluding any token already present in the
+    // matched item's own name (matchNameTokens) closes this without
+    // reopening the original bug.
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "item-funda",
+          variant_id: "variant-funda",
+          name: "Funda protectora para celular",
+          category: "Accesorios",
+          variant_name: "Único",
+          price_minor: "3500000",
+          currency: "COP",
+        },
+        {
+          item_id: "item-parlante",
+          variant_id: "variant-parlante",
+          name: "Parlante Bluetooth portátil",
+          category: "Accesorios",
+          variant_name: "Único",
+          price_minor: "22000000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("select distinct item.category from app.catalog_items"))
+          return { rows: [{ category: "Celulares" }, { category: "Accesorios" }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return catalogRows;
+        return { rows: [] };
+      }),
+    };
+
+    const message = "Quiero un Parlante Bluetooth portátil y una Funda protectora para celular";
+    await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    const insertCalls = client.query.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into app.request_lines"),
+    );
+    expect(JSON.stringify(insertCalls)).toContain("variant-parlante");
+    expect(JSON.stringify(insertCalls)).toContain("variant-funda");
+  });
+
   it("does not crash when every segment of a multi-item message ties, falling back to reporting the second tie as unmatched (D-100 deferred finding, edge case)", async () => {
     // matchItemMentions() only ever tracks one pending tie at a time (see
     // its own comment) — a genuinely rare second simultaneous tie in the
