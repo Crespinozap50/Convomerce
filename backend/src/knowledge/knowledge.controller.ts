@@ -8,8 +8,13 @@ import {
   Post,
   Put,
   Req,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { Response } from "express";
 import { validate as uuid } from "uuid";
 import { SessionAuthGuard } from "../auth/session-auth.guard";
 import { PasswordReadyGuard } from "../auth/password-ready.guard";
@@ -18,6 +23,7 @@ import { badRequest } from "../observability/http-errors";
 import {
   capabilityNames,
   CapabilityName,
+  IMPORT_TEMPLATE_CSV,
   KnowledgeService,
   OfferingInput,
   ProfileInput,
@@ -189,6 +195,55 @@ export class KnowledgeController {
       offeringId,
       variantId,
       parseVariantLocalization(body),
+    );
+  }
+  // CSV catalog import/export — lets a business owner manage a large real
+  // catalog (hundreds of products) from a spreadsheet instead of one form
+  // per product. Same content-type-override pattern MetricsController
+  // already uses for a non-JSON response body.
+  @Get("offerings/export") async exportOfferings(
+    @Param("tenantId") id: string,
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    valid(id);
+    const csv = await this.service.exportOfferingsCsv(id, request.actor.userId);
+    response.setHeader("content-type", "text/csv; charset=utf-8");
+    response.setHeader(
+      "content-disposition",
+      `attachment; filename="catalogo-${id}-${new Date().toISOString().slice(0, 10)}.csv"`,
+    );
+    return csv;
+  }
+  @Get("offerings/import-template") importTemplate(
+    @Param("tenantId") id: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    valid(id);
+    response.setHeader("content-type", "text/csv; charset=utf-8");
+    response.setHeader(
+      "content-disposition",
+      'attachment; filename="plantilla-catalogo.csv"',
+    );
+    return IMPORT_TEMPLATE_CSV;
+  }
+  @Post("offerings/import")
+  @UseInterceptors(
+    FileInterceptor("file", {
+      limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 0 },
+    }),
+  )
+  async importOfferings(
+    @Param("tenantId") id: string,
+    @UploadedFile() file: { buffer: Buffer } | undefined,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    valid(id);
+    if (!file) throw badRequest("CSV_FILE_REQUIRED", "No file was uploaded");
+    return this.service.importOfferingsCsv(
+      id,
+      request.actor.userId,
+      file.buffer.toString("utf-8"),
     );
   }
   @Post("unresolved/:questionId/review") review(

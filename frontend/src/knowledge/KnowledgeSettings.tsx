@@ -1,7 +1,15 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { BookOpen, CalendarDays, PackageSearch, Pencil, Plus } from "lucide-react";
-import { api } from "../api";
+import {
+  BookOpen,
+  CalendarDays,
+  Download,
+  PackageSearch,
+  Pencil,
+  Plus,
+  Upload,
+} from "lucide-react";
+import { api, apiDownload, apiUpload } from "../api";
 import {
   BusinessProfile,
   CapabilityName,
@@ -17,6 +25,13 @@ import { OfferingModal } from "./OfferingModal";
 import { LearnedResponsesPanel } from "./LearnedResponsesPanel";
 import { LearningQuestion } from "./LearningQuestion";
 import { PublishedAnswer } from "./PublishedAnswer";
+
+export type CsvImportOutcome = {
+  created: number;
+  updated: number;
+  archived: number;
+  errors: { row: number; message: string }[];
+};
 
 export type ModifierGroup = {
   id: string;
@@ -144,6 +159,9 @@ export function KnowledgeSettings({
   const [productSearch, setProductSearch] = useState("");
   const [productPage, setProductPage] = useState(1);
   const PRODUCTS_PER_PAGE = 20;
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvResult, setCsvResult] = useState<CsvImportOutcome | null>(null);
+  const csvFileInput = useRef<HTMLInputElement>(null);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [modifierGroupsCanManage, setModifierGroupsCanManage] = useState(false);
   const loadModifierGroups = async () => {
@@ -228,6 +246,59 @@ export function KnowledgeSettings({
       const message = (x as Error).message;
       setError(message);
       onNotice(message, "error");
+    }
+  }
+  async function downloadCatalogCsv() {
+    try {
+      await apiDownload(
+        `/v1/admin/tenants/${tenant}/knowledge/offerings/export`,
+        `catalogo-${tenant}.csv`,
+      );
+    } catch (x) {
+      onNotice((x as Error).message, "error");
+    }
+  }
+  async function downloadCsvTemplate() {
+    try {
+      await apiDownload(
+        `/v1/admin/tenants/${tenant}/knowledge/offerings/import-template`,
+        "plantilla-catalogo.csv",
+      );
+    } catch (x) {
+      onNotice((x as Error).message, "error");
+    }
+  }
+  async function importCsv(file: File) {
+    setCsvBusy(true);
+    setCsvResult(null);
+    try {
+      const outcome = await apiUpload<CsvImportOutcome>(
+        `/v1/admin/tenants/${tenant}/knowledge/offerings/import`,
+        file,
+      );
+      setCsvResult(outcome);
+      // Re-fetch rather than merge row-by-row — an import can create,
+      // update, and archive an arbitrary number of products/variants in one
+      // call, unlike every other mutation on this page which touches one
+      // offering at a time.
+      const refreshed = await api<{ products: Offering[] }>(
+        `/v1/admin/tenants/${tenant}/knowledge`,
+      );
+      setProducts(refreshed.products);
+      onNotice(
+        outcome.errors.length > 0
+          ? t("knowledge.csvImportBlocked")
+          : t("knowledge.csvImportResult", {
+              created: outcome.created,
+              updated: outcome.updated,
+              archived: outcome.archived,
+            }),
+        outcome.errors.length > 0 ? "error" : "success",
+      );
+    } catch (x) {
+      onNotice((x as Error).message, "error");
+    } finally {
+      setCsvBusy(false);
     }
   }
   async function submit(e: FormEvent) {
@@ -505,6 +576,86 @@ export function KnowledgeSettings({
                 <PackageSearch />
               )}
             </div>
+            {value.canManage && (
+              <div className="offering-csv-actions">
+                <button
+                  type="button"
+                  className="secondary compact-action"
+                  onClick={() => void downloadCatalogCsv()}
+                >
+                  <Download size={15} /> {t("knowledge.csvExport")}
+                </button>
+                <button
+                  type="button"
+                  className="secondary compact-action"
+                  onClick={() => void downloadCsvTemplate()}
+                >
+                  <Download size={15} /> {t("knowledge.csvTemplate")}
+                </button>
+                <button
+                  type="button"
+                  className="secondary compact-action"
+                  disabled={csvBusy}
+                  onClick={() => csvFileInput.current?.click()}
+                >
+                  <Upload size={15} />
+                  {csvBusy ? t("knowledge.csvImporting") : t("knowledge.csvImport")}
+                </button>
+                <input
+                  ref={csvFileInput}
+                  type="file"
+                  accept=".csv,text/csv"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) void importCsv(file);
+                  }}
+                />
+                <FieldHelp>{t("knowledge.csvImportHelp")}</FieldHelp>
+              </div>
+            )}
+            {csvResult && (
+              <div
+                className={
+                  csvResult.errors.length > 0
+                    ? "offering-csv-report has-errors"
+                    : "offering-csv-report"
+                }
+              >
+                <div>
+                  <strong>
+                    {csvResult.errors.length > 0
+                      ? t("knowledge.csvImportBlocked")
+                      : t("knowledge.csvImportResult", {
+                          created: csvResult.created,
+                          updated: csvResult.updated,
+                          archived: csvResult.archived,
+                        })}
+                  </strong>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={t("common.dismiss")}
+                    onClick={() => setCsvResult(null)}
+                  >
+                    ×
+                  </button>
+                </div>
+                {csvResult.errors.length > 0 && (
+                  <ul>
+                    {csvResult.errors.map((error, index) => (
+                      <li key={index}>
+                        {t("knowledge.csvImportErrorRow", {
+                          row: error.row,
+                          message: error.message,
+                        })}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
             {products.length > 0 && (
               <div className="offering-search">
                 <input

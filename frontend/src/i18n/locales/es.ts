@@ -464,6 +464,17 @@ export default {
     paginationPrevious: "Anterior",
     paginationNext: "Siguiente",
     paginationSummary: "{{from}}–{{to}} de {{total}}",
+    csvExport: "Descargar catálogo (CSV)",
+    csvTemplate: "Descargar plantilla de ejemplo",
+    csvImport: "Importar CSV",
+    csvImporting: "Importando…",
+    csvImportHelp:
+      "Una fila por variante. Deja id_producto/id_variante vacíos para crear; complétalos para actualizar; usa accion=eliminar para archivar. Si alguna fila tiene un error, no se aplica ninguna — corrige y vuelve a subir el archivo completo sin riesgo de duplicar lo que ya se había creado. Valores válidos — tipo: product, service, prepared_product, appointment, package. estado_producto/estado_variante: active, inactive. disponibilidad: available, unavailable.",
+    csvImportResult:
+      "{{created}} creados, {{updated}} actualizados, {{archived}} archivados",
+    csvImportBlocked:
+      "No se aplicó ningún cambio — corrige los errores y vuelve a subir el archivo completo.",
+    csvImportErrorRow: "Fila {{row}}: {{message}}",
     extrasTitle: "Adiciones",
     extrasHelp:
       "Grupos de extras reutilizables (ej. \"Extras de tacos\": queso, guacamole) que puedes asignar a varios productos. El bot los ofrece por WhatsApp al agregar un producto que los tenga.",

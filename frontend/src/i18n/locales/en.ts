@@ -460,6 +460,17 @@ export default {
     paginationPrevious: "Previous",
     paginationNext: "Next",
     paginationSummary: "{{from}}–{{to}} of {{total}}",
+    csvExport: "Download catalog (CSV)",
+    csvTemplate: "Download example template",
+    csvImport: "Import CSV",
+    csvImporting: "Importing…",
+    csvImportHelp:
+      "One row per variant. Leave id_producto/id_variante empty to create; fill them in to update; use accion=eliminar to archive. If any row has an error, nothing is applied — fix it and re-upload the whole file with no risk of duplicating what was already created. Valid values — tipo: product, service, prepared_product, appointment, package. estado_producto/estado_variante: active, inactive. disponibilidad: available, unavailable.",
+    csvImportResult:
+      "{{created}} created, {{updated}} updated, {{archived}} archived",
+    csvImportBlocked:
+      "No changes were applied — fix the errors and re-upload the whole file.",
+    csvImportErrorRow: "Row {{row}}: {{message}}",
     extrasTitle: "Extras",
     extrasHelp:
       "Reusable extras groups (e.g. \"Taco extras\": cheese, guacamole) you can assign to several products. The bot offers them over WhatsApp when a customer adds a product that has them.",

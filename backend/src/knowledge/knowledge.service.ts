@@ -1,7 +1,9 @@
-import { Injectable } from "@nestjs/common";
+import { HttpException, Injectable } from "@nestjs/common";
 import { PoolClient } from "pg";
+import { parse as parseCsv } from "csv-parse/sync";
+import { stringify as stringifyCsv } from "csv-stringify/sync";
 import { DatabaseService } from "../database/database.service";
-import { conflict, forbidden, notFound } from "../observability/http-errors";
+import { badRequest, conflict, forbidden, notFound } from "../observability/http-errors";
 import { v7 as uuidv7 } from "uuid";
 
 export type ProfileInput = {
@@ -637,6 +639,242 @@ export class KnowledgeService {
       return { offering: await this.readOffering(client, offeringId) };
     });
   }
+  // CSV import/export: a thin orchestration layer over the offering/variant
+  // methods above — every row just becomes a call to one of them, so it
+  // inherits their guards (canManage, manual-only, SKU uniqueness, last
+  // active variant) for free instead of re-implementing any of it here.
+  async exportOfferingsCsv(tenantId: string, userId: string): Promise<string> {
+    const { products } = await this.get(tenantId, userId);
+    const rows: string[][] = [CSV_COLUMNS];
+    for (const product of products) {
+      for (const variant of product.variants) {
+        if (variant.status === "archived") continue;
+        rows.push(buildCsvRow(product, variant));
+      }
+    }
+    return stringifyCsv(rows);
+  }
+  // Two phases, deliberately not one pass with per-row try/catch: a "create"
+  // row (empty id_producto/id_variante) is never safe to retry — if a file
+  // stopped partway and the admin just re-uploads the same file to pick up
+  // where it left off, every create row that already succeeded would create
+  // a duplicate product, since the file still has no id for it. Validating
+  // every row's action CAN be performed before performing any of them means
+  // a bad file is rejected as a whole, with a complete error list in one
+  // shot, and re-uploading after fixing it never duplicates anything because
+  // nothing was written the first time.
+  async importOfferingsCsv(
+    tenantId: string,
+    userId: string,
+    csvText: string,
+  ): Promise<CsvImportOutcome> {
+    let records: Record<string, string>[];
+    try {
+      records = parseCsv(csvText, {
+        columns: true,
+        trim: true,
+        skip_empty_lines: true,
+        bom: true,
+      });
+    } catch {
+      throw badRequest("CSV_INVALID", "The file is not a valid CSV");
+    }
+    if (records.length > 5000)
+      throw badRequest("CSV_TOO_LARGE", "The file has more than 5000 rows");
+    const parseErrors: { row: number; message: string }[] = [];
+    const actionRows: { row: number; action: CsvRowAction }[] = [];
+    records.forEach((record, index) => {
+      const row = index + 2; // header occupies row 1
+      try {
+        actionRows.push({ row, action: parseCsvRow(record) });
+      } catch (error) {
+        parseErrors.push({ row, message: csvRowErrorMessage(error) });
+      }
+    });
+    const dbErrors =
+      actionRows.length > 0
+        ? await this.validateCsvRows(tenantId, userId, actionRows)
+        : [];
+    const errors = [...parseErrors, ...dbErrors].sort((a, b) => a.row - b.row);
+    if (errors.length > 0)
+      return { created: 0, updated: 0, archived: 0, errors };
+    const outcome: CsvImportOutcome = {
+      created: 0,
+      updated: 0,
+      archived: 0,
+      errors: [],
+    };
+    for (const { row, action: parsed } of actionRows) {
+      // Reaching a caught error here should be rare-to-never — every row
+      // already passed validateCsvRows above — kept only as a defensive net
+      // against a genuine race (e.g. another session editing the same
+      // offering between the validate and execute passes), surfaced as a
+      // normal per-row error instead of a silent 500.
+      try {
+        if (parsed.kind === "delete") {
+          if (parsed.variantId)
+            await this.archiveVariant(
+              tenantId,
+              userId,
+              parsed.offeringId,
+              parsed.variantId,
+            );
+          else await this.archiveOffering(tenantId, userId, parsed.offeringId);
+          outcome.archived++;
+          continue;
+        }
+        if (!parsed.offeringId) {
+          const { offering } = await this.createOffering(
+            tenantId,
+            userId,
+            parsed.offering,
+            parsed.variant,
+          );
+          if (parsed.offeringTranslation)
+            await this.saveOfferingLocalization(
+              tenantId,
+              userId,
+              offering.id,
+              parsed.offeringTranslation,
+            );
+          // The variant just created can't be told apart from any sibling
+          // by id without relying on array-position ordering — translating
+          // it is deferred to a follow-up row (once export exposes its real
+          // id), same limitation noted in the import help text.
+          outcome.created++;
+          continue;
+        }
+        await this.updateOffering(
+          tenantId,
+          userId,
+          parsed.offeringId,
+          parsed.offering,
+        );
+        if (parsed.offeringTranslation)
+          await this.saveOfferingLocalization(
+            tenantId,
+            userId,
+            parsed.offeringId,
+            parsed.offeringTranslation,
+          );
+        if (parsed.variantId) {
+          await this.updateVariant(
+            tenantId,
+            userId,
+            parsed.offeringId,
+            parsed.variantId,
+            parsed.variant,
+          );
+          if (parsed.variantTranslation)
+            await this.saveVariantLocalization(
+              tenantId,
+              userId,
+              parsed.offeringId,
+              parsed.variantId,
+              parsed.variantTranslation,
+            );
+          outcome.updated++;
+        } else {
+          await this.createVariant(
+            tenantId,
+            userId,
+            parsed.offeringId,
+            parsed.variant,
+          );
+          outcome.created++;
+        }
+      } catch (error) {
+        outcome.errors.push({ row, message: csvRowErrorMessage(error) });
+      }
+    }
+    return outcome;
+  }
+  // Read-only pre-flight for every parsed row: everything the real
+  // create/update/archive methods would themselves reject, checked here
+  // without writing anything, so importOfferingsCsv can refuse a bad file
+  // as a whole instead of applying part of it. Deliberately duplicates each
+  // guard's condition (manual-only, SKU uniqueness, last active variant)
+  // rather than calling the real methods — those methods write on success,
+  // which is exactly what this pass must not do.
+  private async validateCsvRows(
+    tenantId: string,
+    userId: string,
+    rows: { row: number; action: CsvRowAction }[],
+  ): Promise<{ row: number; message: string }[]> {
+    return this.db.withTenantTransaction(tenantId, async (client) => {
+      if (!(await this.canManage(client, userId)))
+        throw forbidden("KNOWLEDGE_FORBIDDEN", "Actor cannot manage offerings");
+      const errors: { row: number; message: string }[] = [];
+      const skuFirstSeenAtRow = new Map<string, number>();
+      for (const { row, action } of rows) {
+        const offeringId = action.offeringId;
+        if (offeringId) {
+          const item = await client.query<{ source_provider: string }>(
+            `select source_provider from app.catalog_items where id=$1 and status<>'archived'`,
+            [offeringId],
+          );
+          if (!item.rows[0]) {
+            errors.push({ row, message: "Offering was not found" });
+            continue;
+          }
+          if (item.rows[0].source_provider !== "manual") {
+            errors.push({
+              row,
+              message:
+                "Externally synchronized offerings must be edited at their source",
+            });
+            continue;
+          }
+        }
+        const variantId = action.variantId;
+        if (variantId) {
+          const variant = await client.query<{ id: string }>(
+            `select id from app.item_variants where id=$1 and catalog_item_id=$2 and status<>'archived'`,
+            [variantId, offeringId],
+          );
+          if (!variant.rows[0]) {
+            errors.push({ row, message: "Variant was not found" });
+            continue;
+          }
+        }
+        if (action.kind === "delete") {
+          if (variantId) {
+            const remaining = await client.query<{ count: string }>(
+              `select count(*) from app.item_variants where catalog_item_id=$1 and status='active' and id<>$2`,
+              [offeringId, variantId],
+            );
+            if (Number(remaining.rows[0].count) === 0)
+              errors.push({
+                row,
+                message: "This offering must keep at least one active variant",
+              });
+          }
+          continue;
+        }
+        const sku = action.variant.sku;
+        if (!sku) continue;
+        const firstRow = skuFirstSeenAtRow.get(sku);
+        if (firstRow) {
+          errors.push({
+            row,
+            message: `sku duplicado con la fila ${firstRow}: "${sku}"`,
+          });
+          continue;
+        }
+        skuFirstSeenAtRow.set(sku, row);
+        const collision = await client.query<{ id: string }>(
+          `select id from app.item_variants where sku=$1 and status<>'archived' and ($2::uuid is null or id<>$2)`,
+          [sku, variantId ?? null],
+        );
+        if (collision.rows[0])
+          errors.push({
+            row,
+            message: "This SKU is already used by another variant",
+          });
+      }
+      return errors;
+    });
+  }
   review(
     tenantId: string,
     userId: string,
@@ -805,4 +1043,236 @@ function isPgCode(error: unknown, code: string): boolean {
     "code" in error &&
     (error as { code?: string }).code === code
   );
+}
+
+// One row = one variant, product columns repeated per row (same shape
+// Magento's own product import uses) — every row is self-contained and
+// never depends on the order or presence of any other row.
+export const CSV_COLUMNS = [
+  "id_producto",
+  "id_variante",
+  "accion",
+  "nombre_producto",
+  "descripcion_producto",
+  "categoria",
+  "tipo",
+  "estado_producto",
+  "duracion_minutos",
+  "requiere_reserva",
+  "nombre_variante",
+  "sku",
+  "precio",
+  "moneda",
+  "disponibilidad",
+  "estado_variante",
+  "nombre_producto_en",
+  "descripcion_producto_en",
+  "nombre_variante_en",
+];
+const CSV_OFFERING_TYPES = [
+  "product",
+  "service",
+  "prepared_product",
+  "appointment",
+  "package",
+];
+const CSV_STATUSES = ["active", "inactive"];
+
+type CsvOffering = {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  offeringType: string;
+  status: string;
+  durationMinutes: number | null;
+  bookingRequired: boolean;
+  translations: { en: { name: string; description: string } };
+};
+type CsvVariant = {
+  id: string;
+  name: string;
+  sku: string | null;
+  status: string;
+  priceMinor: number;
+  currency: string;
+  availabilityStatus: string;
+  translations: { en: { name: string } };
+};
+type CsvRowAction =
+  | { kind: "delete"; offeringId: string; variantId: string | null }
+  | {
+      kind: "upsert";
+      offeringId: string | null;
+      variantId: string | null;
+      offering: OfferingInput;
+      variant: VariantInput;
+      offeringTranslation: { name: string; description: string } | null;
+      variantTranslation: { name: string } | null;
+    };
+export type CsvImportOutcome = {
+  created: number;
+  updated: number;
+  archived: number;
+  errors: { row: number; message: string }[];
+};
+
+export function buildCsvRow(product: CsvOffering, variant: CsvVariant): string[] {
+  return [
+    product.id,
+    variant.id,
+    "",
+    product.name,
+    product.description ?? "",
+    product.category ?? "",
+    product.offeringType,
+    product.status,
+    product.durationMinutes === null ? "" : String(product.durationMinutes),
+    product.bookingRequired ? "true" : "false",
+    variant.name,
+    variant.sku ?? "",
+    (variant.priceMinor / 100).toString(),
+    variant.currency,
+    variant.availabilityStatus,
+    variant.status,
+    product.translations.en.name,
+    product.translations.en.description,
+    variant.translations.en.name,
+  ];
+}
+// Template constant is built with the same stringifyCsv() the real import
+// reads, so its separator/quoting always matches what the parser expects —
+// never hand-typed CSV text that could silently drift from the real format.
+export const IMPORT_TEMPLATE_CSV = stringifyCsv([
+  CSV_COLUMNS,
+  [
+    "", "", "", "Camiseta básica", "Camiseta de algodón 100%", "ropa",
+    "product", "active", "", "false", "Talla M", "", "45000", "COP",
+    "available", "active", "Basic T-shirt", "100% cotton T-shirt", "Size M",
+  ],
+  [
+    "", "", "", "Camiseta básica", "Camiseta de algodón 100%", "ropa",
+    "product", "active", "", "false", "Talla L", "", "45000", "COP",
+    "available", "active", "Basic T-shirt", "100% cotton T-shirt", "Size L",
+  ],
+  [
+    "", "", "", "Corte de cabello", "Corte y peinado", "servicios",
+    "service", "active", "30", "true", "Sesión estándar", "", "25000", "COP",
+    "available", "active", "Haircut", "Cut and styling", "Standard session",
+  ],
+]);
+
+function csvField(row: Record<string, string>, key: string): string {
+  return (row[key] ?? "").trim();
+}
+function csvBoolean(value: string): boolean {
+  return ["true", "si", "sí", "1", "yes"].includes(value.toLowerCase());
+}
+function csvRequire(value: string, field: string): string {
+  if (!value) throw new Error(`${field} es obligatorio`);
+  return value;
+}
+// The write half of the CSV orchestration layer: turns one already-parsed
+// CSV row into the exact input shape the existing create/update/archive
+// methods expect, doing the same field-level validation parseOffering()/
+// parseVariant() (knowledge.controller.ts) do for the JSON API — duplicated
+// here rather than shared, since the CSV row shape (strings, extra id/
+// accion columns) doesn't line up cleanly with the JSON body shape those
+// parse.
+export function parseCsvRow(row: Record<string, string>): CsvRowAction {
+  const offeringId = csvField(row, "id_producto") || null;
+  const variantId = csvField(row, "id_variante") || null;
+  const action = csvField(row, "accion").toLowerCase();
+  if (variantId && !offeringId)
+    throw new Error("id_variante requiere id_producto en la misma fila");
+  if (action === "eliminar") {
+    if (!offeringId)
+      throw new Error(
+        "accion=eliminar requiere id_producto (y opcionalmente id_variante)",
+      );
+    return { kind: "delete", offeringId, variantId };
+  }
+  if (action)
+    throw new Error(
+      `accion desconocida: "${action}" (deja vacío o usa "eliminar")`,
+    );
+  const offeringType = csvRequire(csvField(row, "tipo"), "tipo");
+  if (!CSV_OFFERING_TYPES.includes(offeringType))
+    throw new Error(`tipo inválido: "${offeringType}"`);
+  const offeringStatus = csvRequire(
+    csvField(row, "estado_producto"),
+    "estado_producto",
+  );
+  if (!CSV_STATUSES.includes(offeringStatus))
+    throw new Error(`estado_producto inválido: "${offeringStatus}"`);
+  const durationRaw = csvField(row, "duracion_minutos");
+  const durationMinutes = durationRaw === "" ? null : Number(durationRaw);
+  if (
+    durationMinutes !== null &&
+    (!Number.isInteger(durationMinutes) ||
+      durationMinutes <= 0 ||
+      durationMinutes > 10080)
+  )
+    throw new Error(`duracion_minutos inválido: "${durationRaw}"`);
+  const variantStatus = csvRequire(
+    csvField(row, "estado_variante"),
+    "estado_variante",
+  );
+  if (!CSV_STATUSES.includes(variantStatus))
+    throw new Error(`estado_variante inválido: "${variantStatus}"`);
+  const currency = csvRequire(csvField(row, "moneda"), "moneda").toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency))
+    throw new Error(`moneda inválida: "${currency}"`);
+  const priceRaw = csvRequire(csvField(row, "precio"), "precio");
+  const priceNumber = Number(priceRaw);
+  if (!Number.isFinite(priceNumber) || priceNumber < 0)
+    throw new Error(`precio inválido: "${priceRaw}"`);
+  const priceMinor = Math.round(priceNumber * 100);
+  if (!Number.isSafeInteger(priceMinor) || priceMinor > 999999999999)
+    throw new Error(`precio inválido: "${priceRaw}"`);
+  const offering: OfferingInput = {
+    name: csvRequire(csvField(row, "nombre_producto"), "nombre_producto"),
+    description: csvField(row, "descripcion_producto"),
+    category: csvField(row, "categoria"),
+    offeringType: offeringType as OfferingInput["offeringType"],
+    status: offeringStatus as OfferingInput["status"],
+    durationMinutes,
+    bookingRequired: csvBoolean(csvField(row, "requiere_reserva")),
+  };
+  const variant: VariantInput = {
+    name: csvRequire(csvField(row, "nombre_variante"), "nombre_variante"),
+    sku: csvField(row, "sku") || null,
+    priceMinor,
+    currency,
+    status: variantStatus as VariantInput["status"],
+    availabilityStatus:
+      csvField(row, "disponibilidad") === "unavailable"
+        ? "unavailable"
+        : "available",
+  };
+  const nameEn = csvField(row, "nombre_producto_en");
+  const descriptionEn = csvField(row, "descripcion_producto_en");
+  const variantNameEn = csvField(row, "nombre_variante_en");
+  return {
+    kind: "upsert",
+    offeringId,
+    variantId,
+    offering,
+    variant,
+    offeringTranslation:
+      nameEn || descriptionEn
+        ? { name: nameEn, description: descriptionEn }
+        : null,
+    variantTranslation: variantNameEn ? { name: variantNameEn } : null,
+  };
+}
+function csvRowErrorMessage(error: unknown): string {
+  if (error instanceof HttpException) {
+    const response = error.getResponse();
+    if (typeof response === "object" && response && "message" in response)
+      return String((response as { message: unknown }).message);
+    return error.message;
+  }
+  if (error instanceof Error) return error.message;
+  return "Error desconocido";
 }

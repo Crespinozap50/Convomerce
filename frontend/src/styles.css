@@ -1394,6 +1394,41 @@ header h1 {
 .offering-pagination small {
   color: #748078;
 }
+.offering-csv-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 20px 14px;
+}
+.offering-csv-actions .field-help {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+}
+.offering-csv-report {
+  margin: 0 20px 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #e8f7ef;
+  border: 1px solid #bfe8d2;
+  color: #176d4c;
+}
+.offering-csv-report.has-errors {
+  background: #fdecec;
+  border-color: #f3bcbc;
+  color: #a02222;
+}
+.offering-csv-report > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.offering-csv-report ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
 .offering-actions {
   display: flex !important;
   grid-auto-flow: column;

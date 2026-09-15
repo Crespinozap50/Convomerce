@@ -25,6 +25,8 @@
     "@nestjs/throttler": "^6.5.0",
     "argon2": "^0.44.0",
     "bullmq": "^5.0.0",
+    "csv-parse": "^7.0.2",
+    "csv-stringify": "^6.8.3",
     "ioredis": "^5.0.0",
     "nodemailer": "^10.0.9",
     "pg": "^8.0.0",
