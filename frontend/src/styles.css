@@ -1373,6 +1373,27 @@ header h1 {
   background: #edf7f2;
   color: #176d4c;
 }
+.offering-search {
+  padding: 0 20px 14px;
+}
+.offering-search input {
+  width: 100%;
+}
+.offering-status-switch {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.offering-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 14px 20px;
+  border-top: 1px solid #edf0ee;
+}
+.offering-pagination small {
+  color: #748078;
+}
 .offering-actions {
   display: flex !important;
   grid-auto-flow: column;

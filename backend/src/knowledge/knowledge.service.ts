@@ -90,7 +90,14 @@ export class KnowledgeService {
           `select knowledge_entry_id,title,content from app.knowledge_entry_localizations where locale='en'`,
         ),
         client.query(
-          `select id,name,description,category,status,source_provider,offering_type,duration_minutes,booking_required from app.catalog_items where status<>'archived' order by name limit 100`,
+          // Unlike the other `limit`s in this query (candidate pools for AI
+          // ranking, where "top N" is a legitimate cap), this is the
+          // tenant's actual inventory — the admin catalog page's search and
+          // pagination filter this list client-side, so silently truncating
+          // it here hides real products from search with no indication
+          // anything was cut (found live: CrediCel's 118 products at the
+          // old `limit 100` silently dropped every "iPhone…" row).
+          `select id,name,description,category,status,source_provider,offering_type,duration_minutes,booking_required from app.catalog_items where status<>'archived' order by name limit 5000`,
         ),
         client.query(
           `select id,catalog_item_id,name,sku,status,price_minor::text,currency,availability_status from app.item_variants order by created_at`,

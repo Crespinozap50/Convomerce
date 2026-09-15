@@ -455,6 +455,15 @@ export default {
       "¿Quieres retirar esta oferta? Dejará de aparecer en el catálogo y en las respuestas del bot.",
     offeringEmptyTitle: "Aún no hay ofertas",
     offeringEmptyHelp: "Crea el primer producto o servicio de esta empresa.",
+    offeringSearchPlaceholder: "Buscar producto o servicio…",
+    offeringSearchEmpty: "No se encontraron productos para \"{{query}}\".",
+    offeringToggleActive:
+      "Visible en el catálogo y las respuestas del bot. Toca para desactivarlo.",
+    offeringToggleInactive:
+      "Oculto del catálogo y las respuestas del bot. Toca para activarlo.",
+    paginationPrevious: "Anterior",
+    paginationNext: "Siguiente",
+    paginationSummary: "{{from}}–{{to}} de {{total}}",
     extrasTitle: "Adiciones",
     extrasHelp:
       "Grupos de extras reutilizables (ej. \"Extras de tacos\": queso, guacamole) que puedes asignar a varios productos. El bot los ofrece por WhatsApp al agregar un producto que los tenga.",

@@ -137,6 +137,13 @@ export function KnowledgeSettings({
   >(null);
   const [confirmingArchiveOffering, setConfirmingArchiveOffering] =
     useState<Offering | null>(null);
+  // A tenant with a large real catalog otherwise dumps every product into
+  // one unpaginated, unsearchable grid — filtered client-side, since
+  // `products` is the full list the parent already fetched once (backend
+  // caps it generously, not per-page; see the comment on that query).
+  const [productSearch, setProductSearch] = useState("");
+  const [productPage, setProductPage] = useState(1);
+  const PRODUCTS_PER_PAGE = 20;
   const [modifierGroups, setModifierGroups] = useState<ModifierGroup[]>([]);
   const [modifierGroupsCanManage, setModifierGroupsCanManage] = useState(false);
   const loadModifierGroups = async () => {
@@ -189,6 +196,38 @@ export function KnowledgeSettings({
       setProducts((rows) => rows.filter((row) => row.id !== offering.id));
     } catch (x) {
       setError((x as Error).message);
+    }
+  }
+  // Quick catalog on/off, distinct from archiving (offeringArchive above):
+  // "active"/"inactive" is a real status on the offering itself (see
+  // OfferingInput in the backend), a fast toggle for seasonal or
+  // temporarily out-of-stock items — never a destructive action, so it
+  // needs no confirmation. Sends the offering's own current fields back
+  // unchanged except for `status`, matching the exact PATCH body shape
+  // OfferingModal's own submit already uses for this endpoint.
+  async function toggleOfferingStatus(offering: Offering) {
+    const nextStatus = offering.status === "active" ? "inactive" : "active";
+    try {
+      const result = await api<{ offering: Offering }>(
+        `/v1/admin/tenants/${tenant}/knowledge/offerings/${offering.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: offering.name,
+            description: offering.description ?? "",
+            category: offering.category ?? "",
+            offeringType: offering.offeringType,
+            status: nextStatus,
+            durationMinutes: offering.durationMinutes,
+            bookingRequired: offering.bookingRequired,
+          }),
+        },
+      );
+      mergeOfferingIntoProducts(result.offering);
+    } catch (x) {
+      const message = (x as Error).message;
+      setError(message);
+      onNotice(message, "error");
     }
   }
   async function submit(e: FormEvent) {
@@ -267,6 +306,23 @@ export function KnowledgeSettings({
         </div>
       );
     });
+  const normalizedProductSearch = productSearch.trim().toLowerCase();
+  const filteredProducts = normalizedProductSearch
+    ? products.filter(
+        (p) =>
+          p.name.toLowerCase().includes(normalizedProductSearch) ||
+          (p.category ?? "").toLowerCase().includes(normalizedProductSearch),
+      )
+    : products;
+  const productPageCount = Math.max(
+    1,
+    Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE),
+  );
+  const currentProductPage = Math.min(productPage, productPageCount);
+  const pagedProducts = filteredProducts.slice(
+    (currentProductPage - 1) * PRODUCTS_PER_PAGE,
+    currentProductPage * PRODUCTS_PER_PAGE,
+  );
   return (
     <>
       <section
@@ -449,8 +505,21 @@ export function KnowledgeSettings({
                 <PackageSearch />
               )}
             </div>
+            {products.length > 0 && (
+              <div className="offering-search">
+                <input
+                  type="search"
+                  value={productSearch}
+                  placeholder={t("knowledge.offeringSearchPlaceholder")}
+                  onChange={(e) => {
+                    setProductSearch(e.target.value);
+                    setProductPage(1);
+                  }}
+                />
+              </div>
+            )}
             <div className="knowledge-products">
-              {products.map((p) => {
+              {pagedProducts.map((p) => {
                 const variant =
                   p.variants.find((item) => item.status !== "archived") ??
                   p.variants[0];
@@ -479,9 +548,29 @@ export function KnowledgeSettings({
                           : ""}
                       </small>
                     </span>
-                    <em className={p.status}>
-                      {t(`common.${p.status}`, { defaultValue: p.status })}
-                    </em>
+                    {value.canManage && p.sourceProvider === "manual" ? (
+                      <label
+                        className="switch-row offering-status-switch"
+                        title={t(
+                          p.status === "active"
+                            ? "knowledge.offeringToggleActive"
+                            : "knowledge.offeringToggleInactive",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={p.status === "active"}
+                          onChange={() => void toggleOfferingStatus(p)}
+                        />
+                        <span className="switch-control" aria-hidden="true">
+                          <span />
+                        </span>
+                      </label>
+                    ) : (
+                      <em className={p.status}>
+                        {t(`common.${p.status}`, { defaultValue: p.status })}
+                      </em>
+                    )}
                     {value.canManage && p.sourceProvider === "manual" && (
                       <span className="offering-actions">
                         <button
@@ -511,7 +600,48 @@ export function KnowledgeSettings({
                   </span>
                 </div>
               )}
+              {products.length > 0 && !filteredProducts.length && (
+                <div className="offering-empty">
+                  <span>
+                    <b>
+                      {t("knowledge.offeringSearchEmpty", {
+                        query: productSearch.trim(),
+                      })}
+                    </b>
+                  </span>
+                </div>
+              )}
             </div>
+            {filteredProducts.length > PRODUCTS_PER_PAGE && (
+              <div className="offering-pagination">
+                <button
+                  type="button"
+                  className="secondary compact-action"
+                  disabled={currentProductPage <= 1}
+                  onClick={() => setProductPage(currentProductPage - 1)}
+                >
+                  {t("knowledge.paginationPrevious")}
+                </button>
+                <small>
+                  {t("knowledge.paginationSummary", {
+                    from: (currentProductPage - 1) * PRODUCTS_PER_PAGE + 1,
+                    to: Math.min(
+                      currentProductPage * PRODUCTS_PER_PAGE,
+                      filteredProducts.length,
+                    ),
+                    total: filteredProducts.length,
+                  })}
+                </small>
+                <button
+                  type="button"
+                  className="secondary compact-action"
+                  disabled={currentProductPage >= productPageCount}
+                  onClick={() => setProductPage(currentProductPage + 1)}
+                >
+                  {t("knowledge.paginationNext")}
+                </button>
+              </div>
+            )}
           </section>
           <section
             id="knowledge-extras"

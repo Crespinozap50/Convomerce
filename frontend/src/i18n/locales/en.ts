@@ -451,6 +451,15 @@ export default {
       "Remove this offering? It will stop appearing in the catalog and bot responses.",
     offeringEmptyTitle: "No offerings yet",
     offeringEmptyHelp: "Create this company's first product or service.",
+    offeringSearchPlaceholder: "Search products or services…",
+    offeringSearchEmpty: "No products found for \"{{query}}\".",
+    offeringToggleActive:
+      "Visible in the catalog and bot responses. Tap to turn it off.",
+    offeringToggleInactive:
+      "Hidden from the catalog and bot responses. Tap to turn it on.",
+    paginationPrevious: "Previous",
+    paginationNext: "Next",
+    paginationSummary: "{{from}}–{{to}} of {{total}}",
     extrasTitle: "Extras",
     extrasHelp:
       "Reusable extras groups (e.g. \"Taco extras\": cheese, guacamole) you can assign to several products. The bot offers them over WhatsApp when a customer adds a product that has them.",

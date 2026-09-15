@@ -935,6 +935,33 @@ export class CommercialFlowService {
     );
   }
 
+  // D-172/D-174/D-175 (docs/decisions.md): "ya no quiero la cerveza, se me
+  // olvido que estoy manejando" — a natural negation with no "quitar"
+  // verb — must remove an item already in the cart instead of adding it
+  // again through the same single-item/tie-resolution path a genuine new
+  // order uses. Only ever fires when a candidate names a variant already
+  // in the cart, so it can never misfire on a genuine new item or
+  // replacement (a new item can't already be in the cart under the same
+  // variant). The exact same check used to live inline, copy-pasted, in
+  // both handleSelectingItem and handleAwaitingMoreItems — once for their
+  // single-match branch, once for their tied branch each — after the same
+  // bug (retyped/tied text itself ambiguous) was found and fixed
+  // separately in each of the 4 copies across 3 different live-testing
+  // rounds. Factored out once all 4 were confirmed identical in shape, so
+  // a future fix to this rule only ever needs to happen once.
+  private async negatedCartMatch(
+    client: PoolClient,
+    flow: Workflow,
+    locale: Locale,
+    input: UnderstoodFlowInput,
+    candidates: Item[],
+  ): Promise<DeterministicReply | null> {
+    if (!CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) return null;
+    const cart = await this.cartItems(client, flow.commercial_request_id, locale);
+    const cartMatch = candidates.find((candidate) => cart.some((line) => line.variant_id === candidate.variant_id));
+    return cartMatch ? this.removeItem(client, flow, locale, cartMatch) : null;
+  }
+
   private async handleSelectingItem(
     client: PoolClient,
     input: UnderstoodFlowInput,
@@ -1065,21 +1092,15 @@ export class CommercialFlowService {
     }
     const { match, tied } = await this.matchItemCandidates(client, input);
     if (tied.length > 1) {
-      // D-174 follow-up (docs/decisions.md) live finding: the retyped text
-      // itself can be ambiguous in the catalog ("agua" ties between
-      // Agua/Agua fresca/Aguas Frescas at Santos Tacos) — the D-174 guard
-      // below never runs in that case since it needs a single unambiguous
-      // `match`, so a customer negating an already-in-cart item ("ya no
-      // quiero el agua") got stuck seeing the same disambiguation list
-      // forever instead of the item being removed. Checking whether any of
-      // the *freshly* tied candidates is already a real cart line — before
-      // re-asking the same question — only ever fires on a genuine
-      // negation naming something truly in the cart, same as D-172/D-174.
-      if (CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
-        const cart = await this.cartItems(client, flow.commercial_request_id, input.locale);
-        const cartMatch = tied.find((candidate) => cart.some((line) => line.variant_id === candidate.variant_id));
-        if (cartMatch) return this.removeItem(client, flow, input.locale, cartMatch);
-      }
+      // The retyped text itself can be ambiguous in the catalog ("agua"
+      // ties between Agua/Agua fresca/Aguas Frescas at Santos Tacos) —
+      // negatedCartMatch still needs to run against these *freshly* tied
+      // candidates before re-asking the same question, or a customer
+      // negating an already-in-cart item gets stuck seeing the same
+      // disambiguation list forever instead of the item being removed
+      // (D-174 follow-up, docs/decisions.md).
+      const negated = await this.negatedCartMatch(client, flow, input.locale, input, tied);
+      if (negated) return negated;
       await this.step(client, flow.id, "selecting_item", {
         ...flow.context,
         tiedItems: tied,
@@ -1102,18 +1123,12 @@ export class CommercialFlowService {
         this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), "itemUnknown", {}, input.categoryLabelPrefix ?? null) ??
         this.catalogButtonReply(input.locale, "itemUnknown")
       );
-    // D-174 (docs/decisions.md): same guard as handleAwaitingMoreItems
-    // (D-172) — a customer who retypes instead of tapping while
+    // A customer who retypes instead of tapping while
     // disambiguating/replacing can just as easily be negating something
     // already in the cart ("ya no quiero la cerveza") as naming a new
-    // product. Only ever fires when the named product is already in the
-    // cart, so it can never misfire on a genuine new item or replacement.
-    if (match && CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
-      const cart = await this.cartItems(client, flow.commercial_request_id, input.locale);
-      if (cart.some((line) => line.variant_id === match.variant_id)) {
-        return this.removeItem(client, flow, input.locale, match);
-      }
-    }
+    // product (D-174, docs/decisions.md).
+    const negatedSingle = await this.negatedCartMatch(client, flow, input.locale, input, [match]);
+    if (negatedSingle) return negatedSingle;
     await this.addItem(
       client,
       input.tenantId,
@@ -1172,20 +1187,15 @@ export class CommercialFlowService {
     // guard is startNewOrder's too: "¿los tacos pican?" ties just as
     // easily and must still fall through to the knowledge layer.
     if (tied.length > 1 && !looksLikeQuestion(input.body)) {
-      // D-174 follow-up (docs/decisions.md) live finding (CrediCel): the
-      // same gap found and fixed in handleSelectingItem's own tied branch
-      // — the retyped text can itself be ambiguous in the catalog ("celular
-      // Honor" ties between its two variants), so the D-172 negation guard
-      // below never runs (it needs a single unambiguous `match`) and the
-      // customer negating an already-in-cart item saw the same
-      // disambiguation list again instead of it being removed. Checking the
-      // freshly tied candidates against the cart before re-asking — same
-      // never-a-false-positive criterion as D-172/D-174.
-      if (CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
-        const cart = await this.cartItems(client, flow.commercial_request_id, input.locale);
-        const cartMatch = tied.find((candidate) => cart.some((line) => line.variant_id === candidate.variant_id));
-        if (cartMatch) return this.removeItem(client, flow, input.locale, cartMatch);
-      }
+      // Same gap as handleSelectingItem's own tied branch above — the
+      // retyped text can itself be ambiguous in the catalog ("celular
+      // Honor" ties between its two variants) — negatedCartMatch must run
+      // against these freshly tied candidates before re-asking, or the
+      // customer negating an already-in-cart item sees the same
+      // disambiguation list again instead of it being removed (D-174
+      // follow-up, docs/decisions.md).
+      const negated = await this.negatedCartMatch(client, flow, input.locale, input, tied);
+      if (negated) return negated;
       await this.step(client, flow.id, "selecting_item", {
         ...flow.context,
         tiedItems: tied,
@@ -1202,25 +1212,19 @@ export class CommercialFlowService {
     // (returning null) here lets the knowledge/price layer answer instead,
     // exactly like startNewOrder's own questionOrNoMatch guard already does.
     if (match && looksLikeQuestion(input.body)) return null;
-    // D-172 (docs/decisions.md) live finding (Santos Tacos): "ya no quiero
-    // la cerveza, se me olvido que estoy manejando" — a natural negation
-    // with no "quitar/quita" verb at all — matched "Cerveza Sol" through
-    // this exact same single-item path a genuine new addition uses, and
-    // got added AGAIN, doubling the quantity instead of removing it.
+    // "ya no quiero la cerveza, se me olvido que estoy manejando" — a
+    // natural negation with no "quitar/quita" verb at all — must remove
+    // the item instead of matching "Cerveza Sol" through this exact same
+    // single-item path a genuine new addition uses and adding it AGAIN.
     // classifyFlowCommand's removeItem pattern only recognizes an
     // explicit removal verb, and widening that pattern globally would
     // risk misclassifying something unrelated ("ya no quiero domicilio,
     // prefiero recogida" — removeItem is checked before changeFulfillment
-    // there). Scoped instead to exactly the one case that can never be a
-    // false positive: a negation marker naming a product that is ALREADY
-    // in this cart — never fires for a genuine new item, which can't
-    // possibly already be in the cart under the same variant.
-    if (match && CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
-      const cart = await this.cartItems(client, flow.commercial_request_id, input.locale);
-      if (cart.some((line) => line.variant_id === match.variant_id)) {
-        return this.removeItem(client, flow, input.locale, match);
-      }
-    }
+    // there) — negatedCartMatch is scoped instead to exactly the one case
+    // that can never be a false positive: a negation marker naming a
+    // product that is ALREADY in this cart (D-172, docs/decisions.md).
+    const negated = match ? await this.negatedCartMatch(client, flow, input.locale, input, [match]) : null;
+    if (negated) return negated;
     if (match) {
       await this.addItem(
         client,
