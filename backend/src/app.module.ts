@@ -29,6 +29,7 @@ import { SchedulingModule } from './scheduling/scheduling.module';
 import { OperationalRequirementsModule } from './operational-requirements/operational-requirements.module';
 import { ModifierGroupsModule } from './modifier-groups/modifier-groups.module';
 import { TenantMetricsModule } from './tenant-metrics/tenant-metrics.module';
+import { PosIntegrationsModule } from './pos-integrations/pos-integrations.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { TenantMetricsModule } from './tenant-metrics/tenant-metrics.module';
     OperationalRequirementsModule,
     ModifierGroupsModule,
     TenantMetricsModule,
+    PosIntegrationsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: HttpErrorFilter },

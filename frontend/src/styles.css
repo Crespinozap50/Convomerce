@@ -951,6 +951,26 @@ header h1 {
   font-size: 12px;
   white-space: nowrap;
 }
+.loggro-connect-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 24px;
+}
+.loggro-connect-form input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.loggro-last-error {
+  color: #a02222 !important;
+}
+.loggro-table-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 24px 20px;
+}
 .webhook-info {
   margin: 20px 24px 0;
   padding: 14px 16px;
@@ -3418,6 +3438,54 @@ header h1 {
   padding: 8px 12px;
   font-size: 12px;
 }
+.request-pos-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  border-radius: 999px;
+  padding: 4px 8px;
+  margin-top: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.request-pos-sync-badge.failed {
+  background: #fdecec;
+  color: #a02222;
+}
+.request-pos-sync-badge.synced {
+  background: #e7f5ec;
+  color: #1e7d43;
+}
+.request-pos-sync-badge.pending {
+  background: #fdf3e2;
+  color: #96650f;
+}
+.request-pos-sync-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+.request-pos-sync-banner.failed {
+  background: #fdecec;
+  border: 1px solid #f3bcbc;
+  color: #a02222;
+}
+.request-pos-sync-banner.synced {
+  background: #e7f5ec;
+  border: 1px solid #b9e2c8;
+  color: #1e7d43;
+}
+.request-pos-sync-banner.pending {
+  background: #fdf3e2;
+  border: 1px solid #f2d8a0;
+  color: #96650f;
+}
 .request-detail {
   padding: 24px;
 }
@@ -3528,6 +3596,9 @@ header h1 {
 }
 .request-line small {
   color: #748178;
+}
+.request-line-modifier {
+  padding-left: 12px;
 }
 .request-notes {
   margin-top: 18px;

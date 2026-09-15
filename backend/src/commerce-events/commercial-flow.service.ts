@@ -195,6 +195,48 @@ export const parseRecommendationAction = (
     ? { action: match[1] as "add" | "reject", eventId: match[2] }
     : null;
 };
+// D-169 (docs/decisions.md): a short, explicit list of correction-marker
+// phrases (same style as REFINEMENT_ADJECTIVES/BACK_REFERENCE_WORDS below) —
+// narrow on purpose, so it only ever fires on an unambiguous self-correction,
+// never a general "sounds like a correction" heuristic. Exported (not just a
+// class static) so DeterministicUnderstandingProvider can apply the exact
+// same pattern before it ever computes searchTerms — see stripCorrectionPrefix
+// below and its own comment for why that's needed at all.
+export const CORRECTION_MARKER_PATTERN =
+  /\b(?:no,? espera|espera,? no|mejor no|no mejor|cambia(?:lo)? (?:eso )?por|en vez de eso|olvida eso)\b,?\s*/;
+// D-169 live finding, closed in D-184's follow-up round: this correction
+// logic only ever ran inside splitItemMentions() (commercial-flow.service.ts
+// below), which only has an effect when the message ALSO contains an item
+// separator ("y"/",") — "quiero 3 tacos al pastor, no espera mejor 2 de
+// pollo" is caught, but "quiero pastor no espera mejor pollo" (no separator
+// at all) never reaches splitItemMentions in any useful way: it still
+// strips the correction there, but the result is a single segment, so
+// matchItemMentions() bails out (segments.length < 2) and the ORIGINAL,
+// uncorrected message is what actually drives matching — via
+// input.understanding.entities.searchTerms, precomputed once by
+// DeterministicUnderstandingProvider from the raw message, not re-derived
+// from any locally-corrected text downstream. Fixing this for the
+// single-item path genuinely requires the fix to live where searchTerms
+// itself gets computed — a local strip inside commercial-flow.service.ts
+// can never reach it. Applied to already-normalized (lowercase, accent-
+// stripped) text, matching how DeterministicUnderstandingProvider computes
+// its own `text` before anything else touches it.
+export function stripCorrectionPrefix(normalizedText: string): string {
+  const correction = normalizedText.match(CORRECTION_MARKER_PATTERN);
+  if (!correction) return normalizedText;
+  const stripped = normalizedText.slice(
+    (correction.index ?? 0) + correction[0].length,
+  );
+  // Found via a real regression while wiring this into
+  // DeterministicUnderstandingProvider (D-184): "ya no quiero el celular
+  // Honor, mejor no" also matches "mejor no", but nothing follows it — this
+  // is a trailing dismissal ("never mind"), not a correction replacing one
+  // product with another. Stripping here would erase the only product name
+  // in the message, breaking negation matching (which still needs "celular
+  // Honor" in searchTerms to find it in the cart). Only treat the marker as
+  // introducing a replacement when real content actually follows it.
+  return stripped.trim().length >= 3 ? stripped : normalizedText;
+}
 // Tenant-authored category values are free text — some tenants already
 // write them capitalized ("Tacos"), CrediCel's are all lowercase
 // ("celulares"). Capitalizing the first letter on display only ever helps
@@ -382,6 +424,15 @@ export class CommercialFlowService {
     // fix shape as the cancel guard directly above.
     if (!flow && command === "remove_item")
       return this.localizedReply(input.locale, "nothingToRemove");
+    // Found live reviewing a real conversation (Santiago, Santos Tacos):
+    // "Gracias" right after a confirmed order, with no active flow left,
+    // fell all the way through to startNewOrder() below — "gracias" isn't a
+    // stop word, so it became a searchTerm, matched nothing confidently in
+    // the catalog, and got answered with an unrelated AI product
+    // recommendation instead of a simple acknowledgment. Same guard shape
+    // as cancel/remove_item just above — deferred (return null) to
+    // DeterministicReplyService, which now has its own 'gratitude' intent.
+    if (!flow && input.understanding.intent === "gratitude") return null;
     if (!flow) return this.startNewOrder(client, input);
     const globalResult = await this.handleGlobalCommand(client, input, flow, command, negative);
     if (globalResult !== undefined) return globalResult;
@@ -1056,7 +1107,8 @@ export class CommercialFlowService {
         faqIntent === "hours" ||
         faqIntent === "location" ||
         faqIntent === "payments" ||
-        faqIntent === "price"
+        faqIntent === "price" ||
+        faqIntent === "gratitude"
       )
         return null;
       return this.retryConsultativeRecommendation(
@@ -1741,6 +1793,32 @@ export class CommercialFlowService {
         `update app.conversation_workflows set status='completed',updated_at=now() where id=$1`,
         [flow.id],
       );
+      // Push to Loggro Restobar's POS (docs/decisions.md) — Workflow has no
+      // request_type field of its own (only id/commercial_request_id/step/
+      // context, see its type above), so it's queried here rather than
+      // widening that shared type just for this one branch. Both queries
+      // below are read-only and insert nothing for any tenant without
+      // loggro_pos enabled (every tenant but Santos Tacos today) — zero
+      // impact on the rest of this flow for everyone else.
+      const requestType = await client.query<{ request_type: string }>(
+        `select request_type from app.commercial_requests where id=$1`,
+        [flow.commercial_request_id],
+      );
+      const posEnabled = await client.query<{ enabled: boolean }>(
+        `select enabled from app.tenant_capabilities where tenant_id=$1 and capability='loggro_pos'`,
+        [input.tenantId],
+      );
+      if (requestType.rows[0]?.request_type === "order" && posEnabled.rows[0]?.enabled) {
+        await client.query(
+          `update app.commercial_requests set pos_sync_status='pending' where id=$1`,
+          [flow.commercial_request_id],
+        );
+        await client.query(
+          `insert into app.outbox_events(id,tenant_id,event_type,aggregate_type,aggregate_id,correlation_id,payload_schema_version,payload)
+           values($1,$2,'order.confirmed','commercial_request',$3,$4,1,jsonb_build_object('commercialRequestId',($3::uuid)::text))`,
+          [uuidv7(), input.tenantId, flow.commercial_request_id, uuidv7()],
+        );
+      }
       return this.localizedReply(input.locale, "confirmed", {
         reference: flow.commercial_request_id.slice(-8).toUpperCase(),
       });
@@ -2712,12 +2790,10 @@ export class CommercialFlowService {
   // BOTH the pastor and the pollo — every segment below is treated as an
   // independent addition, with no way to know the customer took back
   // what they'd just said right before a correction marker like "no,
-  // espera, mejor...". Kept as a short, explicit list of marker phrases
-  // (same style as REFINEMENT_ADJECTIVES/BACK_REFERENCE_WORDS below)
-  // rather than a general "sounds like a correction" heuristic — narrow
-  // on purpose, so it only ever fires on an unambiguous self-correction.
-  private static readonly CORRECTION_MARKER_PATTERN =
-    /\b(?:no,? espera|espera,? no|mejor no|no mejor|cambia(?:lo)? (?:eso )?por|en vez de eso|olvida eso)\b,?\s*/;
+  // espera, mejor...". CORRECTION_MARKER_PATTERN/stripCorrectionPrefix
+  // (module-level, above the class) hold the actual marker list and
+  // stripping logic — also reused by DeterministicUnderstandingProvider
+  // for the no-separator case (D-169 follow-up, D-184).
   private splitItemMentions(text: string): string[] {
     // Split on the comma BEFORE norm() strips it (norm()'s punctuation
     // removal would otherwise erase the very separator being split on) —
@@ -2733,10 +2809,7 @@ export class CommercialFlowService {
     // combined with the rest, same as the rest of this function never
     // silently guesses: dropping a stale mention is always safer than
     // adding it back in.
-    const correction = accentless.match(CommercialFlowService.CORRECTION_MARKER_PATTERN);
-    const effective = correction
-      ? accentless.slice((correction.index ?? 0) + correction[0].length)
-      : accentless;
+    const effective = stripCorrectionPrefix(accentless);
     return effective
       .split(CommercialFlowService.ITEM_MENTION_SEPARATOR)
       .map((segment) => norm(segment))
@@ -3529,7 +3602,15 @@ export class CommercialFlowService {
       ].filter((part): part is string => part !== null);
       return parts.length ? this.truncate(parts.join(" · "), 72) : undefined;
     };
-    const finishTitle = this.copy(locale, "finishButton");
+    // Own copy from the cart-level "Listo"/"Done" (finishButton) — that one
+    // means "done adding items to the order", but reused here for "done
+    // adding adiciones" it read as ambiguous, especially the first time
+    // this prompt appears with nothing picked yet. Found live reviewing a
+    // real conversation (Santiago, Santos Tacos): the customer's own
+    // reading of "Listo" here was unclear. "No, gracias" reads correctly
+    // both the first time ("¿Quieres agregar alguna adición?") and on
+    // repeat ("¿Quieres agregar otra adición?").
+    const finishTitle = this.copy(locale, "modifierFinishButton");
     // Same D-101 reasoning as itemChoiceReply: a name that wouldn't survive
     // a button's 20-char cap forces `list` regardless of how few options
     // there are, so it gets the list's extra room (24 chars + description)

@@ -16,6 +16,7 @@ import { ConsultativeRecommendationService } from "./consultative-recommendation
 import { BusinessFaqService } from "./business-faq.service";
 import { AppointmentFlowService } from "./appointment-flow.service";
 import { SchedulingModule } from "../scheduling/scheduling.module";
+import { PosIntegrationsModule } from "../pos-integrations/pos-integrations.module";
 import { RecommendationService } from "../recommendations/recommendation.service";
 import { DeterministicUnderstandingProvider } from "../conversation-understanding/deterministic-understanding.provider";
 import { CONVERSATION_UNDERSTANDING_PROVIDER } from "../conversation-understanding/conversation-understanding.types";
@@ -28,7 +29,7 @@ import { ConversationLanguageService } from "../localization/conversation-langua
 import { OperationalRequirementsModule } from "../operational-requirements/operational-requirements.module";
 
 @Module({
-  imports: [SchedulingModule, OperationalRequirementsModule],
+  imports: [SchedulingModule, OperationalRequirementsModule, PosIntegrationsModule],
   providers: [
     MessageReceivedConsumer,
     DeterministicReplyService,

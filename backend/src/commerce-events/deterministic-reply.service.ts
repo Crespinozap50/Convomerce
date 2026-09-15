@@ -24,6 +24,7 @@ import { BusinessFaqService } from './business-faq.service';
 // and their own `keywords`, never by shared, hardcoded, cross-tenant terms.
 export type ReplyIntent =
   | 'greeting'
+  | 'gratitude'
   | 'handoff'
   | 'menu'
   | 'price'
@@ -115,6 +116,12 @@ export function classifyMessage(message: string, handoffKeywords: string[] = [],
   const ordered:MessageIntentKey[]=['delivery','hours','location','payments','price','menu'];
   for(const intent of ordered)if(includesAny(text,[...intents[intent],...fallbackIntents[intent]].map(normalize)))return intent;
   if([...intents.greeting,...fallbackIntents.greeting].some(greeting=>text===normalize(greeting)||text.startsWith(`${normalize(greeting)} `)))return 'greeting';
+  // Found live reviewing a real conversation (Santiago, Santos Tacos): "Gracias"
+  // sent right after a confirmed order, with no active workflow left to route
+  // it to, fell all the way through to the consultative-recommendation AI
+  // path and got offered unrelated products instead of a simple
+  // acknowledgment. Same matching convention as greeting just above.
+  if([...intents.gratitude,...fallbackIntents.gratitude].some(gratitude=>text===normalize(gratitude)||text.startsWith(`${normalize(gratitude)} `)))return 'gratitude';
   return 'fallback';
 }
 
@@ -218,6 +225,9 @@ export class DeterministicReplyService {
       const personalized=!firstName?bot.welcomeMessage
         : interpolate(localeCatalog.bot.personalizedGreeting,{name:firstName,welcome:stripLeadingGreeting(bot.welcomeMessage,bot.locale)});
       return { intent, handoff: false, sources: ['bot_configuration'], body: personalized };
+    }
+    if (intent === 'gratitude') {
+      return { intent, handoff: false, sources: ['bot_configuration'], body: localeCatalog.bot.gratitude };
     }
     if (
       intent === 'menu' || intent === 'price' ||

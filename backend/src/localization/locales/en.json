@@ -21,7 +21,9 @@
     "recommendation": "Would you like to add {{item}} for {{price}}?",
     "recommendationAccept": "Yes, add it",
     "recommendationReject": "No, thanks",
-    "personalizedGreeting": "Hello, {{name}}! {{welcome}}"
+    "personalizedGreeting": "Hello, {{name}}! {{welcome}}",
+    "gratitude": "You're welcome! I'm here if you need anything else.",
+    "orderAccepted": "Your order #{{reference}} is now being prepared!"
   },
   "labels": { "unit": "Unit", "orderPrefix": "Order of" },
   "intents": {
@@ -31,7 +33,8 @@
     "payments": ["pay", "payment", "cash", "transfer", "card"],
     "price": ["price", "how much", "cost", "value"],
     "menu": ["menu", "catalog", "options", "products", "product", "services", "service", "what do you offer"],
-    "greeting": ["hello", "hi", "good morning", "good afternoon", "good evening"]
+    "greeting": ["hello", "hi", "good morning", "good afternoon", "good evening"],
+    "gratitude": ["thank you", "thanks", "thank you so much", "much appreciated"]
   },
   "stopWords": ["a", "an", "and", "are", "do", "for", "how", "i", "is", "me", "of", "show", "the", "to", "what", "which", "you"]
 }

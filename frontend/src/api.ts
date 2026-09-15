@@ -22,6 +22,16 @@ async function throwApiError(response: Response): Promise<never> {
   const message = i18n.t(`errors.${code}`, { defaultValue: fallback });
   throw new ApiError(code, message, response.status, body.correlationId);
 }
+// A controller method that returns void/undefined sends a 200 with a
+// genuinely empty body — response.json() on that throws "Unexpected end of
+// JSON input" even though the request itself succeeded. Found live testing
+// the Loggro connection panel. Read as text first and only parse when
+// there's actually something to parse, instead of trusting every ok
+// response to carry a JSON body the way the 204 case already didn't.
+async function parseOkBody<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+}
 export async function api<T>(
   path: string,
   options: RequestInit = {},
@@ -33,7 +43,7 @@ export async function api<T>(
   });
   if (response.status === 204) return undefined as T;
   if (!response.ok) return throwApiError(response);
-  return (await response.json()) as T;
+  return parseOkBody<T>(response);
 }
 // multipart upload — deliberately not `api()` with a JSON Content-Type
 // override, since the browser must set the multipart boundary itself.
@@ -46,7 +56,7 @@ export async function apiUpload<T>(path: string, file: File): Promise<T> {
     body: form,
   });
   if (!response.ok) return throwApiError(response);
-  return (await response.json()) as T;
+  return parseOkBody<T>(response);
 }
 // triggers a browser download of a non-JSON (CSV) response body — `api()`
 // always parses JSON, which a file download response isn't.

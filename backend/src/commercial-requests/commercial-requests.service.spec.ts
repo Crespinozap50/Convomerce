@@ -14,6 +14,23 @@ describe('CommercialRequestsService',()=>{
     expect(result.requests[0]).toMatchObject({id:'request-1',type:'order',totalMinor:2500000,lineCount:2});
   });
 
+  it('nests each line\'s modifiers so a paid addition is visible, not just folded into the total (live finding, Santiago, Santos Tacos)',async()=>{
+    // Found live: "Guacamole" (+$3.000) never appeared in this panel at
+    // all — detail() only ever queried app.request_lines, never joined
+    // app.request_line_modifiers, even though the addition is correctly
+    // priced into the request's own total_minor.
+    const client={query:jest.fn(async(sql:string)=>{
+      if(sql.includes('from app.tenant_users'))return{rows:[{role:'operator'}]};
+      if(sql.includes('from app.commercial_requests request'))return{rows:[{id:'request-1',request_type:'order',status:'ready',currency:'COP',subtotal_minor:'1250000',total_minor:'1250000',display_name:'Santiago'}]};
+      if(sql.includes('from app.request_lines'))return{rows:[{id:'line-1',description_snapshot:'Dorado de Pollo (Unidad)',unit_price_minor_snapshot:'950000',currency:'COP',quantity:'1',line_total_minor:'950000',attributes_snapshot:null,status:'active'}]};
+      if(sql.includes('from app.request_line_modifiers'))return{rows:[{request_line_id:'line-1',description_snapshot:'Guacamole',unit_price_delta_minor_snapshot:'300000',quantity:'1',total_delta_minor:'300000'}]};
+      return{rows:[]};
+    })};
+    const db={withTenantTransaction:(_tenant:string,operation:(client:unknown)=>unknown)=>operation(client)} as never;
+    const result=await new CommercialRequestsService(db).detail('tenant-1','user-1','request-1');
+    expect(result.lines[0].modifiers).toEqual([{description:'Guacamole',unitPriceDeltaMinor:300000,quantity:1,totalDeltaMinor:300000}]);
+  });
+
   it('stores the current user read position when opening the inbox',async()=>{
     const queries:string[]=[];
     const client={query:jest.fn(async(sql:string)=>{queries.push(sql);return sql.includes('from app.tenant_users')?{rows:[{role:'operator'}]}:{rows:[]}})};
@@ -76,6 +93,37 @@ describe('CommercialRequestsService',()=>{
       expect(workflowUpdate?.params).toEqual(['request-1']);
     },
   );
+
+  it('notifies the customer over WhatsApp when an order is accepted (live finding: "Aceptar pedido" never told the customer anything)',async()=>{
+    const queries:{sql:string;params:unknown[]}[]=[];
+    const client={query:jest.fn(async(sql:string,params:unknown[]=[])=>{
+      queries.push({sql,params});
+      if(sql.includes('from app.tenant_users'))return{rows:[{role:'operator'}]};
+      if(sql.includes('for update'))return{rows:[{status:'ready',request_type:'order'}]};
+      if(sql.includes('from app.commercial_requests request') && sql.includes('conv.channel_id'))
+        return{rows:[{conversation_id:'conv-1',channel_id:'channel-1',locale:'es'}]};
+      return{rows:[{id:'request-1',request_type:'order',status:'accepted',currency:'COP',subtotal_minor:'0',total_minor:'0'}]};
+    })};
+    const db={withTenantTransaction:(_tenant:string,operation:(client:unknown)=>unknown)=>operation(client)} as never;
+    await new CommercialRequestsService(db).changeStatus('tenant-1','user-1','request-1','accepted');
+    const messageInsert=queries.find(q=>q.sql.includes('insert into app.messages'));
+    expect(messageInsert?.params).toEqual(expect.arrayContaining(['conv-1','channel-1']));
+    expect(JSON.stringify(messageInsert?.params)).toContain('está en preparación');
+    expect(queries.some(q=>q.sql.includes("insert into app.outbox_events") && q.sql.includes("'message.send_requested'"))).toBe(true);
+  });
+
+  it('never notifies for a reservation/appointment accepted (order-only copy)',async()=>{
+    const queries:string[]=[];
+    const client={query:jest.fn(async(sql:string)=>{
+      queries.push(sql);
+      if(sql.includes('from app.tenant_users'))return{rows:[{role:'operator'}]};
+      if(sql.includes('for update'))return{rows:[{status:'ready',request_type:'reservation'}]};
+      return{rows:[{id:'request-1',request_type:'reservation',status:'accepted',currency:'COP',subtotal_minor:'0',total_minor:'0'}]};
+    })};
+    const db={withTenantTransaction:(_tenant:string,operation:(client:unknown)=>unknown)=>operation(client)} as never;
+    await new CommercialRequestsService(db).changeStatus('tenant-1','user-1','request-1','accepted');
+    expect(queries.some(sql=>sql.includes('insert into app.messages'))).toBe(false);
+  });
 
   it('does not touch conversation_workflows for a non-terminal transition (accepted)',async()=>{
     const queries:string[]=[];

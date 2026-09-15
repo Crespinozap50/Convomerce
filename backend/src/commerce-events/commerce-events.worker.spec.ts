@@ -5,11 +5,13 @@ describe('CommerceEventsWorker appointment synchronization', () => {
   const messageConsumer = { consume: jest.fn() };
   const sendConsumer = { consume: jest.fn(), markFailed: jest.fn() };
   const calendar = { syncAppointment: jest.fn().mockResolvedValue({ synced: true }) };
+  const loggroOrderSync = { pushOrder: jest.fn().mockResolvedValue({ externalOrderId: 'ext-1' }), markFailed: jest.fn() };
   const worker = new CommerceEventsWorker(
     messageConsumer as never,
     sendConsumer as never,
     new ConfigService({ COMMERCE_WORKER_ENABLED: 'false' }),
     calendar as never,
+    loggroOrderSync as never,
   );
 
   beforeEach(() => jest.clearAllMocks());
@@ -26,4 +28,24 @@ describe('CommerceEventsWorker appointment synchronization', () => {
       expect(result).toEqual({ duplicate: false });
     },
   );
+
+  it('dispatches order.confirmed events to LoggroOrderSyncService.pushOrder', async () => {
+    const result = await (worker as unknown as { process: (job: unknown) => Promise<unknown> }).process({
+      name: 'order.confirmed',
+      data: { tenantId: 'tenant-1', commercialRequestId: 'request-1' },
+    });
+
+    expect(loggroOrderSync.pushOrder).toHaveBeenCalledWith('tenant-1', 'request-1');
+    expect(result).toEqual({ duplicate: false });
+  });
+
+  it('rejects an incomplete order.confirmed event instead of calling pushOrder with missing data', async () => {
+    await expect(
+      (worker as unknown as { process: (job: unknown) => Promise<unknown> }).process({
+        name: 'order.confirmed',
+        data: { tenantId: 'tenant-1' },
+      }),
+    ).rejects.toThrow(/Incomplete order.confirmed event/);
+    expect(loggroOrderSync.pushOrder).not.toHaveBeenCalled();
+  });
 });

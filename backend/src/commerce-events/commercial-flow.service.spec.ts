@@ -100,6 +100,17 @@ describe("CommercialFlowService", () => {
     // "no," — stuck the customer re-asking the same question forever.
     ["no, listo", "finish_items"],
     ["no listo", "finish_items"],
+    // Found live testing the new "No, gracias" modifier-finish button
+    // (renamed from "Listo" — see modifierFinishButton): the button's own
+    // title is what a real tap reconstructs as message text, and
+    // finishItems' pattern never recognized "gracias" as one of its
+    // finish synonyms, so tapping it looped back to the same modifier
+    // prompt instead of moving on. Bare "Gracias" (no "no" prefix) is
+    // deliberately NOT matched here — that's the separate 'gratitude'
+    // intent (deterministic-reply.service.ts), a plain thank-you with no
+    // "finish this step" meaning on its own.
+    ["No, gracias", "finish_items"],
+    ["Gracias", null],
     ["Volver", "back"],
   ])("classifies the global command “%s”", (message, command) => {
     expect(classifyFlowCommand(message)).toBe(command);
@@ -227,6 +238,29 @@ describe("CommercialFlowService", () => {
     });
 
     expect(reply?.body).toContain("No tienes ningún pedido activo");
+    expect(client.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers to DeterministicReplyService instead of searching the catalog, when thanked with no active order (live finding, Santiago, Santos Tacos)", async () => {
+    // Found live: "Gracias" right after a just-confirmed order, with no
+    // active flow left, fell straight into startNewOrder() below —
+    // "gracias" isn't a stop word, so it became a searchTerm, matched
+    // nothing confidently in the catalog, and got answered with an
+    // unrelated AI product recommendation instead of a plain
+    // acknowledgment. Same fix shape as the cancel/remove_item guards
+    // right above it in commercial-flow.service.ts — returning null here
+    // defers entirely to DeterministicReplyService, which now recognizes
+    // 'gratitude' as its own intent.
+    const client = { query: jest.fn().mockResolvedValueOnce({ rows: [] }) };
+    const message = "Gracias";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply).toBeNull();
     expect(client.query).toHaveBeenCalledTimes(1);
   });
 
@@ -2364,7 +2398,7 @@ describe("CommercialFlowService", () => {
       options: [
         { id: "salsa-tamarindo", title: "Salsa de Tamarindo" },
         { id: "salsa-jalapeno", title: "Salsa de Mermelada de J…", description: longName },
-        { id: "modifier:finish", title: "Listo" },
+        { id: "modifier:finish", title: "No, gracias" },
       ],
     });
   });
@@ -2421,7 +2455,7 @@ describe("CommercialFlowService", () => {
         { id: "queso", title: "Queso extra", description: "+$ 3.000" },
         { id: "guac", title: "Guacamole", description: "+$ 5.000" },
         { id: "aguacate", title: "Aguacate" },
-        { id: "modifier:finish", title: "Listo" },
+        { id: "modifier:finish", title: "No, gracias" },
       ],
     });
     expect(
@@ -2504,7 +2538,7 @@ describe("CommercialFlowService", () => {
       body: "",
       options: [
         { id: "queso", title: "Queso extra" },
-        { id: "modifier:finish", title: "Listo" },
+        { id: "modifier:finish", title: "No, gracias" },
       ],
     });
   });
@@ -3724,6 +3758,59 @@ describe("CommercialFlowService", () => {
     expect(reply).not.toBeNull();
   });
 
+  it("drops the corrected-away mention with no separator at all in the message (D-169 follow-up, D-184)", async () => {
+    // Same self-correction as the test above, but without any "y"/","
+    // separator for splitItemMentions to work with at all — the D-169 fix
+    // only ever took effect through that split, so this exact shape
+    // ("quiero tacos al pastor no espera mejor tacos de pollo") still
+    // added the pastor before D-184's fix moved the correction-stripping
+    // into DeterministicUnderstandingProvider, upstream of searchTerms.
+    const catalogRows = {
+      rows: [
+        {
+          item_id: "item-pastor",
+          variant_id: "variant-pastor",
+          name: "Tacos al pastor",
+          category: "Tacos",
+          variant_name: "Orden de 3 tacos",
+          price_minor: "1890000",
+          currency: "COP",
+        },
+        {
+          item_id: "item-pollo",
+          variant_id: "variant-pollo",
+          name: "Tacos de pollo",
+          category: "Tacos",
+          variant_name: "Orden de 3 tacos",
+          price_minor: "1790000",
+          currency: "COP",
+        },
+      ],
+    };
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return catalogRows;
+        return { rows: [] };
+      }),
+    };
+
+    const message = "quiero tacos al pastor no espera mejor tacos de pollo";
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    const insertCalls = client.query.mock.calls.filter(([sql]) =>
+      String(sql).includes("insert into app.request_lines"),
+    );
+    expect(JSON.stringify(insertCalls)).not.toContain("variant-pastor");
+    expect(JSON.stringify(insertCalls)).toContain("variant-pollo");
+    expect(reply).not.toBeNull();
+  });
+
   it("never silently matches a segment that names another real category's own noun, even when only one word is missing (D-169 live finding, Santos Tacos)", async () => {
     // Found live: "un burrito de pollo con extra queso" (no such product)
     // silently matched "Tacos de pollo" — isWeakTokenMatch's "missing at
@@ -4733,7 +4820,7 @@ describe("CommercialFlowService", () => {
       "Birria",
       "Cochinita",
       "Chorizo",
-      "Listo",
+      "No, gracias",
     ]);
   });
 
@@ -6237,6 +6324,70 @@ describe("CommercialFlowService", () => {
         String(sql).includes("status='cancelled'"),
       ),
     ).toBe(false);
+  });
+
+  describe("Loggro POS push on order confirmation", () => {
+    function confirmClient(options: { requestType: string; posEnabled: boolean }) {
+      const queries: { sql: string; params: unknown[] }[] = [];
+      const client = {
+        query: jest.fn(async (sql: string, params: unknown[] = []) => {
+          queries.push({ sql, params });
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_confirmation", context: {} },
+              ],
+            };
+          if (sql.includes("select request_type from app.commercial_requests"))
+            return { rows: [{ request_type: options.requestType }] };
+          if (sql.includes("capability='loggro_pos'"))
+            return { rows: [{ enabled: options.posEnabled }] };
+          return { rows: [] };
+        }),
+      };
+      return { client, queries };
+    }
+    async function confirmOrder(client: unknown) {
+      const understanding = await new DeterministicUnderstandingProvider().understand({
+        message: "Sí, confirmar",
+        configuredLocale: "es",
+        handoffKeywords: [],
+        timezone: "America/Bogota",
+        interactiveSelectionId: "confirm:yes",
+      });
+      return service().resolve(client as never, { ...input, body: "Sí, confirmar", understanding });
+    }
+
+    it("inserts an order.confirmed outbox event and marks pos_sync_status='pending' when loggro_pos is enabled for an order", async () => {
+      const { client, queries } = confirmClient({ requestType: "order", posEnabled: true });
+
+      await confirmOrder(client);
+
+      const outboxInsert = queries.find(({ sql }) => sql.includes("insert into app.outbox_events"));
+      expect(outboxInsert).toBeDefined();
+      expect(outboxInsert?.sql).toContain("'order.confirmed'");
+      expect(outboxInsert?.params[2]).toBe("request-1");
+      const pendingUpdate = queries.find(({ sql }) => sql.includes("pos_sync_status='pending'"));
+      expect(pendingUpdate).toBeDefined();
+    });
+
+    it("never inserts an outbox event when loggro_pos is disabled (the default for every tenant but Santos Tacos)", async () => {
+      const { client, queries } = confirmClient({ requestType: "order", posEnabled: false });
+
+      await confirmOrder(client);
+
+      expect(queries.some(({ sql }) => sql.includes("insert into app.outbox_events"))).toBe(false);
+      expect(queries.some(({ sql }) => sql.includes("pos_sync_status"))).toBe(false);
+    });
+
+    it("never touches pos_sync_status for a non-order request type (e.g. a reservation), even with loggro_pos enabled", async () => {
+      const { client, queries } = confirmClient({ requestType: "reservation", posEnabled: true });
+
+      await confirmOrder(client);
+
+      expect(queries.some(({ sql }) => sql.includes("insert into app.outbox_events"))).toBe(false);
+      expect(queries.some(({ sql }) => sql.includes("pos_sync_status"))).toBe(false);
+    });
   });
 
   it("cancels the order when the customer taps 'Cancelar pedido' at the final review", async () => {

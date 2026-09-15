@@ -5,6 +5,12 @@ import { api } from "../api";
 import { CommercialRequest } from "../types";
 import { AppSelect } from "../components/AppSelect";
 
+type CommercialRequestLineModifier = {
+  description: string;
+  unitPriceDeltaMinor: number;
+  quantity: number;
+  totalDeltaMinor: number;
+};
 type CommercialRequestLine = {
   id: string;
   description: string;
@@ -13,6 +19,7 @@ type CommercialRequestLine = {
   quantity: number;
   lineTotalMinor: number;
   status: string;
+  modifiers: CommercialRequestLineModifier[];
 };
 type CommercialRequestDetail = {
   canManage: boolean;
@@ -143,6 +150,23 @@ export function CommercialRequests({
       minute: "2-digit",
       timeZone,
     }).format(new Date(value));
+  async function retryPosSync() {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await api(
+        `/v1/admin/tenants/${tenant}/commercial-requests/${detail.request.id}/retry-pos-sync`,
+        { method: "POST" },
+      );
+      await load();
+      await loadDetail(detail.request.id);
+      onNotice(t("requests.posSyncRetried"));
+    } catch (error) {
+      onNotice((error as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function change(status: string) {
     if (!detail) return;
     setBusy(true);
@@ -198,6 +222,15 @@ export function CommercialRequests({
                   {statusLabel(row.type, row.status)}
                 </span>
               </span>
+              {row.posSyncStatus === "failed" && (
+                <span className="request-pos-sync-badge failed">{t("requests.posSyncFailed")}</span>
+              )}
+              {row.posSyncStatus === "synced" && (
+                <span className="request-pos-sync-badge synced">{t("requests.posSyncSynced")}</span>
+              )}
+              {row.posSyncStatus === "pending" && (
+                <span className="request-pos-sync-badge pending">{t("requests.posSyncPending")}</span>
+              )}
               <span>
                 {t(`requests.types.${row.type}`)} · {row.lineCount} ·{" "}
                 {money(row.totalMinor, row.currency)}
@@ -257,6 +290,32 @@ export function CommercialRequests({
                 </b>
               </span>
             </div>
+            {detail.request.posSyncStatus === "failed" && (
+              <div className="request-pos-sync-banner failed">
+                <span>
+                  {t("requests.posSyncFailed")}
+                  {detail.request.posLastErrorCode ? ` — ${detail.request.posLastErrorCode}` : ""}
+                </span>
+                {canManage && (
+                  <button type="button" className="secondary compact-action" disabled={busy} onClick={retryPosSync}>
+                    {t("requests.posSyncRetry")}
+                  </button>
+                )}
+              </div>
+            )}
+            {detail.request.posSyncStatus === "synced" && (
+              <div className="request-pos-sync-banner synced">
+                <span>
+                  {t("requests.posSyncSynced")}
+                  {detail.request.posExternalOrderId ? ` — #${detail.request.posExternalOrderId.slice(-8).toUpperCase()}` : ""}
+                </span>
+              </div>
+            )}
+            {detail.request.posSyncStatus === "pending" && (
+              <div className="request-pos-sync-banner pending">
+                <span>{t("requests.posSyncPending")}</span>
+              </div>
+            )}
             {detail.request.appointment && (
               <div className="request-appointment">
                 <span className="request-appointment-icon">
@@ -307,6 +366,14 @@ export function CommercialRequests({
                         {line.quantity} ×{" "}
                         {money(line.unitPriceMinor, line.currency)}
                       </small>
+                      {line.modifiers.map((modifier, index) => (
+                        <small className="request-line-modifier" key={index}>
+                          + {modifier.description}
+                          {modifier.unitPriceDeltaMinor > 0
+                            ? `: ${money(modifier.totalDeltaMinor, line.currency)}`
+                            : ""}
+                        </small>
+                      ))}
                     </span>
                     <b>{money(line.lineTotalMinor, line.currency)}</b>
                   </div>

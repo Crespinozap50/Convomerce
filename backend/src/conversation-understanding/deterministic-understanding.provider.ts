@@ -3,6 +3,7 @@ import {
   classifyFlowCommand,
   parseQuantity,
   parseRecommendationAction,
+  stripCorrectionPrefix,
 } from "../commerce-events/commercial-flow.service";
 import { classifyMessage } from "../commerce-events/deterministic-reply.service";
 import {
@@ -47,7 +48,17 @@ export class DeterministicUnderstandingProvider implements ConversationUnderstan
   async understand(
     input: UnderstandingInput,
   ): Promise<ConversationUnderstanding> {
-    const text = normalize(input.message);
+    // D-169 follow-up (docs/decisions.md, D-184): a self-correction with no
+    // item separator at all ("quiero pastor no espera mejor pollo") used to
+    // leave both "pastor" and "pollo" in searchTerms below, since the
+    // correction-stripping commercial-flow.service.ts already had
+    // (splitItemMentions) only ever took effect when the message ALSO had a
+    // "y"/"," separator to split on. Stripped here instead, once, so every
+    // downstream signal computed from `text` (searchTerms, explicitPurchase/
+    // startsOrder, appointment/fulfillment matching) reflects only what the
+    // customer actually settled on — same narrow, explicit marker list
+    // (CORRECTION_MARKER_PATTERN) already used for the multi-item case.
+    const text = stripCorrectionPrefix(normalize(input.message));
     const recommendation = parseRecommendationAction(
       input.interactiveSelectionId,
     );

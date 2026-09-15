@@ -5,6 +5,7 @@ import { MessageReceivedEvent } from './commerce-event.types';
 import { MessageReceivedConsumer } from './message-received.consumer';
 import { SendRequestedConsumer, SendRequestedEvent } from './send-requested.consumer';
 import { GoogleCalendarService } from '../scheduling/google-calendar.service';
+import { LoggroOrderSyncService } from '../pos-integrations/loggro-order-sync.service';
 
 @Injectable()
 export class CommerceEventsWorker implements OnApplicationBootstrap, OnModuleDestroy {
@@ -16,6 +17,7 @@ export class CommerceEventsWorker implements OnApplicationBootstrap, OnModuleDes
     private readonly sendRequested: SendRequestedConsumer,
     private readonly config: ConfigService,
     private readonly googleCalendar: GoogleCalendarService,
+    private readonly loggroOrderSync: LoggroOrderSyncService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -41,6 +43,13 @@ export class CommerceEventsWorker implements OnApplicationBootstrap, OnModuleDes
         void this.sendRequested.markFailed(data,error).catch(markError =>
           this.logger.error(`Could not mark message ${data.messageId} as failed`,markError));
       }
+      if (job?.name === 'order.confirmed' && job.attemptsMade >= attempts) {
+        const data = job.data as Partial<{ tenantId: string; commercialRequestId: string }>;
+        if (data.tenantId && data.commercialRequestId) {
+          void this.loggroOrderSync.markFailed(data.tenantId, data.commercialRequestId, error).catch(markError =>
+            this.logger.error(`Could not mark Loggro push failed for ${data.commercialRequestId}`, markError));
+        }
+      }
     });
   }
 
@@ -51,6 +60,14 @@ export class CommerceEventsWorker implements OnApplicationBootstrap, OnModuleDes
       const action=job.name.slice('appointment.'.length);
       if(!['confirmed','rescheduled','cancelled'].includes(action))throw new UnrecoverableError(`Unsupported event type: ${job.name}`);
       await this.googleCalendar.syncAppointment(data.tenantId,data.appointmentId,action as 'confirmed'|'rescheduled'|'cancelled');
+      return { duplicate: false };
+    }
+    if (job.name === 'order.confirmed') {
+      const data = job.data as Partial<{ tenantId: string; commercialRequestId: string }>;
+      if (!data.tenantId || !data.commercialRequestId) {
+        throw new UnrecoverableError('Incomplete order.confirmed event');
+      }
+      await this.loggroOrderSync.pushOrder(data.tenantId, data.commercialRequestId);
       return { duplicate: false };
     }
     if (job.name === 'message.send_requested') {

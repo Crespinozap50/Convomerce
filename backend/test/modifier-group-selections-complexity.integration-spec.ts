@@ -303,7 +303,7 @@ describe('D-099 — modifier group selections, harder shapes and a second tenant
         options: [
           { id: requiredOptionAId, title: requiredOptionAName },
           { id: requiredOptionBId, title: requiredOptionBName },
-          { id: 'modifier:finish', title: 'Listo' },
+          { id: 'modifier:finish', title: 'No, gracias' },
         ],
       });
 

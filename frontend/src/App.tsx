@@ -62,6 +62,7 @@ import { TenantMetrics } from "./tenant-metrics/TenantMetrics";
 import { Team } from "./team/Team";
 import { InviteModal } from "./team/InviteModal";
 import { Connections } from "./connections/Connections";
+import { LoggroConnectionPanel } from "./connections/LoggroConnectionPanel";
 import { ConnectionModal } from "./connections/ConnectionModal";
 import { BotSettings } from "./bot/BotSettings";
 import { SchedulingSettings } from "./scheduling/SchedulingSettings";
@@ -655,21 +656,28 @@ function Dashboard({
           />
         )}{" "}
         {page === "connections" && (
-          <Connections
-            rows={connections}
-            canManage={canManageConnections}
-            webhookPath={webhookPath}
-            tenant={tenant}
-            onConfigure={setEditingConnection}
-            onNotice={setNotice}
-            onChanged={async (message, type) => {
-              const result = await api<ConnectionsResponse>(
-                `/v1/admin/tenants/${tenant}/channel-connections`,
-              );
-              setConnections(result.connections);
-              setNotice(message, type);
-            }}
-          />
+          <>
+            <Connections
+              rows={connections}
+              canManage={canManageConnections}
+              webhookPath={webhookPath}
+              tenant={tenant}
+              onConfigure={setEditingConnection}
+              onNotice={setNotice}
+              onChanged={async (message, type) => {
+                const result = await api<ConnectionsResponse>(
+                  `/v1/admin/tenants/${tenant}/channel-connections`,
+                );
+                setConnections(result.connections);
+                setNotice(message, type);
+              }}
+            />
+            <LoggroConnectionPanel
+              tenant={tenant}
+              canManage={canManageConnections}
+              onNotice={setNotice}
+            />
+          </>
         )}{" "}
         {page === "bot" && botConfig && (
           <BotSettings

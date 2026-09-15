@@ -26,8 +26,28 @@ describe('DeterministicReplyService', () => {
     ['¿Hacen domicilios en Robledo?', 'delivery'],
     ['¿Puedo pagar con tarjeta?', 'payments'],
     ['Quiero hablar con un humano', 'handoff'],
+    // Found live reviewing a real conversation (Santiago, Santos Tacos):
+    // "Gracias" right after a confirmed order had no dedicated intent at
+    // all and fell through to 'fallback', which upstream (commercial-
+    // flow.service.ts, no active workflow) led to an unrelated AI product
+    // recommendation instead of a simple acknowledgment.
+    ['Gracias', 'gratitude'],
+    ['Muchas gracias!', 'gratitude'],
+    ['Thank you', 'gratitude'],
   ])('classifies “%s” as %s', (message, expected) => {
     expect(classifyMessage(message, ['humano'])).toBe(expected);
+  });
+
+  it('answers gratitude with a plain acknowledgment, not an FAQ/AI lookup', async () => {
+    const client = { query: jest.fn() };
+    const reply = await new DeterministicReplyService().resolve(client as never, 'Gracias', {
+      locale: 'es', welcomeMessage: 'Hola', fallbackMessage: 'No sé', handoffKeywords: [], timezone: 'UTC',
+    });
+    expect(reply).toEqual({
+      intent: 'gratitude', handoff: false, sources: ['bot_configuration'],
+      body: '¡Con gusto! Si necesitas algo más, aquí estoy.',
+    });
+    expect(client.query).not.toHaveBeenCalled();
   });
 
   // D-164 (docs/decisions.md) live finding: a multi-word handoff phrase

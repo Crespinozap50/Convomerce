@@ -63,6 +63,7 @@ describe('inbound message flow', () => {
     sendRequested,
     config,
     { syncAppointment: jest.fn() } as never,
+    { pushOrder: jest.fn(), markFailed: jest.fn() } as never,
   );
   const outboundMessages = new OutboundMessagesService(database);
   const inspectionPool = new Pool({ connectionString });

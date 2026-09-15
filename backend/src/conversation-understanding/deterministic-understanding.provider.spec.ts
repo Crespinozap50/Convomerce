@@ -266,4 +266,37 @@ describe("DeterministicUnderstandingProvider", () => {
     );
     expect(product.entities.searchTerms).not.toContain("quiero");
   });
+
+  it("drops the discarded item from searchTerms on a self-correction with no separator at all (D-169 follow-up, D-184)", async () => {
+    // commercial-flow.service.ts's own multi-item splitting (D-169) only
+    // ever caught this when the message ALSO had a "y"/"," separator to
+    // split on afterward — "quiero pastor no espera mejor pollo" (no
+    // separator) never reached that logic in any useful way, so
+    // searchTerms kept both "pastor" and "pollo", risking a tie or a wrong
+    // match against the discarded item.
+    const result = await provider.understand({
+      ...base,
+      configuredLocale: "es-CO",
+      message: "quiero pastor no espera mejor pollo",
+    });
+    expect(result.entities.searchTerms).toContain("pollo");
+    expect(result.entities.searchTerms).not.toContain("pastor");
+  });
+
+  it("never strips a product name that a correction marker merely trails, with nothing real after it (regression guard)", async () => {
+    // Found live while building the fix above: "ya no quiero el celular
+    // Honor, mejor no" also matches the "mejor no" marker, but nothing
+    // follows it — a trailing dismissal, not a replacement. Stripping here
+    // would erase the only product name in the message, breaking negation
+    // matching against the cart (it still needs "celular"/"honor" in
+    // searchTerms to find what to remove).
+    const result = await provider.understand({
+      ...base,
+      configuredLocale: "es-CO",
+      message: "ya no quiero el celular Honor, mejor no",
+    });
+    expect(result.entities.searchTerms).toEqual(
+      expect.arrayContaining(["celular", "honor"]),
+    );
+  });
 });

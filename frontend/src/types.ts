@@ -194,6 +194,9 @@ export type CommercialRequest = {
   customerName: string;
   customerAddress: string | null;
   lineCount: number;
+  posSyncStatus: string;
+  posExternalOrderId: string | null;
+  posLastErrorCode: string | null;
   appointment: {
     id: string;
     status: string;
