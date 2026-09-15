@@ -905,6 +905,136 @@ describe("CommercialFlowService", () => {
     expect(reply?.body).not.toContain("Celular Xiaomi");
   });
 
+  it("also tries the consultative recommendation from handleAwaitingMoreItems' own tied branch, mid-order — and reuses the existing request instead of starting a second one", async () => {
+    // Same D-167/D-176 guard as the test above, reached through a
+    // different door: a customer already mid-order (an item already in
+    // the cart) retypes a second, vaguely-worded product instead of
+    // tapping a menu option. Before this fix, handleAwaitingMoreItems' own
+    // tied branch never had this guard at all — the same duplication gap
+    // already found for negatedCartMatch (D-172/174/175/180) — so it fell
+    // straight to the generic tie/category picker.
+    const tiedRows = [
+      {
+        item_id: "phone-xiaomi", variant_id: "phone-xiaomi-variant",
+        name: "Celular Xiaomi cámara 200MP", category: "celulares",
+        variant_name: "Único", price_minor: "129000000", currency: "COP",
+      },
+      {
+        item_id: "camara-accion", variant_id: "camara-accion-variant",
+        name: "Cámara de acción", category: "camaras",
+        variant_name: "Único", price_minor: "65000000", currency: "COP",
+      },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+            ],
+          };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return { rows: [{ ...tiedRows[1], description: "Resistente al agua, ideal para deportes extremos." }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: tiedRows };
+        if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+          return { rows: [] };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "camara-accion-variant", reason: "Resistente al agua, ideal para deportes." }]);
+    const message = "una cámara para tomar fotos deportivas";
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(recommend).toHaveBeenCalled();
+    expect(reply?.body).not.toContain("Celular Xiaomi");
+    // The whole point of not reusing tryConsultativeRecommendation as-is
+    // here: it always INSERTs a new commercial_request/conversation_workflow
+    // pair, which would silently orphan the real in-progress request
+    // ("request-1") and start a second, duplicate one instead of
+    // continuing it.
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.commercial_requests")),
+    ).toBe(false);
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.conversation_workflows")),
+    ).toBe(false);
+  });
+
+  it("also tries the consultative recommendation from handleSelectingItem's own tied branch, when a retyped product ties again while already disambiguating something else", async () => {
+    // Same guard, reached from the third door: already inside
+    // selecting_item (e.g. after tapping "Otro producto" on an unrelated
+    // tie) and the customer retypes a fresh, vaguely-worded product.
+    const tiedRows = [
+      {
+        item_id: "phone-xiaomi", variant_id: "phone-xiaomi-variant",
+        name: "Celular Xiaomi cámara 200MP", category: "celulares",
+        variant_name: "Único", price_minor: "129000000", currency: "COP",
+      },
+      {
+        item_id: "camara-accion", variant_id: "camara-accion-variant",
+        name: "Cámara de acción", category: "camaras",
+        variant_name: "Único", price_minor: "65000000", currency: "COP",
+      },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: "request-1",
+                step: "selecting_item",
+                context: { tiedItems: [] },
+              },
+            ],
+          };
+        if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants") && sql.includes("item.description"))
+          return { rows: [{ ...tiedRows[1], description: "Resistente al agua, ideal para deportes extremos." }] };
+        if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: tiedRows };
+        return { rows: [] };
+      }),
+    };
+    const recommend = jest
+      .fn()
+      .mockResolvedValue([{ variantId: "camara-accion-variant", reason: "Resistente al agua, ideal para deportes." }]);
+    const message = "una cámara para tomar fotos deportivas";
+
+    const reply = await new CommercialFlowService(
+      { suggest: jest.fn().mockResolvedValue(null) } as never,
+      { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      { recommend } as never,
+    ).resolve(client as never, {
+      ...input,
+      messageId: "message-1",
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(recommend).toHaveBeenCalled();
+    expect(reply?.body).not.toContain("Celular Xiaomi");
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.commercial_requests")),
+    ).toBe(false);
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.conversation_workflows")),
+    ).toBe(false);
+  });
+
   it("prefers the consultative recommendation over a weak match even with an explicit purchase verb (D-134 live finding)", async () => {
     // The D-133 fix above only ever ran when `!starts` — "Quiero un
     // computador para diseño gráfico" ("quiero" is a directDesire verb,

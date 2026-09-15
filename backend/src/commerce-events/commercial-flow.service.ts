@@ -486,10 +486,7 @@ export class CommercialFlowService {
       // too. Same safety guarantee as the weak-match branch: only ever
       // tries the AI first, still falls back to today's picker unchanged
       // whenever it finds nothing better.
-      if (
-        tied.every((item) => this.isWeakMatch(item, input)) ||
-        new Set(tied.map((item) => item.category)).size > 1
-      ) {
+      if (this.tieIsVague(tied, input)) {
         const consultative = await this.tryConsultativeRecommendation(client, input);
         if (consultative) return consultative;
       }
@@ -1101,6 +1098,11 @@ export class CommercialFlowService {
       // (D-174 follow-up, docs/decisions.md).
       const negated = await this.negatedCartMatch(client, flow, input.locale, input, tied);
       if (negated) return negated;
+      // D-167/D-176's own tied guard (docs/decisions.md) — see
+      // tryConsultativeForVagueTie's own comment for why this was missing
+      // here until now.
+      const consultative = await this.tryConsultativeForVagueTie(client, flow, input, tied);
+      if (consultative) return consultative;
       await this.step(client, flow.id, "selecting_item", {
         ...flow.context,
         tiedItems: tied,
@@ -1196,6 +1198,11 @@ export class CommercialFlowService {
       // follow-up, docs/decisions.md).
       const negated = await this.negatedCartMatch(client, flow, input.locale, input, tied);
       if (negated) return negated;
+      // D-167/D-176's own tied guard (docs/decisions.md) — see
+      // tryConsultativeForVagueTie's own comment for why this was missing
+      // here until now.
+      const consultative = await this.tryConsultativeForVagueTie(client, flow, input, tied);
+      if (consultative) return consultative;
       await this.step(client, flow.id, "selecting_item", {
         ...flow.context,
         tiedItems: tied,
@@ -2252,12 +2259,54 @@ export class CommercialFlowService {
       `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','selecting_item')`,
       [flowId, input.tenantId, input.conversationId, input.contactId, requestId],
     );
+    return this.applyConsultativeRecommendation(client, input, flowId, tied, reasons);
+  }
+  private async applyConsultativeRecommendation(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+    flowId: string,
+    tied: (Item & { description: string | null })[],
+    reasons: Map<string, string>,
+  ): Promise<DeterministicReply> {
     await this.step(client, flowId, "selecting_item", {
       tiedItems: tied,
       consultativeReasons: Object.fromEntries(reasons),
       consultativeMessage: input.body,
     });
     return this.recommendationChoiceReply(input.locale, tied, reasons);
+  }
+  // Same D-167/D-176 guard (docs/decisions.md) tryConsultativeRecommendation
+  // applies in startNewOrder — extended here for handleSelectingItem's/
+  // handleAwaitingMoreItems' own tied branches, which never had it (same
+  // duplication gap already found for negatedCartMatch, D-172/174/175/180).
+  // Deliberately NOT just calling tryConsultativeRecommendation itself: that
+  // method always INSERTs a brand new commercial_request/conversation_workflow
+  // pair, correct only in startNewOrder where none exists yet — calling it
+  // here, where flow.id/flow.commercial_request_id already exist, would
+  // silently orphan the real in-progress request and start a second,
+  // duplicate one instead of continuing it.
+  private tieIsVague(tied: Item[], input: UnderstoodFlowInput): boolean {
+    return (
+      tied.every((item) => this.isWeakMatch(item, input)) ||
+      new Set(tied.map((item) => item.category)).size > 1
+    );
+  }
+  private async tryConsultativeForVagueTie(
+    client: PoolClient,
+    flow: Workflow,
+    input: UnderstoodFlowInput,
+    tied: Item[],
+  ): Promise<DeterministicReply | null> {
+    if (!this.tieIsVague(tied, input)) return null;
+    const result = await this.consultativeRecommend(client, input, input.body);
+    if (!result) return null;
+    return this.applyConsultativeRecommendation(
+      client,
+      input,
+      flow.id,
+      result.tied,
+      result.reasons,
+    );
   }
   // D-131 live finding (follow-up to D-129): re-typing instead of tapping
   // used to just re-show the exact same list, silently ignoring whatever
