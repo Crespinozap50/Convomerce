@@ -6,7 +6,12 @@ describe("LoggroOrderSyncService", () => {
 
   function service(
     query: jest.Mock,
-    apiClient?: Partial<{ createOrder: jest.Mock; getTables: jest.Mock; getOccupiedTableIds: jest.Mock }>,
+    apiClient?: Partial<{
+      createOrder: jest.Mock;
+      getTables: jest.Mock;
+      getOccupiedTableIds: jest.Mock;
+      createTable: jest.Mock;
+    }>,
   ) {
     return new LoggroOrderSyncService(
       { withTenantTransaction: (_id: string, op: (c: unknown) => unknown) => op({ query }) } as never,
@@ -18,6 +23,7 @@ describe("LoggroOrderSyncService", () => {
             { _id: "table-1", name: "Bot Convomerce 1", isActive: true, isHomeDelivery: false },
           ]),
         getOccupiedTableIds: apiClient?.getOccupiedTableIds ?? jest.fn().mockResolvedValue(new Set()),
+        createTable: apiClient?.createTable ?? jest.fn(),
       } as never,
     );
   }
@@ -239,23 +245,77 @@ describe("LoggroOrderSyncService", () => {
       expect(createOrder).not.toHaveBeenCalled();
     });
 
-    it("throws when every table in the pool is occupied", async () => {
+    it("creates the next numbered table when every table in the pool is occupied (D-197, live finding)", async () => {
+      // Confirmed live (developer.loggro.com/reference/guardarmesa): POST
+      // /tables with no `_id` creates a real new table. Pedido explícito
+      // del dueño del proyecto: en vez de fallar el pedido cuando el pool
+      // entero está ocupado, crea la siguiente mesa numerada.
       const query = jest
         .fn()
         .mockResolvedValueOnce(connectionRow())
         .mockResolvedValueOnce(requestRow())
         .mockResolvedValueOnce(lineRow())
-        .mockResolvedValueOnce(noModifiers());
+        .mockResolvedValueOnce(noModifiers())
+        .mockResolvedValueOnce({ rows: [] });
       const getTables = jest.fn().mockResolvedValue([
         { _id: "table-1", name: "Bot Convomerce 1", isActive: true, isHomeDelivery: false },
         { _id: "table-2", name: "Bot Convomerce 2", isActive: true, isHomeDelivery: false },
       ]);
       const getOccupiedTableIds = jest.fn().mockResolvedValue(new Set(["table-1", "table-2"]));
-      const createOrder = jest.fn();
+      const createTable = jest.fn().mockResolvedValue({ _id: "table-3", name: "Bot Convomerce 3", isActive: true, isHomeDelivery: false });
+      const createOrder = jest.fn().mockResolvedValue([{ _id: "loggro-order-1", status: "Espera" }]);
 
-      await expect(service(query, { createOrder, getTables, getOccupiedTableIds }).pushOrder(tenantId, commercialRequestId))
-        .rejects.toThrow(/ocupadas/);
-      expect(createOrder).not.toHaveBeenCalled();
+      await service(query, { createOrder, getTables, getOccupiedTableIds, createTable }).pushOrder(tenantId, commercialRequestId);
+
+      expect(createTable).toHaveBeenCalledWith(tenantId, "conn-1", "Bot Convomerce 3");
+      const [orderPayload] = createOrder.mock.calls[0].slice(2);
+      expect(orderPayload.table).toBe("table-3");
+    });
+
+    it("never reuses a deactivated table's number when creating the next one", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce(connectionRow())
+        .mockResolvedValueOnce(requestRow())
+        .mockResolvedValueOnce(lineRow())
+        .mockResolvedValueOnce(noModifiers())
+        .mockResolvedValueOnce({ rows: [] });
+      const getTables = jest.fn().mockResolvedValue([
+        { _id: "table-1", name: "Bot Convomerce 1", isActive: true, isHomeDelivery: false },
+        { _id: "table-5", name: "Bot Convomerce 5", isActive: false, isHomeDelivery: false },
+      ]);
+      const getOccupiedTableIds = jest.fn().mockResolvedValue(new Set(["table-1"]));
+      const createTable = jest.fn().mockResolvedValue({ _id: "table-2", name: "Bot Convomerce 2", isActive: true, isHomeDelivery: false });
+      const createOrder = jest.fn().mockResolvedValue([{ _id: "loggro-order-1", status: "Espera" }]);
+
+      await service(query, { createOrder, getTables, getOccupiedTableIds, createTable }).pushOrder(tenantId, commercialRequestId);
+
+      expect(createTable).toHaveBeenCalledWith(tenantId, "conn-1", "Bot Convomerce 2");
+    });
+
+    it("never matches a deactivated table even if its name still fits the pattern (D-197, live finding)", async () => {
+      // Found live: GET /tables keeps returning a table after it's
+      // deactivated (isActive:false) — only a real DELETE removes it from
+      // this list, and that call can fail on Loggro's side (e.g. an open
+      // cash register blocks it). A leftover deactivated "Bot Convomerce
+      // Prueba" table must never be picked as a real destination.
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce(connectionRow())
+        .mockResolvedValueOnce(requestRow())
+        .mockResolvedValueOnce(lineRow())
+        .mockResolvedValueOnce(noModifiers())
+        .mockResolvedValueOnce({ rows: [] });
+      const getTables = jest.fn().mockResolvedValue([
+        { _id: "table-inactive", name: "Bot Convomerce Prueba", isActive: false, isHomeDelivery: false },
+        { _id: "table-2", name: "Bot Convomerce 2", isActive: true, isHomeDelivery: false },
+      ]);
+      const createOrder = jest.fn().mockResolvedValue([{ _id: "loggro-order-1", status: "Espera" }]);
+
+      await service(query, { createOrder, getTables }).pushOrder(tenantId, commercialRequestId);
+
+      const [orderPayload] = createOrder.mock.calls[0].slice(2);
+      expect(orderPayload.table).toBe("table-2");
     });
   });
 });

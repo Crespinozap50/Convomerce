@@ -118,6 +118,24 @@ describe("LoggroApiClient", () => {
     });
   });
 
+  describe("createTable", () => {
+    it("POSTs just the name — confirmed live that omitting _id creates a new table", async () => {
+      const query = jest.fn().mockResolvedValue({ rows: [{ cached_token: "cached-token" }] });
+      const fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue({
+        ok: true,
+        json: async () => ({ _id: "new-table-1", name: "Bot Convomerce 3", isActive: true, isHomeDelivery: false }),
+      } as Response);
+
+      const created = await client(query).createTable(tenantId, connectionId, "Bot Convomerce 3");
+
+      expect(created).toEqual({ _id: "new-table-1", name: "Bot Convomerce 3", isActive: true, isHomeDelivery: false });
+      const [url, init] = fetchSpy.mock.calls[0];
+      expect(url).toBe("https://api.pirpos.com/tables");
+      expect((init as RequestInit).method).toBe("POST");
+      expect(JSON.parse((init as RequestInit).body as string)).toEqual({ name: "Bot Convomerce 3" });
+    });
+  });
+
   describe("createOrder", () => {
     it("POSTs the exact payload it was given, with the resolved bearer token", async () => {
       const query = jest.fn().mockResolvedValueOnce({ rows: [{ cached_token: "cached-token" }] });

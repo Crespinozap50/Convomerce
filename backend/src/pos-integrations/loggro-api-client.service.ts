@@ -110,6 +110,22 @@ export class LoggroApiClient {
     );
   }
 
+  // D-197 (docs/decisions.md): confirmed live against developer.loggro.com
+  // — POST /tables with no `_id` creates a new table (requires the real
+  // account to have the TA_POST permission, confirmed live for Santos
+  // Tacos). Used by LoggroOrderSyncService.resolveAvailableTable() to grow
+  // the table pool automatically once every existing table is occupied.
+  async createTable(tenantId: string, connectionId: string, name: string): Promise<LoggroTable> {
+    return this.withAuth<LoggroTable>(tenantId, connectionId, (token) =>
+      fetch(`${LOGGRO_BASE_URL}/tables`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+        signal: AbortSignal.timeout(10_000),
+      }),
+    );
+  }
+
   // D-188/D-192 (docs/decisions.md): `GET /tables` carries no occupancy
   // field at all, and the floor-plan UI's "Ocupada" indicator doesn't
   // reliably reflect orders created via this API. The only signal

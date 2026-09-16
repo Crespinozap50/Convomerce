@@ -13,6 +13,14 @@ function randomObjectId(): string {
   return randomBytes(12).toString("hex");
 }
 
+// Trailing number in a table name (e.g. "Bot Convomerce 2" -> 2). Falls
+// back to -Infinity for non-numbered names so they sort first/never count
+// toward "highest number" when picking the next one to create (D-197).
+function tableNumber(name: string): number {
+  const match = /(\d+)\s*$/.exec(name);
+  return match ? Number(match[1]) : -Infinity;
+}
+
 // D-188/D-192/D-194 (docs/decisions.md): any order still in one of these
 // statuses means the table's tab is open — only Cancelada (and Pagada,
 // seen in the real report but not yet exercised live here) are excluded.
@@ -128,20 +136,27 @@ export class LoggroOrderSyncService {
   ): Promise<string> {
     const normalizedPattern = pattern.trim().toLowerCase();
     const allTables = await this.apiClient.getTables(tenantId, connectionId);
+    // D-197 (docs/decisions.md): GET /tables keeps returning a table even
+    // after it's deactivated (isActive:false) — only a real (permission-
+    // gated) DELETE removes it from this list. Never match a deactivated
+    // table, even if its name still fits the pattern.
     const pool = allTables
-      .filter((table) => table.name.trim().toLowerCase().startsWith(normalizedPattern))
-      .sort((a, b) => {
-        const numA = Number(/(\d+)\s*$/.exec(a.name)?.[1]);
-        const numB = Number(/(\d+)\s*$/.exec(b.name)?.[1]);
-        if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
-        return a.name.localeCompare(b.name);
-      });
+      .filter((table) => table.isActive && table.name.trim().toLowerCase().startsWith(normalizedPattern))
+      .sort((a, b) => tableNumber(a.name) - tableNumber(b.name));
     if (pool.length === 0)
       throw new Error(`No se encontraron mesas en Loggro que coincidan con el patrón "${pattern}"`);
     const occupied = await this.apiClient.getOccupiedTableIds(tenantId, connectionId, OCCUPIED_STATUSES);
     const available = pool.find((table) => !occupied.has(table._id));
-    if (!available) throw new Error(`Todas las mesas del patrón "${pattern}" están ocupadas`);
-    return available._id;
+    if (available) return available._id;
+    // D-197 (docs/decisions.md): pedido explícito — si el pool entero está
+    // ocupado, crea la siguiente mesa numerada en vez de fallar el pedido.
+    // POST /tables confirmado en vivo (developer.loggro.com/reference/guardarmesa):
+    // sin `_id` crea una mesa real nueva. Nunca reutiliza el número de una
+    // mesa desactivada (D-197) — siempre el máximo + 1 de las activas.
+    const highestNumber = pool.reduce((max, table) => Math.max(max, tableNumber(table.name)), 0);
+    const newTableName = `${pattern.trim()} ${highestNumber + 1}`;
+    const created = await this.apiClient.createTable(tenantId, connectionId, newTableName);
+    return created._id;
   }
 
   async markFailed(tenantId: string, commercialRequestId: string, error: unknown): Promise<void> {
