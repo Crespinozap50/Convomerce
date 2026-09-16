@@ -5,7 +5,7 @@ describe('CommerceEventsWorker appointment synchronization', () => {
   const messageConsumer = { consume: jest.fn() };
   const sendConsumer = { consume: jest.fn(), markFailed: jest.fn() };
   const calendar = { syncAppointment: jest.fn().mockResolvedValue({ synced: true }) };
-  const loggroOrderSync = { pushOrder: jest.fn().mockResolvedValue({ externalOrderId: 'ext-1' }), markFailed: jest.fn() };
+  const loggroOrderSync = { pushOrder: jest.fn().mockResolvedValue({ externalOrderIds: ['ext-1'] }), markFailed: jest.fn() };
   const worker = new CommerceEventsWorker(
     messageConsumer as never,
     sendConsumer as never,

@@ -78,7 +78,7 @@ describe("LoggroOrderSyncService", () => {
 
     const result = await service(query, { createOrder }).pushOrder(tenantId, commercialRequestId);
 
-    expect(result).toEqual({ externalOrderId: "loggro-order-1" });
+    expect(result).toEqual({ externalOrderIds: ["loggro-order-1"] });
     const [orderPayload] = createOrder.mock.calls[0].slice(2);
     expect(orderPayload.table).toBe("table-1");
     expect(orderPayload.orders).toEqual([
@@ -87,7 +87,36 @@ describe("LoggroOrderSyncService", () => {
     expect(orderPayload.groupName).toBe("WhatsApp - Pedido 00000301");
     const finalWrite = query.mock.calls[4];
     expect(String(finalWrite[0])).toContain("pos_sync_status='synced'");
-    expect(finalWrite[1]).toEqual([commercialRequestId, "loggro-order-1"]);
+    expect(finalWrite[1]).toEqual([commercialRequestId, ["loggro-order-1"]]);
+  });
+
+  it("tracks every order id Loggro returns, not just the first — a modifier creates its own separate order document (D-195, live finding)", async () => {
+    // Found live: Loggro's POST /orders creates one independent order
+    // document PER ENTRY of `orders[]`, never a single order with several
+    // lines. A request with a mapped modifier (D-192/D-193) used to only
+    // record created[0]._id, leaving the modifier's own order untracked —
+    // a real orphan on the real Bot Convomerce table, cleaned up by hand.
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce(connectionRow())
+      .mockResolvedValueOnce(requestRow())
+      .mockResolvedValueOnce({
+        rows: [{ id: "line-1", description_snapshot: "Dorado de Pollo", quantity: "1", unit_price_minor_snapshot: "950000", external_product_id: "loggro-prod-1" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ request_line_id: "line-1", description_snapshot: "Guacamole", quantity: "1", unit_price_delta_minor_snapshot: "300000", external_product_id: "loggro-guac-1" }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+    const createOrder = jest.fn().mockResolvedValue([
+      { _id: "loggro-order-parent", status: "Espera" },
+      { _id: "loggro-order-modifier", status: "Espera" },
+    ]);
+
+    const result = await service(query, { createOrder }).pushOrder(tenantId, commercialRequestId);
+
+    expect(result).toEqual({ externalOrderIds: ["loggro-order-parent", "loggro-order-modifier"] });
+    const finalWrite = query.mock.calls[4];
+    expect(finalWrite[1]).toEqual([commercialRequestId, ["loggro-order-parent", "loggro-order-modifier"]]);
   });
 
   it("folds an unmapped modifier into the line's notes instead of dropping it", async () => {

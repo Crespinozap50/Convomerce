@@ -46,7 +46,7 @@ export class LoggroOrderSyncService {
   // outbox event that triggers this gets inserted. Never silently drops a
   // line: an unmapped catalog item or a missing home-delivery table both
   // throw a specific, actionable error instead of guessing.
-  async pushOrder(tenantId: string, commercialRequestId: string): Promise<{ externalOrderId: string }> {
+  async pushOrder(tenantId: string, commercialRequestId: string): Promise<{ externalOrderIds: string[] }> {
     const context = await this.loadContext(tenantId, commercialRequestId);
     if (!context.tableNamePattern)
       throw new Error(
@@ -99,15 +99,21 @@ export class LoggroOrderSyncService {
       groupName: `WhatsApp - Pedido ${reference}`,
       orders,
     });
-    const externalOrderId = created[0]?._id;
-    if (!externalOrderId) throw new Error("Loggro did not return a created order id");
+    // D-195 (docs/decisions.md): Loggro creates one independent order
+    // document PER ENTRY of `orders[]`, never a single order with several
+    // lines — a request with a mapped modifier returns 2+ ids here. Every
+    // one is tracked, not just the first: a real orphan (the modifier's own
+    // order, never recorded anywhere) was found live and cleaned up by hand
+    // before this fix existed.
+    const externalOrderIds = created.map((order) => order._id).filter(Boolean);
+    if (externalOrderIds.length === 0) throw new Error("Loggro did not return any created order id");
     await this.db.withTenantTransaction(tenantId, (client) =>
       client.query(
         `update app.commercial_requests set pos_sync_status='synced',pos_external_order_id=$2,pos_synced_at=now(),pos_last_error_code=null where id=$1`,
-        [commercialRequestId, externalOrderId],
+        [commercialRequestId, externalOrderIds],
       ),
     );
-    return { externalOrderId };
+    return { externalOrderIds };
   }
 
   // D-194 (docs/decisions.md): re-resolves the real matching tables on
