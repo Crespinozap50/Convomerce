@@ -5902,6 +5902,218 @@ describe("CommercialFlowService", () => {
     expect(reply?.body).toContain("ya no se puede cancelar");
   });
 
+  it("says there is nothing to modify when there is no active draft and no confirmed order either (D-188/D-199)", async () => {
+    const client = {
+      query: jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [] }) // no active workflow
+        .mockResolvedValue({ rows: [] }), // no 'ready' requests either
+    };
+    const message = "modificar mi pedido";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toBe("No tienes un pedido confirmado para modificar.");
+  });
+
+  it("offers to modify a confirmed order that the business hasn't accepted yet, when asked with no active draft (D-188/D-199)", async () => {
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return { rows: [] };
+        if (sql.includes("from app.commercial_requests") && sql.includes("status='ready'"))
+          return { rows: [{ id: "0194f000-0000-7000-8000-0000000ABCDE", total_minor: "3580000", currency: "COP" }] };
+        return { rows: [] };
+      }),
+    };
+    const message = "modificar mi pedido";
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: message,
+      understanding: await understand(message),
+    });
+
+    expect(reply?.body).toBe("Tienes un pedido confirmado. ¿Quieres modificarlo?");
+    expect(
+      reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+    ).toEqual({
+      type: "list",
+      body: "",
+      buttonLabel: "Elegir",
+      options: [
+        { id: "1", title: "Pedido #000ABCDE", description: formatMoney("3580000", "COP", "es") },
+        { id: "2", title: "No, dejar así" },
+      ],
+    });
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("'selecting_modify_ready'"),
+      ),
+    ).toBe(true);
+  });
+
+  it("reopens the confirmed order tapped from the list for editing, re-checking it's still modifiable at that exact moment (D-188/D-199)", async () => {
+    const readyRequests = [
+      { id: "req-ready-1", reference: "REQREADY", totalMinor: "3580000", currency: "COP" },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: null,
+                step: "selecting_modify_ready",
+                context: { readyRequests },
+              },
+            ],
+          };
+        if (sql.includes("update app.commercial_requests set status='draft'"))
+          return { rows: [], rowCount: 1 };
+        if (sql.startsWith("select") && sql.includes("app.request_lines"))
+          return { rows: [] };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "1",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { selectionIndex: 1 },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    const reopenUpdate = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("update app.commercial_requests set status='draft'"),
+    );
+    expect(reopenUpdate?.[1]).toEqual(expect.arrayContaining(["req-ready-1"]));
+    const editInsert = client.query.mock.calls.find(
+      ([sql]) =>
+        String(sql).includes("insert into app.conversation_workflows") &&
+        String(sql).includes("awaiting_more_items"),
+    );
+    expect(editInsert?.[1]).toEqual(expect.arrayContaining(["req-ready-1"]));
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("update app.conversation_workflows set status='completed'"),
+      ),
+    ).toBe(true);
+    expect(reply?.body).toContain("Aquí está tu pedido actual.");
+  });
+
+  it("keeps the order and never touches it, when the customer taps 'No, dejar así' on the modify picker (D-188/D-199)", async () => {
+    const readyRequests = [
+      { id: "req-ready-1", reference: "REQREADY", totalMinor: "3580000", currency: "COP" },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: null,
+                step: "selecting_modify_ready",
+                context: { readyRequests },
+              },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "2",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { selectionIndex: 2 },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply?.body).toBe("Entendido, tu pedido sigue igual.");
+    expect(
+      client.query.mock.calls.some(([sql]) => String(sql).includes("status='draft'")),
+    ).toBe(false);
+  });
+
+  it("says the order can no longer be modified here, instead of silently reopening it, when the business already accepted it in the meantime (D-188/D-199 race guard)", async () => {
+    const readyRequests = [
+      { id: "req-ready-1", reference: "REQREADY", totalMinor: "3580000", currency: "COP" },
+    ];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              {
+                id: "workflow-1",
+                commercial_request_id: null,
+                step: "selecting_modify_ready",
+                context: { readyRequests },
+              },
+            ],
+          };
+        if (sql.includes("update app.commercial_requests set status='draft'"))
+          return { rows: [], rowCount: 0 };
+        return { rows: [] };
+      }),
+    };
+
+    const reply = await service().resolve(client as never, {
+      ...input,
+      body: "1",
+      understanding: {
+        locale: "es",
+        localeSource: "tenant_default",
+        intent: "order",
+        confidence: 0.5,
+        entities: { selectionIndex: 1 },
+        requestedAction: null,
+        missingInformation: [],
+        requiresHuman: false,
+        provider: "deterministic",
+        providerVersion: "test",
+      } as never,
+    });
+
+    expect(reply?.body).toContain("ya no se puede modificar");
+    expect(
+      client.query.mock.calls.some(([sql]) =>
+        String(sql).includes("insert into app.conversation_workflows") &&
+        String(sql).includes("awaiting_more_items"),
+      ),
+    ).toBe(false);
+  });
+
   const fulfillmentUnderstanding = (requestedAction: string) => ({
     locale: "es" as const,
     localeSource: "tenant_default" as const,

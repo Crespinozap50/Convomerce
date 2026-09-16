@@ -424,6 +424,14 @@ export class CommercialFlowService {
     // fix shape as the cancel guard directly above.
     if (!flow && command === "remove_item")
       return this.localizedReply(input.locale, "nothingToRemove");
+    // D-188 punto 4 (docs/decisions.md), mitad "modifica": "modificar mi
+    // pedido"/"cambiar mi pedido" con no active flow fell through to
+    // startNewOrder() below, exactly the same failure shape as the
+    // cancel/remove_item guards above (D-173/D-169) — the generic "change"
+    // command already exists and already matches this phrasing
+    // (es.rules.json/en.rules.json, "^(cambiar|cambio|modificar)\\b"), it
+    // was just never checked outside an active flow.
+    if (!flow && command === "change") return this.modifyReadyOrderReply(client, input);
     // Found live reviewing a real conversation (Santiago, Santos Tacos):
     // "Gracias" right after a confirmed order, with no active flow left,
     // fell all the way through to startNewOrder() below — "gracias" isn't a
@@ -438,6 +446,7 @@ export class CommercialFlowService {
     if (globalResult !== undefined) return globalResult;
     if (flow.step === "selecting_replace_target") return this.handleSelectingReplaceTarget(client, input, flow);
     if (flow.step === "selecting_cancel_ready") return this.handleSelectingCancelReadyOrder(client, input, flow);
+    if (flow.step === "selecting_modify_ready") return this.handleSelectingModifyReadyOrder(client, input, flow);
     if (flow.step === "selecting_item") return this.handleSelectingItem(client, input, flow);
     if (flow.step === "awaiting_more_items") return this.handleAwaitingMoreItems(client, input, flow, affirmative);
     if (flow.step === "removing_item") return this.handleRemovingItem(client, input, flow);
@@ -1926,6 +1935,141 @@ export class CommercialFlowService {
       reference: chosen.reference,
       total: formatMoney(chosen.totalMinor, chosen.currency, input.locale),
     });
+  }
+  // D-188 punto 4 (docs/decisions.md), mitad "modifica" — mismo shape que
+  // cancelReadyOrderReply justo arriba: solo mira status='ready' (nunca
+  // nada más adelante), commercial_request_id se deja null a propósito
+  // (este workflow solo trackea la elección, no un carrito).
+  private async modifyReadyOrderReply(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+  ): Promise<DeterministicReply> {
+    const ready = await client.query<{ id: string; total_minor: string; currency: string }>(
+      `select id,total_minor::text,currency from app.commercial_requests
+       where tenant_id=$1 and conversation_id=$2 and contact_id=$3 and status='ready'
+       order by confirmed_at desc`,
+      [input.tenantId, input.conversationId, input.contactId],
+    );
+    if (ready.rows.length === 0) return this.localizedReply(input.locale, "nothingToModify");
+    const readyRequests = ready.rows.map((row) => ({
+      id: row.id,
+      reference: row.id.slice(-8).toUpperCase(),
+      totalMinor: row.total_minor,
+      currency: row.currency,
+    }));
+    const flowId = uuidv7();
+    await client.query(
+      `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,operation_type,step,context) values($1,$2,$3,$4,'order','selecting_modify_ready',$5::jsonb)`,
+      [flowId, input.tenantId, input.conversationId, input.contactId, JSON.stringify({ readyRequests })],
+    );
+    return this.modifyReadyChoiceReply(input.locale, readyRequests);
+  }
+  private modifyReadyChoiceReply(
+    locale: Locale,
+    readyRequests: { id: string; reference: string; totalMinor: string; currency: string }[],
+  ): DeterministicReply {
+    const options: InteractiveMessage["options"] = readyRequests.slice(0, 9).map((request, index) => ({
+      id: String(index + 1),
+      title: this.truncate(`Pedido #${request.reference}`, 24),
+      description: formatMoney(request.totalMinor, request.currency, locale),
+    }));
+    options.push({
+      id: String(options.length + 1),
+      title: this.copy(locale, "modifyReadyKeep"),
+    });
+    const bodyKey: CommercialCopyKey =
+      readyRequests.length > 1 ? "modifyReadyChoiceMany" : "modifyReadyChoiceOne";
+    const body = this.copy(locale, bodyKey);
+    return {
+      ...this.reply(body),
+      responsePlan: {
+        kind: "verified_content",
+        body,
+        interactive: {
+          type: "list",
+          body: "",
+          buttonLabel: this.copy(locale, "chooseButtonLabel"),
+          options,
+        },
+      },
+    };
+  }
+  private async handleSelectingModifyReadyOrder(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+    flow: Workflow,
+  ): Promise<DeterministicReply | null> {
+    const readyRequests = (flow.context.readyRequests ?? []) as {
+      id: string;
+      reference: string;
+      totalMinor: string;
+      currency: string;
+    }[];
+    const selectionIndex = input.understanding.entities.selectionIndex;
+    const keepIndex = readyRequests.length + 1;
+    if (typeof selectionIndex === "number" && selectionIndex === keepIndex) {
+      await client.query(
+        `update app.conversation_workflows set status='completed',updated_at=now() where id=$1`,
+        [flow.id],
+      );
+      return this.localizedReply(input.locale, "modifyReadyKept");
+    }
+    const chosen =
+      typeof selectionIndex === "number" ? readyRequests[selectionIndex - 1] : undefined;
+    await client.query(
+      `update app.conversation_workflows set status='completed',updated_at=now() where id=$1`,
+      [flow.id],
+    );
+    if (!chosen) {
+      // Free text that doesn't resolve to a tap never leaves this pending
+      // step blocking every future message — same convention as
+      // handleSelectingCancelReadyOrder just above.
+      return null;
+    }
+    // Re-checks status='ready' at the moment of reopening, not just when
+    // the list was built — same race as cancelReadyOrderReply's own guard
+    // (the business may have accepted it in between). Flipping to 'draft'
+    // also means the admin panel's own transitions map
+    // (commercial-requests.service.ts, transitions.draft=['cancelled'])
+    // blocks "Aceptar pedido" for the whole editing window, not just at
+    // this one instant.
+    const reopened = await client.query(
+      `update app.commercial_requests set status='draft',updated_at=now() where tenant_id=$1 and id=$2 and status='ready'`,
+      [input.tenantId, chosen.id],
+    );
+    if (reopened.rowCount === 0) return this.localizedReply(input.locale, "modifyReadyTooLate");
+    const editFlowId = uuidv7();
+    await client.query(
+      `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','awaiting_more_items')`,
+      [editFlowId, input.tenantId, input.conversationId, input.contactId, chosen.id],
+    );
+    return this.modifyReadyStartedReply(client, chosen.id, input.locale);
+  }
+  // Same cart+buttons shape as withMoreItems (below), with an intro line
+  // telling the customer their already-confirmed order is open for editing
+  // again — reuses the exact composition idiom afterCartChange's own
+  // itemsNotFound branch already uses to prepend a line ahead of the cart
+  // segments.
+  private async modifyReadyStartedReply(
+    client: PoolClient,
+    requestId: string,
+    locale: Locale,
+  ): Promise<DeterministicReply> {
+    const cart = await this.cart(client, requestId, locale);
+    return this.plannedReply(
+      this.content(
+        locale,
+        [
+          { kind: "template", template: { namespace: "commercial", key: "modifyReadyStarted" } },
+          { kind: "line_break" },
+          { kind: "line_break" },
+          ...cart.plan.segments,
+          { kind: "line_break" },
+          { kind: "template", template: { namespace: "commercial", key: "moreItems" } },
+        ],
+        this.moreItemsButtons(locale),
+      ),
+    );
   }
   // Applied after matchItemMentions() finds a decomposition — its matched
   // items are already in the cart (addItem already ran on multi.matches) by
