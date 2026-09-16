@@ -197,13 +197,18 @@ export function CommercialRequests({
   // placed via WhatsApp had no way to progress past "ready" from the
   // panel — nothing else in the backend ever advances it automatically.
   // Found live: real Santos Tacos orders stuck in "ready" forever.
-  const actions: Record<string, string[]> = {
+  // D-202 (docs/decisions.md): once an order is accepted it was already
+  // sent to Loggro/the kitchen — the project owner confirmed there's no
+  // real "cancel" from there, only a direct call outside the app. A
+  // reservation/appointment has no such POS/kitchen step, so it keeps
+  // being cancellable after being accepted — this only narrows 'order'.
+  const actions = (type: string): Record<string, string[]> => ({
     draft: ["cancelled"],
     awaiting_confirmation: ["cancelled", "rejected"],
     ready: ["accepted", "rejected", "cancelled"],
-    accepted: ["in_progress", "cancelled"],
-    in_progress: ["completed", "cancelled"],
-  };
+    accepted: type === "order" ? ["in_progress"] : ["in_progress", "cancelled"],
+    in_progress: type === "order" ? ["completed"] : ["completed", "cancelled"],
+  });
   const money = (value: number, currency: string) =>
     new Intl.NumberFormat(undefined, {
       style: "currency",
@@ -476,28 +481,29 @@ export function CommercialRequests({
                   <p>{detail.request.cancellationNote}</p>
                 </div>
               )}
-            {canManage && actions[detail.request.status]?.length > 0 && (
-              <div className="request-actions">
-                <span>
-                  <b>{t("requests.nextAction")}</b>
-                  <small>{t("requests.nextActionHelp")}</small>
-                </span>
-                {actions[detail.request.status].map((status) => (
-                  <button
-                    disabled={busy}
-                    className={
-                      status === "cancelled" || status === "rejected"
-                        ? "danger-soft"
-                        : ""
-                    }
-                    onClick={() => void change(status)}
-                    key={status}
-                  >
-                    {actionLabel(detail.request.type, status)}
-                  </button>
-                ))}
-              </div>
-            )}
+            {canManage &&
+              actions(detail.request.type)[detail.request.status]?.length > 0 && (
+                <div className="request-actions">
+                  <span>
+                    <b>{t("requests.nextAction")}</b>
+                    <small>{t("requests.nextActionHelp")}</small>
+                  </span>
+                  {actions(detail.request.type)[detail.request.status].map((status) => (
+                    <button
+                      disabled={busy}
+                      className={
+                        status === "cancelled" || status === "rejected"
+                          ? "danger-soft"
+                          : ""
+                      }
+                      onClick={() => void change(status)}
+                      key={status}
+                    >
+                      {actionLabel(detail.request.type, status)}
+                    </button>
+                  ))}
+                </div>
+              )}
           </>
         ) : (
           <div className="request-detail-empty">

@@ -99,6 +99,17 @@ export class CommercialRequestsService {
        where request.id=$1 for update of request`,[requestId]);
     if(!current.rows[0])throw notFound('COMMERCIAL_REQUEST_NOT_FOUND','Commercial request was not found');
     if(!transitions[current.rows[0].status]?.includes(status))throw badRequest('INVALID_STATUS_TRANSITION',`Cannot move commercial request from ${current.rows[0].status} to ${status}`);
+    // D-202 (docs/decisions.md): an 'order' already 'accepted' was already
+    // pushed to Loggro (see the 'accepted' branch below) — the kitchen is
+    // already preparing it. The project owner confirmed there's no real
+    // cancel from there, only a direct call outside the app, so this stays
+    // stricter than the generic `transitions` map above (which still
+    // allows accepted/in_progress -> cancelled — a reservation/appointment
+    // has no POS/kitchen step and keeps being cancellable after
+    // acceptance, so this check is deliberately scoped to request_type
+    // 'order' only, never a blanket rule).
+    if(status==='cancelled'&&current.rows[0].request_type==='order'&&['accepted','in_progress'].includes(current.rows[0].status))
+      throw badRequest('ORDER_ALREADY_IN_PREPARATION','This order was already sent to the POS and is being prepared — it can no longer be cancelled from here');
     if(status==='cancelled'&&current.rows[0].appointment_id&&['held','confirmed'].includes(current.rows[0].appointment_status??'')){
       await client.query(`select app.transition_appointment($1,'cancel',null,null)`,[current.rows[0].appointment_id]);
     }

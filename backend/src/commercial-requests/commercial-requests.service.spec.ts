@@ -54,6 +54,26 @@ describe('CommercialRequestsService',()=>{
     await expect(new CommercialRequestsService(db).changeStatus('tenant-1','user-1','request-1','accepted')).rejects.toThrow('Cannot move commercial request from completed to accepted');
   });
 
+  // D-202 (docs/decisions.md): once an order reaches 'accepted' it was
+  // already pushed to Loggro/the kitchen — the project owner confirmed
+  // there's no real cancel from there, only a direct call outside the app.
+  it.each(['accepted' as const,'in_progress' as const])(
+    'rejects cancelling an order already %s — already sent to the POS/kitchen',
+    async(status)=>{
+      const client={query:jest.fn(async(sql:string)=>sql.includes('from app.tenant_users')?{rows:[{role:'operator'}]}:{rows:[{status,request_type:'order'}]})};
+      const db={withTenantTransaction:(_tenant:string,operation:(client:unknown)=>unknown)=>operation(client)} as never;
+      await expect(new CommercialRequestsService(db).changeStatus('tenant-1','user-1','request-1','cancelled'))
+        .rejects.toMatchObject({response:{code:'ORDER_ALREADY_IN_PREPARATION'}});
+    },
+  );
+
+  it('still allows cancelling a reservation/appointment already accepted — no POS/kitchen step involved',async()=>{
+    const client={query:jest.fn(async(sql:string)=>{if(sql.includes('from app.tenant_users'))return{rows:[{role:'operator'}]};if(sql.includes('for update of request'))return{rows:[{status:'accepted',request_type:'reservation',appointment_id:null,appointment_status:null}]};return{rows:[{id:'request-1',request_type:'reservation',status:'cancelled',currency:'COP',subtotal_minor:'0',total_minor:'0'}]}})};
+    const db={withTenantTransaction:(_tenant:string,operation:(client:unknown)=>unknown)=>operation(client)} as never;
+    const result=await new CommercialRequestsService(db).changeStatus('tenant-1','user-1','request-1','cancelled');
+    expect(result.request.status).toBe('cancelled');
+  });
+
   it('cancels the linked appointment when an administrator cancels a reservation',async()=>{
     const queries:string[]=[];
     const client={query:jest.fn(async(sql:string)=>{queries.push(sql);if(sql.includes('from app.tenant_users'))return{rows:[{role:'operator'}]};if(sql.includes('for update of request'))return{rows:[{status:'accepted',request_type:'reservation',appointment_id:'appointment-1',appointment_status:'confirmed'}]};return{rows:[{id:'request-1',request_type:'reservation',status:'cancelled',currency:'COP',subtotal_minor:'0',total_minor:'0'}]}})};
