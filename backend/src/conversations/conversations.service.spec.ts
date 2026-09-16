@@ -147,6 +147,32 @@ describe("ConversationsService", () => {
 
       expect(result.messages[0].generationOutcome).toBe(expected);
     });
+
+    it("returns the most recent messages in chronological order, not the oldest ones cut off by the 500 limit (live finding, 1335+ message conversation)", async () => {
+      const { query } = clientWith({
+        tenantUserRow: { id: "m1", role: "admin" },
+        extra: (sql) => {
+          if (sql.includes("from app.conversations conversation"))
+            return { rows: [{ id: conversationId, status: "open" }] };
+          if (sql.includes("from app.messages message"))
+            // DB returns newest-first (order by occurred_at desc, id desc
+            // limit 500) — the service must reverse this back to
+            // chronological order before it reaches the panel.
+            return {
+              rows: [
+                { id: "msg-3", direction: "outbound", content: { body: "tercero" }, input_tokens: null },
+                { id: "msg-2", direction: "outbound", content: { body: "segundo" }, input_tokens: null },
+                { id: "msg-1", direction: "outbound", content: { body: "primero" }, input_tokens: null },
+              ],
+            };
+          return undefined;
+        },
+      });
+
+      const result = await service({ query }).messages(tenantId, userId, conversationId);
+
+      expect(result.messages.map((m) => m.body)).toEqual(["primero", "segundo", "tercero"]);
+    });
   });
 
   describe("act", () => {

@@ -141,9 +141,16 @@ export class ConversationsService {
            ) trigger_message on true
            left join app.ai_usage usage on usage.tenant_id=message.tenant_id and usage.message_id=trigger_message.id
           where message.conversation_id=$1
-          order by message.occurred_at,message.id limit 500`,
+          -- Found live: a real conversation with 1335+ messages (heavy
+          -- repeated testing on the same WhatsApp thread) silently showed
+          -- only its oldest 500 in the panel — DESC+LIMIT here takes the
+          -- most RECENT 500 instead, reversed back to chronological order
+          -- below before mapping, same "recent window, oldest first"
+          -- shape any chat UI needs.
+          order by message.occurred_at desc,message.id desc limit 500`,
         [conversationId],
       );
+      messages.rows.reverse();
       return {
         canManage: actor.role !== "viewer",
         conversation: this.mapConversation(conversation.rows[0]),
