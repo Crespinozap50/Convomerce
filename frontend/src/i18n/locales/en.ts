@@ -176,6 +176,8 @@ export default {
     posSyncRetried: "Retry sent",
     posSyncSynced: "Reached Loggro",
     posSyncPending: "Sending to Loggro…",
+    newOrderNotificationTitle: "New order",
+    newOrderNotificationBody: "You have {{count}} new request(s) to review.",
     filters: {
       active: "Active",
       all: "All",

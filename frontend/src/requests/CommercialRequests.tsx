@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CalendarDays, ShoppingBag } from "lucide-react";
 import { api } from "../api";
@@ -43,6 +43,84 @@ export function CommercialRequests({
   const [canManage, setCanManage] = useState(false);
   const [filter, setFilter] = useState("active");
   const [busy, setBusy] = useState(false);
+  // D-188 (docs/decisions.md): alerta sonora/de escritorio cuando llega un
+  // pedido nuevo. null = "todavía no tenemos una base real" (justo después
+  // de cambiar de tenant / marcar como visto) — nunca alerta en ese primer
+  // poll, solo en incrementos reales sobre una base ya establecida.
+  const previousNewCountRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioUnlockedRef = useRef(false);
+  const notificationPermissionRequestedRef = useRef(false);
+  useEffect(() => {
+    // Los navegadores bloquean el audio sin un gesto previo del usuario —
+    // desbloqueamos el AudioContext en la primera interacción real con la
+    // página, no en el momento en que suena la alerta (que llega desde un
+    // timer, no de un click).
+    function unlock() {
+      audioUnlockedRef.current = true;
+      const ctx = audioContextRef.current;
+      if (ctx && ctx.state === "suspended") void ctx.resume();
+      document.removeEventListener("click", unlock);
+      document.removeEventListener("keydown", unlock);
+    }
+    document.addEventListener("click", unlock);
+    document.addEventListener("keydown", unlock);
+    return () => {
+      document.removeEventListener("click", unlock);
+      document.removeEventListener("keydown", unlock);
+    };
+  }, []);
+  function playNewOrderSound() {
+    if (!audioUnlockedRef.current) return;
+    try {
+      const AudioContextCtor =
+        window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioContextCtor) return;
+      const ctx = audioContextRef.current ?? new AudioContextCtor();
+      audioContextRef.current = ctx;
+      if (ctx.state === "suspended") void ctx.resume();
+      // Pedido explícito del dueño del proyecto ("que se escuche como los
+      // sonidos de Rappi y Didi"): más largo, más agudo, con un patrón que
+      // se repite — un solo beep corto pasaba desapercibido.
+      const playTone = (startAt: number, frequency: number, duration: number) => {
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        oscillator.connect(gain);
+        gain.connect(ctx.destination);
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.001, ctx.currentTime + startAt);
+        gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + startAt + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startAt + duration);
+        oscillator.start(ctx.currentTime + startAt);
+        oscillator.stop(ctx.currentTime + startAt + duration + 0.02);
+      };
+      // Arpegio ascendente (C6-E6-G6) repetido dos veces, ~1.5s en total.
+      const chime = [1046.5, 1318.5, 1568];
+      [0, 0.55].forEach((repeatAt) => {
+        chime.forEach((frequency, index) => playTone(repeatAt + index * 0.16, frequency, 0.35));
+      });
+    } catch {
+      // Alertar nunca debe romper el panel — la insignia de "nuevos"
+      // sigue siendo la fuente de verdad si el audio falla.
+    }
+  }
+  function showNewOrderNotification(count: number) {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission === "granted") {
+      try {
+        new Notification(t("requests.newOrderNotificationTitle"), {
+          body: t("requests.newOrderNotificationBody", { count }),
+        });
+      } catch {
+        // Ignorar — algunos navegadores lanzan si la página no está en foco
+        // de cierta forma; el sonido ya cumplió su función de alertar.
+      }
+    } else if (Notification.permission !== "denied" && !notificationPermissionRequestedRef.current) {
+      notificationPermissionRequestedRef.current = true;
+      void Notification.requestPermission();
+    }
+  }
   const load = async () => {
     const value = await api<{
       canManage: boolean;
@@ -56,6 +134,11 @@ export function CommercialRequests({
         ? current
         : (value.requests[0]?.id ?? null),
     );
+    if (previousNewCountRef.current !== null && value.newCount > previousNewCountRef.current) {
+      playNewOrderSound();
+      showNewOrderNotification(value.newCount);
+    }
+    previousNewCountRef.current = value.newCount;
     return value.requests;
   };
   const loadDetail = async (id: string) =>
@@ -68,6 +151,7 @@ export function CommercialRequests({
     setRows([]);
     setSelected(null);
     setDetail(null);
+    previousNewCountRef.current = null;
     void (async () => {
       await api(`/v1/admin/tenants/${tenant}/commercial-requests/seen`, {
         method: "POST",

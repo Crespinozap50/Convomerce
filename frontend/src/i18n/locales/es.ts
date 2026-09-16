@@ -178,6 +178,8 @@ export default {
     posSyncRetried: "Reintento enviado",
     posSyncSynced: "Llegó a Loggro",
     posSyncPending: "Enviando a Loggro…",
+    newOrderNotificationTitle: "Nuevo pedido",
+    newOrderNotificationBody: "Tienes {{count}} solicitud(es) nueva(s) por revisar.",
     filters: {
       active: "Activas",
       all: "Todas",

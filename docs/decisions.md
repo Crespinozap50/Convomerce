@@ -2239,3 +2239,16 @@ Pedido explícito, 5 puntos, con la viabilidad de cada uno evaluada contra el c�
   - Nuevo helper `tableNumber(name)` (antes lógica duplicada inline en el `.sort()`).
 - **Tests nuevos**: `LoggroApiClient.createTable` (payload exacto); `resolveAvailableTable` crea la siguiente mesa numerada cuando el pool está lleno; nunca reutiliza el número de una mesa desactivada; nunca elige una mesa desactivada aunque su nombre coincida con el patrón. Suite completa en verde (48 suites, 604 tests).
 - **Pendiente, no hecho todavía sin pedido explícito**: verificación en vivo de punta a punta (ocupar todo el pool real de Santos Tacos y confirmar que se crea una mesa `Bot Convomerce 5` real) — no se hizo hoy para no seguir generando mesas reales de prueba mientras la caja sigue abierta.
+
+## D-198 — alerta sonora/de escritorio cuando llega un pedido nuevo (punto de D-188, implementado)
+
+**Estado: implementado y verificado en vivo (2 pedidos reales de prueba por WhatsApp, confirmado por consola que la alerta se dispara exactamente una vez por incremento real).**
+
+- **Contexto**: punto restante del backlog de D-188 — el panel admin (`frontend/src/requests/CommercialRequests.tsx`) ya hacía polling cada 2.5s y calculaba `newCount` (pedidos en `ready` no vistos), pero nunca alertaba activamente — solo se notaba si alguien miraba la pantalla.
+- **Implementación**: en `load()`, se compara el `newCount` de cada poll contra el anterior (guardado en un `ref`, no en estado, para no disparar re-renders). Un **incremento real** (nunca la primera carga tras cambiar de tenant/marcar como visto — se resetea a `null` ahí para no alertar de pedidos viejos) dispara dos cosas:
+  - **Sonido**: Web Audio API (osciladores sintéticos, sin archivo de audio que empaquetar) — un arpegio ascendente (C6-E6-G6, onda seno) repetido dos veces, ~1.5s. Varias alternativas más agudas/duras se probaron en vivo (onda cuadrada tipo "ding-ding", sawtooth en ráfaga tipo alarma, klaxon de dos tonos casi al unísono) — el dueño del proyecto confirmó quedarse con la primera versión.
+  - **Notificación de escritorio**: `Notification` API estándar, pide permiso la primera vez que hace falta (nunca reintenta si el usuario ya lo negó).
+  - Ambas están protegidas con `try/catch` — un fallo de audio o de notificación nunca rompe el panel; la insignia de "Nuevo" ya existente sigue siendo la fuente de verdad.
+  - Los navegadores bloquean audio sin un gesto previo del usuario: se desbloquea el `AudioContext` en el primer click/tecla real sobre la página (no en el momento de la alerta, que llega desde un timer).
+- **Multiplataforma**: tanto Web Audio API como `Notification` son estándares del navegador, no dependen del sistema operativo — funcionan igual en Windows, Linux y macOS sobre cualquier navegador moderno. Solo el estilo visual nativo de la notificación de escritorio varía según el SO.
+- **Verificado en vivo**: 2 pedidos reales de prueba por WhatsApp (Agua, mesa Bot Convomerce) mientras el panel estaba montado — confirmado vía consola (`[D-188 verify] new order alert firing 1`, log temporal solo para esta verificación, removido después) que la alerta se disparó exactamente una vez por cada incremento real de `newCount`, sin errores. Pedidos de prueba cancelados después.
