@@ -39,6 +39,13 @@ import {
 import { stepWorkflow } from "./conversation-workflow";
 export { isAddressDetailedEnough } from "./requirement-loop";
 
+// D-200 (docs/decisions.md): the only text distinguishing, in the admin
+// panel, a customer's own self-service cancellation (D-173/D-199) from a
+// staff cancellation done in the panel itself — set only by the two
+// customer-initiated cancel paths below, never by the admin-panel path
+// (commercial-requests.service.ts's changeStatus), so its absence on a
+// cancelled order means staff cancelled it.
+const CUSTOMER_CANCELLATION_NOTE = "Cancelado por el cliente vía WhatsApp.";
 type Locale = ConversationLocale;
 type Workflow = {
   id: string;
@@ -750,8 +757,8 @@ export class CommercialFlowService {
   ): Promise<DeterministicReply | null | undefined> {
     if (command === "cancel") {
       await client.query(
-        `update app.commercial_requests set status='cancelled',updated_at=now() where id=$1`,
-        [flow.commercial_request_id],
+        `update app.commercial_requests set status='cancelled',cancellation_note=$2,updated_at=now() where id=$1`,
+        [flow.commercial_request_id, CUSTOMER_CANCELLATION_NOTE],
       );
       await client.query(
         `update app.conversation_workflows set status='cancelled',updated_at=now() where id=$1`,
@@ -1927,8 +1934,8 @@ export class CommercialFlowService {
     // means exactly that race happened; never claimed as cancelled when
     // it wasn't.
     const cancelled = await client.query(
-      `update app.commercial_requests set status='cancelled',updated_at=now() where tenant_id=$1 and id=$2 and status='ready'`,
-      [input.tenantId, chosen.id],
+      `update app.commercial_requests set status='cancelled',cancellation_note=$3,updated_at=now() where tenant_id=$1 and id=$2 and status='ready'`,
+      [input.tenantId, chosen.id, CUSTOMER_CANCELLATION_NOTE],
     );
     if (cancelled.rowCount === 0) return this.localizedReply(input.locale, "cancelReadyTooLate");
     return this.localizedReply(input.locale, "cancelReadyCancelled", {

@@ -159,6 +159,7 @@ export default {
     confirmed: "Confirmada",
     lines: "Productos o servicios",
     notes: "Notas del cliente",
+    cancellationNote: "Nota de cancelación",
     appointment: {
       schedule: "Horario reservado",
       resource: "Profesional o recurso",

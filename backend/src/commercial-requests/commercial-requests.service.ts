@@ -12,7 +12,7 @@ export type CommercialRequestStatus='accepted'|'in_progress'|'completed'|'cancel
 interface CommercialRequestRow{
   id:string;request_type:string;status:string;currency:string;
   subtotal_minor:string|number|null;total_minor:string|number|null;
-  fulfillment_type?:string|null;customer_notes?:string|null;
+  fulfillment_type?:string|null;customer_notes?:string|null;cancellation_note?:string|null;
   confirmed_at?:string|Date|null;created_at?:string|Date;updated_at?:string|Date;
   display_name?:string|null;provider_subject?:string|null;line_count?:string|number|null;
   appointment_id?:string|null;appointment_status?:string|null;
@@ -38,7 +38,7 @@ export class CommercialRequestsService {
       )`,[userId]);
     const result=await client.query(`select request.id,request.request_type,request.status,request.currency,
       request.subtotal_minor::text,request.total_minor::text,request.fulfillment_type,request.customer_notes,
-      request.pos_sync_status,request.pos_external_order_id,request.pos_last_error_code,
+      request.cancellation_note,request.pos_sync_status,request.pos_external_order_id,request.pos_last_error_code,
       request.confirmed_at,request.created_at,request.updated_at,contact.display_name,
       identity.provider_subject,count(line.id) filter(where line.status='active')::integer line_count,
       appointment.id appointment_id,appointment.status appointment_status,appointment.starts_at appointment_starts_at,
@@ -212,5 +212,5 @@ export class CommercialRequestsService {
     );
   }
   private async actor(client:PoolClient,userId:string,manage=false){const result=await client.query(`select role from app.tenant_users where tenant_id=app.current_tenant_id() and user_id=$1 and status='active'`,[userId]);if(result.rows[0]){if(manage&&result.rows[0].role==='viewer')throw forbidden('COMMERCIAL_REQUESTS_FORBIDDEN','Actor cannot manage commercial requests');return result.rows[0]}const platform=await client.query(`select app.can_manage_channel_connections($1) allowed`,[userId]);if(!platform.rows[0]?.allowed)throw forbidden('COMMERCIAL_REQUESTS_FORBIDDEN','Actor cannot access commercial requests');return{role:'platform_admin'}}
-  private map=(row:CommercialRequestRow)=>({id:row.id,type:row.request_type,status:row.status,currency:row.currency,subtotalMinor:Number(row.subtotal_minor??0),totalMinor:Number(row.total_minor??0),fulfillmentType:row.fulfillment_type,customerNotes:row.customer_notes,confirmedAt:row.confirmed_at,createdAt:row.created_at,updatedAt:row.updated_at,customerName:row.display_name||row.provider_subject||'Unknown customer',customerAddress:row.provider_subject??null,lineCount:Number(row.line_count??0),posSyncStatus:row.pos_sync_status??'not_applicable',posExternalOrderId:row.pos_external_order_id?.[0]??null,posLastErrorCode:row.pos_last_error_code??null,appointment:row.appointment_id?{id:row.appointment_id,status:row.appointment_status,startsAt:row.appointment_starts_at,endsAt:row.appointment_ends_at,timezone:row.appointment_timezone,resource:{id:row.appointment_resource_id,name:row.appointment_resource_name,type:row.appointment_resource_type}}:null});
+  private map=(row:CommercialRequestRow)=>({id:row.id,type:row.request_type,status:row.status,currency:row.currency,subtotalMinor:Number(row.subtotal_minor??0),totalMinor:Number(row.total_minor??0),fulfillmentType:row.fulfillment_type,customerNotes:row.customer_notes,cancellationNote:row.cancellation_note??null,confirmedAt:row.confirmed_at,createdAt:row.created_at,updatedAt:row.updated_at,customerName:row.display_name||row.provider_subject||'Unknown customer',customerAddress:row.provider_subject??null,lineCount:Number(row.line_count??0),posSyncStatus:row.pos_sync_status??'not_applicable',posExternalOrderId:row.pos_external_order_id?.[0]??null,posLastErrorCode:row.pos_last_error_code??null,appointment:row.appointment_id?{id:row.appointment_id,status:row.appointment_status,startsAt:row.appointment_starts_at,endsAt:row.appointment_ends_at,timezone:row.appointment_timezone,resource:{id:row.appointment_resource_id,name:row.appointment_resource_name,type:row.appointment_resource_type}}:null});
 }

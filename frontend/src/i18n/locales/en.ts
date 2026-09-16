@@ -157,6 +157,7 @@ export default {
     confirmed: "Confirmed",
     lines: "Products or services",
     notes: "Customer notes",
+    cancellationNote: "Cancellation note",
     appointment: {
       schedule: "Booked time",
       resource: "Professional or resource",

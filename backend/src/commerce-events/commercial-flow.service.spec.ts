@@ -5691,11 +5691,14 @@ describe("CommercialFlowService", () => {
       template: { namespace: "commercial", key: "cancelled" },
       values: {},
     });
-    expect(
-      client.query.mock.calls.some(([sql]) =>
-        String(sql).includes("status='cancelled'"),
-      ),
-    ).toBe(true);
+    const cancelUpdate = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes("status='cancelled'"),
+    );
+    expect(cancelUpdate).toBeDefined();
+    // D-200 (docs/decisions.md): a customer-initiated cancel always leaves
+    // a note distinguishing it, in the admin panel, from a staff-initiated
+    // one — the admin panel's own changeStatus() never sets this column.
+    expect(cancelUpdate?.[1]).toContain("Cancelado por el cliente vía WhatsApp.");
   });
 
   it("says there is nothing to cancel when there is no active draft and no confirmed order either (D-173 regression)", async () => {
@@ -5806,6 +5809,9 @@ describe("CommercialFlowService", () => {
       String(sql).includes("update app.commercial_requests set status='cancelled'"),
     );
     expect(cancelUpdate?.[1]).toEqual(expect.arrayContaining(["req-ready-1"]));
+    // D-200 (docs/decisions.md): same customer-cancellation note as the
+    // draft-stage "Cancelar pedido" path.
+    expect(cancelUpdate?.[1]).toContain("Cancelado por el cliente vía WhatsApp.");
     expect(
       client.query.mock.calls.some(([sql]) =>
         String(sql).includes("update app.conversation_workflows set status='completed'"),

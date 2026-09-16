@@ -469,6 +469,13 @@ export function CommercialRequests({
                 <p>{detail.request.customerNotes}</p>
               </div>
             )}
+            {detail.request.status === "cancelled" &&
+              detail.request.cancellationNote && (
+                <div className="request-notes">
+                  <small>{t("requests.cancellationNote")}</small>
+                  <p>{detail.request.cancellationNote}</p>
+                </div>
+              )}
             {canManage && actions[detail.request.status]?.length > 0 && (
               <div className="request-actions">
                 <span>

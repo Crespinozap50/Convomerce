@@ -188,6 +188,7 @@ export type CommercialRequest = {
   totalMinor: number;
   fulfillmentType: string | null;
   customerNotes: string | null;
+  cancellationNote: string | null;
   confirmedAt: string | null;
   createdAt: string;
   updatedAt: string;
