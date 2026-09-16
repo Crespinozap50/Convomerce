@@ -160,6 +160,16 @@ export function ConversationInbox({
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(false);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  // D-204 follow-up (docs/decisions.md, live finding: "el scroll hacia
+  // arriba se volvió infinito"): a scroll gesture fires onScroll dozens of
+  // times before React re-renders, so every one of those calls read the
+  // same stale `loadingOlder` state (still false) and passed the guard —
+  // several overlapping loadOlder() calls fetched the same cursor at once,
+  // and interleaved prepends could leave the oldest-loaded message not
+  // actually older than before, so the next scroll fetched the same page
+  // again, forever. A ref is mutated synchronously, so only the very
+  // first of a burst of calls gets through.
+  const loadingOlderRef = useRef(false);
   // D-204 (docs/decisions.md): WhatsApp-style "load more on scroll up" —
   // set right before a loadOlder() prepend so the scroll-to-bottom effect
   // below knows to restore the reading position instead of jumping to the
@@ -227,9 +237,11 @@ export function ConversationInbox({
     });
   };
   const loadOlder = async () => {
-    if (!selected || !detail || !detail.hasMoreOlder || loadingOlder) return;
+    if (!selected || !detail || !detail.hasMoreOlder) return;
+    if (loadingOlderRef.current) return;
     const oldest = detail.messages[0];
     if (!oldest) return;
+    loadingOlderRef.current = true;
     setLoadingOlder(true);
     const timeline = timelineRef.current;
     restoreScrollRef.current = timeline
@@ -253,8 +265,15 @@ export function ConversationInbox({
             }
           : current,
       );
+      // loadingOlderRef is released by the scroll-restore effect below,
+      // once the prepend actually commits to the DOM — not here. Releasing
+      // it this early left a window where a scroll event queued while
+      // still mid-fetch could read the pre-prepend `detail` (React hadn't
+      // re-rendered yet) and re-fetch the exact same "before" cursor,
+      // which is the runaway loop this whole guard exists to prevent.
     } catch (error) {
       prependingRef.current = false;
+      loadingOlderRef.current = false;
       onNotice((error as Error).message, "error");
     } finally {
       setLoadingOlder(false);
@@ -313,6 +332,9 @@ export function ConversationInbox({
       const restore = restoreScrollRef.current;
       prependingRef.current = false;
       restoreScrollRef.current = null;
+      // Only now has the prepend actually committed — safe to allow the
+      // next loadOlder() call to read a genuinely-advanced oldest cursor.
+      loadingOlderRef.current = false;
       if (!restore) return;
       const frame = requestAnimationFrame(() => {
         timeline.scrollTop = timeline.scrollHeight - restore.height + restore.top;
