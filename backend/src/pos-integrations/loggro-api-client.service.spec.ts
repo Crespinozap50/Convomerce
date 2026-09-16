@@ -95,6 +95,29 @@ describe("LoggroApiClient", () => {
     });
   });
 
+  describe("getOccupiedTableIds", () => {
+    it("unions the table ids returned across every status queried", async () => {
+      const query = jest.fn().mockResolvedValue({ rows: [{ cached_token: "cached-token" }] });
+      const fetchSpy = jest
+        .spyOn(global, "fetch")
+        .mockResolvedValueOnce({ ok: true, json: async () => [{ _id: "table-1", total: 10000 }] } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => [
+            { _id: "table-2", total: 5000 },
+            { _id: "table-1", total: 10000 },
+          ],
+        } as Response);
+
+      const occupied = await client(query).getOccupiedTableIds(tenantId, connectionId, ["Espera", "Cocina"]);
+
+      expect(occupied).toEqual(new Set(["table-1", "table-2"]));
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(fetchSpy.mock.calls[0][0]).toBe("https://api.pirpos.com/orders/tables/status/Espera");
+      expect(fetchSpy.mock.calls[1][0]).toBe("https://api.pirpos.com/orders/tables/status/Cocina");
+    });
+  });
+
   describe("createOrder", () => {
     it("POSTs the exact payload it was given, with the resolved bearer token", async () => {
       const query = jest.fn().mockResolvedValueOnce({ rows: [{ cached_token: "cached-token" }] });

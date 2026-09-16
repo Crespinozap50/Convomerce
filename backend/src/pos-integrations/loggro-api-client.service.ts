@@ -21,17 +21,21 @@ export type LoggroTable = {
   isActive: boolean;
   isHomeDelivery: boolean;
 };
-export type LoggroOrderExtra = {
-  product: string;
-  quantity: number;
-  price: number;
-};
+// D-192 (docs/decisions.md): no `productsExtra` field here on purpose — a
+// real order with productsExtra confirmed to trigger a genuine Loggro-side
+// bug (their own "Pedidos" report shows a blank Cantidad, the label
+// "Adicionales:" leaking into the Precio column, and Total=0,00 for that
+// row; likely the same broken aggregation behind the table never marking
+// "Ocupada"). Confirmed independently by the project owner testing the
+// exact same request in Postman: removing productsExtra fixed it.
+// Modifiers now go out as their own LoggroOrderLine in the same `orders`
+// array/group instead (see LoggroOrderSyncService) — a real top-level
+// product line Loggro renders correctly, not a nested extra.
 export type LoggroOrderLine = {
   product: string;
   quantity: number;
   unit_price: number;
   notes?: string[];
-  productsExtra?: LoggroOrderExtra[];
 };
 export type LoggroOrderPayload = {
   table: string;
@@ -104,6 +108,31 @@ export class LoggroApiClient {
         signal: AbortSignal.timeout(10_000),
       }),
     );
+  }
+
+  // D-188/D-192 (docs/decisions.md): `GET /tables` carries no occupancy
+  // field at all, and the floor-plan UI's "Ocupada" indicator doesn't
+  // reliably reflect orders created via this API. The only signal
+  // confirmed live to be accurate is this per-status endpoint — validated
+  // against Santos Tacos' real account, matched exactly the tables the
+  // project owner confirmed had pending consumption. Called once per
+  // status (no documented endpoint accepts several at once) and unioned.
+  async getOccupiedTableIds(
+    tenantId: string,
+    connectionId: string,
+    statuses: string[],
+  ): Promise<Set<string>> {
+    const occupied = new Set<string>();
+    for (const status of statuses) {
+      const rows = await this.withAuth<{ _id: string }[]>(tenantId, connectionId, (token) =>
+        fetch(`${LOGGRO_BASE_URL}/orders/tables/status/${encodeURIComponent(status)}`, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(10_000),
+        }),
+      );
+      for (const row of rows) occupied.add(row._id);
+    }
+    return occupied;
   }
 
   async createOrder(

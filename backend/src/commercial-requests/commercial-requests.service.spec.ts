@@ -112,6 +112,40 @@ describe('CommercialRequestsService',()=>{
     expect(queries.some(q=>q.sql.includes("insert into app.outbox_events") && q.sql.includes("'message.send_requested'"))).toBe(true);
   });
 
+  it('pushes to Loggro when an order is accepted and loggro_pos is enabled (D-191: moved from WhatsApp confirmation to admin acceptance)',async()=>{
+    const queries:{sql:string;params:unknown[]}[]=[];
+    const client={query:jest.fn(async(sql:string,params:unknown[]=[])=>{
+      queries.push({sql,params});
+      if(sql.includes('from app.tenant_users'))return{rows:[{role:'operator'}]};
+      if(sql.includes('for update'))return{rows:[{status:'ready',request_type:'order'}]};
+      if(sql.includes("capability='loggro_pos'"))return{rows:[{enabled:true}]};
+      if(sql.includes('from app.commercial_requests request') && sql.includes('conv.channel_id'))
+        return{rows:[{conversation_id:'conv-1',channel_id:'channel-1',locale:'es'}]};
+      return{rows:[{id:'request-1',request_type:'order',status:'accepted',currency:'COP',subtotal_minor:'0',total_minor:'0'}]};
+    })};
+    const db={withTenantTransaction:(_tenant:string,operation:(client:unknown)=>unknown)=>operation(client)} as never;
+    await new CommercialRequestsService(db).changeStatus('tenant-1','user-1','request-1','accepted');
+    const outboxInsert=queries.find(q=>q.sql.includes('insert into app.outbox_events') && q.sql.includes("'order.confirmed'"));
+    expect(outboxInsert).toBeDefined();
+    expect(outboxInsert?.params[2]).toBe('request-1');
+    expect(queries.some(q=>q.sql.includes("pos_sync_status='pending'"))).toBe(true);
+  });
+
+  it('never pushes to Loggro when loggro_pos is disabled (the default for every tenant but Santos Tacos)',async()=>{
+    const queries:string[]=[];
+    const client={query:jest.fn(async(sql:string)=>{
+      queries.push(sql);
+      if(sql.includes('from app.tenant_users'))return{rows:[{role:'operator'}]};
+      if(sql.includes('for update'))return{rows:[{status:'ready',request_type:'order'}]};
+      if(sql.includes("capability='loggro_pos'"))return{rows:[{enabled:false}]};
+      return{rows:[{id:'request-1',request_type:'order',status:'accepted',currency:'COP',subtotal_minor:'0',total_minor:'0'}]};
+    })};
+    const db={withTenantTransaction:(_tenant:string,operation:(client:unknown)=>unknown)=>operation(client)} as never;
+    await new CommercialRequestsService(db).changeStatus('tenant-1','user-1','request-1','accepted');
+    expect(queries.some(sql=>sql.includes("insert into app.outbox_events") && sql.includes("'order.confirmed'"))).toBe(false);
+    expect(queries.some(sql=>sql.includes("pos_sync_status='pending'"))).toBe(false);
+  });
+
   it('never notifies for a reservation/appointment accepted (order-only copy)',async()=>{
     const queries:string[]=[];
     const client={query:jest.fn(async(sql:string)=>{
@@ -123,6 +157,8 @@ describe('CommercialRequestsService',()=>{
     const db={withTenantTransaction:(_tenant:string,operation:(client:unknown)=>unknown)=>operation(client)} as never;
     await new CommercialRequestsService(db).changeStatus('tenant-1','user-1','request-1','accepted');
     expect(queries.some(sql=>sql.includes('insert into app.messages'))).toBe(false);
+    expect(queries.some(sql=>sql.includes("insert into app.outbox_events") && sql.includes("'order.confirmed'"))).toBe(false);
+    expect(queries.some(sql=>sql.includes("pos_sync_status='pending'"))).toBe(false);
   });
 
   it('does not touch conversation_workflows for a non-terminal transition (accepted)',async()=>{

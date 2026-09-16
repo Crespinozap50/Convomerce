@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { PoolClient } from "pg";
 import { randomBytes } from "node:crypto";
 import { DatabaseService } from "../database/database.service";
-import { LoggroApiClient, LoggroOrderExtra, LoggroOrderLine } from "./loggro-api-client.service";
+import { LoggroApiClient, LoggroOrderLine } from "./loggro-api-client.service";
 
 // Loggro's backend is Mongo-based and `group` must be a real 24-hex-char
 // ObjectId shape — found live: a uuidv7() string (36 chars, hyphenated)
@@ -13,9 +13,14 @@ function randomObjectId(): string {
   return randomBytes(12).toString("hex");
 }
 
+// D-188/D-192/D-194 (docs/decisions.md): any order still in one of these
+// statuses means the table's tab is open — only Cancelada (and Pagada,
+// seen in the real report but not yet exercised live here) are excluded.
+const OCCUPIED_STATUSES = ["Espera", "Cocina", "Listo", "Entregado"];
+
 type OrderContext = {
   connectionId: string;
-  homeDeliveryTableId: string | null;
+  tableNamePattern: string | null;
   currency: string;
   customerNotes: string | null;
   lines: {
@@ -25,7 +30,7 @@ type OrderContext = {
     unitPriceMinor: number;
     externalProductId: string | null;
     modifierNotes: string[];
-    modifierExtras: LoggroOrderExtra[];
+    mappedModifiers: { externalProductId: string; quantity: number; unitPriceMinor: number }[];
   }[];
 };
 
@@ -43,10 +48,15 @@ export class LoggroOrderSyncService {
   // throw a specific, actionable error instead of guessing.
   async pushOrder(tenantId: string, commercialRequestId: string): Promise<{ externalOrderId: string }> {
     const context = await this.loadContext(tenantId, commercialRequestId);
-    if (!context.homeDeliveryTableId)
+    if (!context.tableNamePattern)
       throw new Error(
-        "Loggro home-delivery table is not configured for this tenant — set it in POS settings before enabling loggro_pos",
+        "Loggro table name pattern is not configured for this tenant — set it in POS settings before enabling loggro_pos",
       );
+    const tableId = await this.resolveAvailableTable(
+      tenantId,
+      context.connectionId,
+      context.tableNamePattern,
+    );
     const unmapped = context.lines.filter((line) => !line.externalProductId);
     if (unmapped.length > 0)
       throw new Error(
@@ -58,19 +68,33 @@ export class LoggroOrderSyncService {
     // groupName, so staff can match the kitchen ticket back to the WhatsApp
     // order even if the group header isn't visible wherever they're looking.
     const reference = commercialRequestId.slice(-8).toUpperCase();
-    const orders: LoggroOrderLine[] = context.lines.map((line) => ({
-      product: line.externalProductId!,
-      quantity: line.quantity,
-      unit_price: Math.round(line.unitPriceMinor / 100),
-      notes: [
-        `Pedido #${reference}`,
-        ...(context.customerNotes ? [context.customerNotes] : []),
-        ...line.modifierNotes,
-      ],
-      ...(line.modifierExtras.length > 0 ? { productsExtra: line.modifierExtras } : {}),
-    }));
+    // D-192 (docs/decisions.md): a mapped modifier now goes out as its own
+    // top-level line in `orders` (same group/table as its parent), never
+    // as `productsExtra` — that field triggers a real, confirmed Loggro-
+    // side bug in their own "Pedidos" report and (very likely) whatever
+    // aggregation drives their table's "Ocupada" indicator. The `notes`
+    // ties it back to its parent line for staff, since it's no longer
+    // visually nested under it on the ticket.
+    const orders: LoggroOrderLine[] = context.lines.flatMap((line) => [
+      {
+        product: line.externalProductId!,
+        quantity: line.quantity,
+        unit_price: Math.round(line.unitPriceMinor / 100),
+        notes: [
+          `Pedido #${reference}`,
+          ...(context.customerNotes ? [context.customerNotes] : []),
+          ...line.modifierNotes,
+        ],
+      },
+      ...line.mappedModifiers.map((modifier) => ({
+        product: modifier.externalProductId,
+        quantity: modifier.quantity,
+        unit_price: Math.round(modifier.unitPriceMinor / 100),
+        notes: [`Pedido #${reference}`, `Adición de: ${line.description}`],
+      })),
+    ]);
     const created = await this.apiClient.createOrder(tenantId, context.connectionId, {
-      table: context.homeDeliveryTableId,
+      table: tableId,
       group: randomObjectId(),
       groupName: `WhatsApp - Pedido ${reference}`,
       orders,
@@ -84,6 +108,34 @@ export class LoggroOrderSyncService {
       ),
     );
     return { externalOrderId };
+  }
+
+  // D-194 (docs/decisions.md): re-resolves the real matching tables on
+  // every push (never caches ids) so a table added later with the same
+  // prefix is picked up with no code/config change. Picks the lowest
+  // free-numbered table for a predictable, staff-legible assignment
+  // instead of a random one.
+  private async resolveAvailableTable(
+    tenantId: string,
+    connectionId: string,
+    pattern: string,
+  ): Promise<string> {
+    const normalizedPattern = pattern.trim().toLowerCase();
+    const allTables = await this.apiClient.getTables(tenantId, connectionId);
+    const pool = allTables
+      .filter((table) => table.name.trim().toLowerCase().startsWith(normalizedPattern))
+      .sort((a, b) => {
+        const numA = Number(/(\d+)\s*$/.exec(a.name)?.[1]);
+        const numB = Number(/(\d+)\s*$/.exec(b.name)?.[1]);
+        if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+        return a.name.localeCompare(b.name);
+      });
+    if (pool.length === 0)
+      throw new Error(`No se encontraron mesas en Loggro que coincidan con el patrón "${pattern}"`);
+    const occupied = await this.apiClient.getOccupiedTableIds(tenantId, connectionId, OCCUPIED_STATUSES);
+    const available = pool.find((table) => !occupied.has(table._id));
+    if (!available) throw new Error(`Todas las mesas del patrón "${pattern}" están ocupadas`);
+    return available._id;
   }
 
   async markFailed(tenantId: string, commercialRequestId: string, error: unknown): Promise<void> {
@@ -106,8 +158,8 @@ export class LoggroOrderSyncService {
       // until an admin manually reconnected — 'disconnected' (never
       // configured) and 'paused' (intentionally off) are the only statuses
       // that should actually block a push attempt.
-      const connection = await client.query<{ id: string; home_delivery_table_id: string | null }>(
-        `select id,home_delivery_table_id from app.pos_connections where tenant_id=$1 and provider='loggro_restobar' and status in ('connected','error')`,
+      const connection = await client.query<{ id: string; table_name_pattern: string | null }>(
+        `select id,table_name_pattern from app.pos_connections where tenant_id=$1 and provider='loggro_restobar' and status in ('connected','error')`,
         [tenantId],
       );
       if (!connection.rows[0]) throw new Error("Loggro is not connected for this tenant");
@@ -136,7 +188,7 @@ export class LoggroOrderSyncService {
       const modifiers = await this.loadModifiers(client, commercialRequestId, connection.rows[0].id);
       return {
         connectionId: connection.rows[0].id,
-        homeDeliveryTableId: connection.rows[0].home_delivery_table_id,
+        tableNamePattern: connection.rows[0].table_name_pattern,
         currency: request.rows[0].currency,
         customerNotes: request.rows[0].customer_notes,
         lines: lines.rows.map((row) => ({
@@ -146,7 +198,7 @@ export class LoggroOrderSyncService {
           unitPriceMinor: Number(row.unit_price_minor_snapshot),
           externalProductId: row.external_product_id,
           modifierNotes: modifiers.notes.get(row.id) ?? [],
-          modifierExtras: modifiers.extras.get(row.id) ?? [],
+          mappedModifiers: modifiers.mapped.get(row.id) ?? [],
         })),
       };
     });
@@ -158,18 +210,23 @@ export class LoggroOrderSyncService {
   // product) when the customer had actually been charged $12.500
   // ($9.500 + Guacamole's $3.000). A modifier mapped in
   // app.pos_product_mappings (by modifier_option_id, see
-  // 086_loggro_modifier_mappings.sql) now goes out as its own
-  // productsExtra entry with the real price, exactly the field Loggro's
-  // API has for this (see developer.loggro.com/reference/crearpedidos).
-  // A modifier with no mapping yet keeps the old notes-only fallback —
-  // visible to staff, still not separately priced — same as today, so
-  // nothing about a real order is ever silently dropped while a tenant is
-  // still filling in its modifier mappings.
+  // 086_loggro_modifier_mappings.sql) now goes out with its real price —
+  // as its own top-level order line (see pushOrder), not as `productsExtra`
+  // (D-192: that field is real-price-correct in Loggro's own order-detail
+  // response, but triggers a confirmed rendering bug in their "Pedidos"
+  // report and very likely the mesa "Ocupada" indicator too). A modifier
+  // with no mapping yet keeps the old notes-only fallback — visible to
+  // staff, still not separately priced — same as today, so nothing about a
+  // real order is ever silently dropped while a tenant is still filling in
+  // its modifier mappings.
   private async loadModifiers(
     client: PoolClient,
     commercialRequestId: string,
     connectionId: string,
-  ): Promise<{ notes: Map<string, string[]>; extras: Map<string, LoggroOrderExtra[]> }> {
+  ): Promise<{
+    notes: Map<string, string[]>;
+    mapped: Map<string, { externalProductId: string; quantity: number; unitPriceMinor: number }[]>;
+  }> {
     const modifiers = await client.query<{
       request_line_id: string;
       description_snapshot: string;
@@ -189,22 +246,22 @@ export class LoggroOrderSyncService {
       [commercialRequestId, connectionId],
     );
     const notes = new Map<string, string[]>();
-    const extras = new Map<string, LoggroOrderExtra[]>();
+    const mapped = new Map<string, { externalProductId: string; quantity: number; unitPriceMinor: number }[]>();
     for (const row of modifiers.rows) {
       if (row.external_product_id) {
-        const lineExtras = extras.get(row.request_line_id) ?? [];
-        lineExtras.push({
-          product: row.external_product_id,
+        const list = mapped.get(row.request_line_id) ?? [];
+        list.push({
+          externalProductId: row.external_product_id,
           quantity: Number(row.quantity),
-          price: Math.round(Number(row.unit_price_delta_minor_snapshot) / 100),
+          unitPriceMinor: Number(row.unit_price_delta_minor_snapshot),
         });
-        extras.set(row.request_line_id, lineExtras);
+        mapped.set(row.request_line_id, list);
       } else {
         const lineNotes = notes.get(row.request_line_id) ?? [];
         lineNotes.push(row.description_snapshot);
         notes.set(row.request_line_id, lineNotes);
       }
     }
-    return { notes, extras };
+    return { notes, mapped };
   }
 }

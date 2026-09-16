@@ -75,14 +75,28 @@ describe("LoggroConnectionService", () => {
     expect(login).toHaveBeenCalledWith(tenantId, result.connectionId);
   });
 
-  it("setHomeDeliveryTable throws when Loggro was never connected for this tenant", async () => {
+  it("setTableNamePattern throws when Loggro was never connected for this tenant", async () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce({ rows: [{ allowed: true }] })
       .mockResolvedValueOnce({ rowCount: 0 });
 
-    await expect(service(query).setHomeDeliveryTable(tenantId, userId, "table-1"))
+    await expect(service(query).setTableNamePattern(tenantId, userId, "Bot Convomerce"))
       .rejects.toMatchObject({ response: { code: "LOGGRO_NOT_CONNECTED" } });
+  });
+
+  it("setTableNamePattern saves the pattern, not a table id", async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ allowed: true }] })
+      .mockResolvedValueOnce({ rowCount: 1 });
+
+    const result = await service(query).setTableNamePattern(tenantId, userId, "Bot Convomerce");
+
+    expect(result).toEqual({ tableNamePattern: "Bot Convomerce" });
+    const update = query.mock.calls[1];
+    expect(String(update[0])).toContain("update app.pos_connections set table_name_pattern=$2");
+    expect(update[1]).toEqual([tenantId, "Bot Convomerce"]);
   });
 
   it("status never leaks the secret itself, only whether one is configured", async () => {
@@ -91,7 +105,7 @@ describe("LoggroConnectionService", () => {
       .mockResolvedValueOnce({ rows: [{ allowed: true }] })
       .mockResolvedValueOnce({
         rows: [{
-          status: "connected", secret_reference: "enc:real-secret", home_delivery_table_id: "table-1",
+          status: "connected", secret_reference: "enc:real-secret", table_name_pattern: "Bot Convomerce",
           last_synced_at: null, last_error_code: null,
         }],
       });
@@ -100,7 +114,7 @@ describe("LoggroConnectionService", () => {
 
     expect(status).toEqual({
       connected: true, status: "connected", secretConfigured: true,
-      homeDeliveryTableId: "table-1", lastSyncedAt: null, lastErrorCode: null,
+      tableNamePattern: "Bot Convomerce", lastSyncedAt: null, lastErrorCode: null,
     });
     expect(JSON.stringify(status)).not.toContain("real-secret");
   });

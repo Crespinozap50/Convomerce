@@ -34,17 +34,17 @@ export class LoggroConnectionController {
     return this.connections.listTables(tenantId, request.actor.userId);
   }
 
-  @Put("home-delivery-table") setHomeDeliveryTable(
+  @Put("table-pool") setTableNamePattern(
     @Param("tenantId") tenantId: string,
     @Body() body: unknown,
     @Req() request: AuthenticatedRequest,
   ) {
     requireUuid(tenantId);
     const input = objectBody(body);
-    return this.connections.setHomeDeliveryTable(
+    return this.connections.setTableNamePattern(
       tenantId,
       request.actor.userId,
-      requiredString(input.tableId, "tableId"),
+      requiredString(input.pattern, "pattern"),
     );
   }
 }

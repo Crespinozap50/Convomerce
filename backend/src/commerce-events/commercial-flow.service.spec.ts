@@ -6326,68 +6326,38 @@ describe("CommercialFlowService", () => {
     ).toBe(false);
   });
 
-  describe("Loggro POS push on order confirmation", () => {
-    function confirmClient(options: { requestType: string; posEnabled: boolean }) {
-      const queries: { sql: string; params: unknown[] }[] = [];
-      const client = {
-        query: jest.fn(async (sql: string, params: unknown[] = []) => {
-          queries.push({ sql, params });
-          if (sql.includes("from app.conversation_workflows where conversation_id"))
-            return {
-              rows: [
-                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_confirmation", context: {} },
-              ],
-            };
-          if (sql.includes("select request_type from app.commercial_requests"))
-            return { rows: [{ request_type: options.requestType }] };
-          if (sql.includes("capability='loggro_pos'"))
-            return { rows: [{ enabled: options.posEnabled }] };
-          return { rows: [] };
-        }),
-      };
-      return { client, queries };
-    }
-    async function confirmOrder(client: unknown) {
-      const understanding = await new DeterministicUnderstandingProvider().understand({
-        message: "Sí, confirmar",
-        configuredLocale: "es",
-        handoffKeywords: [],
-        timezone: "America/Bogota",
-        interactiveSelectionId: "confirm:yes",
-      });
-      return service().resolve(client as never, { ...input, body: "Sí, confirmar", understanding });
-    }
-
-    it("inserts an order.confirmed outbox event and marks pos_sync_status='pending' when loggro_pos is enabled for an order", async () => {
-      const { client, queries } = confirmClient({ requestType: "order", posEnabled: true });
-
-      await confirmOrder(client);
-
-      const outboxInsert = queries.find(({ sql }) => sql.includes("insert into app.outbox_events"));
-      expect(outboxInsert).toBeDefined();
-      expect(outboxInsert?.sql).toContain("'order.confirmed'");
-      expect(outboxInsert?.params[2]).toBe("request-1");
-      const pendingUpdate = queries.find(({ sql }) => sql.includes("pos_sync_status='pending'"));
-      expect(pendingUpdate).toBeDefined();
+  // D-191 (docs/decisions.md): the Loggro push moved out of this file
+  // entirely — confirming by WhatsApp now only ever reaches 'ready', never
+  // touches Loggro on its own. See CommercialRequestsService.pushToLoggro(),
+  // triggered by the admin's own "Aceptar pedido" instead (commercial-
+  // requests.service.spec.ts).
+  it("never touches pos_sync_status/outbox_events on WhatsApp confirmation alone, even for a Loggro-enabled tenant (regression, D-191)", async () => {
+    const queries: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: jest.fn(async (sql: string, params: unknown[] = []) => {
+        queries.push({ sql, params });
+        if (sql.includes("from app.conversation_workflows where conversation_id"))
+          return {
+            rows: [
+              { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_confirmation", context: {} },
+            ],
+          };
+        return { rows: [] };
+      }),
+    };
+    const understanding = await new DeterministicUnderstandingProvider().understand({
+      message: "Sí, confirmar",
+      configuredLocale: "es",
+      handoffKeywords: [],
+      timezone: "America/Bogota",
+      interactiveSelectionId: "confirm:yes",
     });
 
-    it("never inserts an outbox event when loggro_pos is disabled (the default for every tenant but Santos Tacos)", async () => {
-      const { client, queries } = confirmClient({ requestType: "order", posEnabled: false });
+    await service().resolve(client as never, { ...input, body: "Sí, confirmar", understanding });
 
-      await confirmOrder(client);
-
-      expect(queries.some(({ sql }) => sql.includes("insert into app.outbox_events"))).toBe(false);
-      expect(queries.some(({ sql }) => sql.includes("pos_sync_status"))).toBe(false);
-    });
-
-    it("never touches pos_sync_status for a non-order request type (e.g. a reservation), even with loggro_pos enabled", async () => {
-      const { client, queries } = confirmClient({ requestType: "reservation", posEnabled: true });
-
-      await confirmOrder(client);
-
-      expect(queries.some(({ sql }) => sql.includes("insert into app.outbox_events"))).toBe(false);
-      expect(queries.some(({ sql }) => sql.includes("pos_sync_status"))).toBe(false);
-    });
+    expect(queries.some(({ sql }) => sql.includes("insert into app.outbox_events"))).toBe(false);
+    expect(queries.some(({ sql }) => sql.includes("pos_sync_status"))).toBe(false);
+    expect(queries.some(({ sql }) => sql.includes("capability='loggro_pos'"))).toBe(false);
   });
 
   it("cancels the order when the customer taps 'Cancelar pedido' at the final review", async () => {

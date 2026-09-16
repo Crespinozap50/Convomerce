@@ -951,14 +951,16 @@ header h1 {
   font-size: 12px;
   white-space: nowrap;
 }
-.loggro-connect-form {
+.loggro-connect-form,
+.loggro-table-pool-form {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 16px 24px;
 }
-.loggro-connect-form input {
+.loggro-connect-form input,
+.loggro-table-pool-form input {
   flex: 1 1 220px;
   min-width: 0;
 }
@@ -969,7 +971,13 @@ header h1 {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 0 24px 20px;
+  width: 100%;
+}
+.loggro-table-match {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #eaf6ef;
+  font-size: 12px;
 }
 .webhook-info {
   margin: 20px 24px 0;

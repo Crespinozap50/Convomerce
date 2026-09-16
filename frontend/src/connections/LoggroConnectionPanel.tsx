@@ -7,7 +7,7 @@ type LoggroStatus = {
   connected: boolean;
   status: string;
   secretConfigured: boolean;
-  homeDeliveryTableId: string | null;
+  tableNamePattern: string | null;
   lastSyncedAt: string | null;
   lastErrorCode: string | null;
 };
@@ -31,6 +31,7 @@ export function LoggroConnectionPanel({
   const [status, setStatus] = useState<LoggroStatus | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [pattern, setPattern] = useState("");
   const [busy, setBusy] = useState(false);
   const [tables, setTables] = useState<LoggroTable[] | null>(null);
 
@@ -45,6 +46,7 @@ export function LoggroConnectionPanel({
         `/v1/admin/tenants/${tenant}/pos-connections/loggro`,
       );
       setStatus(result);
+      setPattern((current) => current || result.tableNamePattern || "");
     } catch (error) {
       onNotice((error as Error).message, "error");
     }
@@ -82,22 +84,25 @@ export function LoggroConnectionPanel({
     }
   }
 
-  async function chooseTable(tableId: string) {
+  async function savePattern() {
     setBusy(true);
     try {
       await api(
-        `/v1/admin/tenants/${tenant}/pos-connections/loggro/home-delivery-table`,
-        { method: "PUT", body: JSON.stringify({ tableId }) },
+        `/v1/admin/tenants/${tenant}/pos-connections/loggro/table-pool`,
+        { method: "PUT", body: JSON.stringify({ pattern }) },
       );
-      setTables(null);
       await load();
-      onNotice(t("connections.loggro.tableSaved"));
+      onNotice(t("connections.loggro.tablePatternSaved"));
     } catch (error) {
       onNotice((error as Error).message, "error");
     } finally {
       setBusy(false);
     }
   }
+
+  const matchingTables = tables?.filter((table) =>
+    pattern.trim() ? table.name.trim().toLowerCase().startsWith(pattern.trim().toLowerCase()) : false,
+  );
 
   return (
     <section className="panel page-panel">
@@ -118,11 +123,11 @@ export function LoggroConnectionPanel({
                 : t("connections.loggro.notConnected")}
             </small>
             <small>
-              {status?.homeDeliveryTableId
-                ? t("connections.loggro.tableConfigured", {
-                    id: status.homeDeliveryTableId,
+              {status?.tableNamePattern
+                ? t("connections.loggro.tablePatternConfigured", {
+                    pattern: status.tableNamePattern,
                   })
-                : t("connections.loggro.tableMissing")}
+                : t("connections.loggro.tablePatternMissing")}
             </small>
             {status?.lastErrorCode && (
               <small className="loggro-last-error">{status.lastErrorCode}</small>
@@ -165,33 +170,42 @@ export function LoggroConnectionPanel({
               ? t("connections.loggro.save")
               : t("connections.loggro.connect")}
           </button>
-          {status?.connected && (
-            <button
-              type="button"
-              className="secondary compact-action"
-              disabled={busy}
-              onClick={() => void loadTables()}
-            >
-              {t("connections.loggro.chooseTable")}
-            </button>
-          )}
         </div>
       )}
-      {tables && (
-        <div className="loggro-table-list">
-          {tables.length === 0 && <p>{t("connections.loggro.noTables")}</p>}
-          {tables.map((table) => (
-            <button
-              key={table._id}
-              type="button"
-              className="secondary compact-action"
-              disabled={busy}
-              onClick={() => void chooseTable(table._id)}
-            >
-              {table.name}
-              {table.isHomeDelivery ? ` (${t("connections.loggro.isHomeDelivery")})` : ""}
-            </button>
-          ))}
+      {canManage && status?.connected && (
+        <div className="loggro-table-pool-form">
+          <input
+            type="text"
+            placeholder={t("connections.loggro.tablePatternPlaceholder")}
+            value={pattern}
+            onChange={(e) => setPattern(e.target.value)}
+          />
+          <button
+            type="button"
+            className="secondary compact-action"
+            disabled={busy || !pattern.trim()}
+            onClick={() => void savePattern()}
+          >
+            {t("connections.loggro.tablePatternSave")}
+          </button>
+          <button
+            type="button"
+            className="secondary compact-action"
+            disabled={busy}
+            onClick={() => void loadTables()}
+          >
+            {t("connections.loggro.tablePatternPreview")}
+          </button>
+          {tables && (
+            <div className="loggro-table-list">
+              {(matchingTables?.length ?? 0) === 0 && <p>{t("connections.loggro.tablePatternNoMatches")}</p>}
+              {matchingTables?.map((table) => (
+                <span key={table._id} className="loggro-table-match">
+                  {table.name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </section>

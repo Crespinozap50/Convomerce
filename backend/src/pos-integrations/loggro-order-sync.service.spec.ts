@@ -4,15 +4,26 @@ describe("LoggroOrderSyncService", () => {
   const tenantId = "0194f000-0000-7000-8000-000000000001";
   const commercialRequestId = "0194f000-0000-7000-8000-000000000301";
 
-  function service(query: jest.Mock, apiClient?: Partial<{ createOrder: jest.Mock }>) {
+  function service(
+    query: jest.Mock,
+    apiClient?: Partial<{ createOrder: jest.Mock; getTables: jest.Mock; getOccupiedTableIds: jest.Mock }>,
+  ) {
     return new LoggroOrderSyncService(
       { withTenantTransaction: (_id: string, op: (c: unknown) => unknown) => op({ query }) } as never,
-      { createOrder: apiClient?.createOrder ?? jest.fn() } as never,
+      {
+        createOrder: apiClient?.createOrder ?? jest.fn(),
+        getTables:
+          apiClient?.getTables ??
+          jest.fn().mockResolvedValue([
+            { _id: "table-1", name: "Bot Convomerce 1", isActive: true, isHomeDelivery: false },
+          ]),
+        getOccupiedTableIds: apiClient?.getOccupiedTableIds ?? jest.fn().mockResolvedValue(new Set()),
+      } as never,
     );
   }
 
-  function connectionRow(homeDeliveryTableId: string | null = "table-1") {
-    return { rows: [{ id: "conn-1", home_delivery_table_id: homeDeliveryTableId }] };
+  function connectionRow(tableNamePattern: string | null = "Bot Convomerce") {
+    return { rows: [{ id: "conn-1", table_name_pattern: tableNamePattern }] };
   }
   function requestRow() {
     return { rows: [{ currency: "COP", customer_notes: null }] };
@@ -37,17 +48,19 @@ describe("LoggroOrderSyncService", () => {
     expect(createOrder).not.toHaveBeenCalled();
   });
 
-  it("throws when the tenant has no home-delivery table configured, before calling the Loggro API", async () => {
+  it("throws when the tenant has no table name pattern configured, before calling the Loggro API", async () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce(connectionRow(null))
       .mockResolvedValueOnce(requestRow())
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce(noModifiers());
+    const getTables = jest.fn();
     const createOrder = jest.fn();
 
-    await expect(service(query, { createOrder }).pushOrder(tenantId, commercialRequestId))
-      .rejects.toThrow(/home-delivery table/);
+    await expect(service(query, { createOrder, getTables }).pushOrder(tenantId, commercialRequestId))
+      .rejects.toThrow(/table name pattern/);
+    expect(getTables).not.toHaveBeenCalled();
     expect(createOrder).not.toHaveBeenCalled();
   });
 
@@ -98,12 +111,14 @@ describe("LoggroOrderSyncService", () => {
     expect(orderPayload.orders[0].productsExtra).toBeUndefined();
   });
 
-  it("sends a mapped modifier as its own priced productsExtra entry, not just free text (live finding, Santiago, Santos Tacos)", async () => {
+  it("sends a mapped modifier as its own separate order line, not nested productsExtra (D-192, live finding, Santiago, Santos Tacos)", async () => {
     // Found live: "Guacamole" (+$3.000) reached Loggro only as text inside
     // the parent line's notes — the real order there registered $9.500
     // (just the taco) when the customer had actually been charged
     // $12.500. A modifier mapped in app.pos_product_mappings now goes out
-    // with its real price via Loggro's own productsExtra field.
+    // with its real price as its own top-level order line — never as
+    // `productsExtra`, which the project owner confirmed live (Postman)
+    // triggers a real Loggro-side rendering bug (D-192, docs/decisions.md).
     const query = jest
       .fn()
       .mockResolvedValueOnce(connectionRow())
@@ -120,10 +135,17 @@ describe("LoggroOrderSyncService", () => {
     await service(query, { createOrder }).pushOrder(tenantId, commercialRequestId);
 
     const [orderPayload] = createOrder.mock.calls[0].slice(2);
-    expect(orderPayload.orders[0].productsExtra).toEqual([
-      { product: "loggro-guac-1", quantity: 1, price: 3000 },
+    expect(orderPayload.orders).toEqual([
+      { product: "loggro-prod-1", quantity: 1, unit_price: 9500, notes: ["Pedido #00000301"] },
+      {
+        product: "loggro-guac-1",
+        quantity: 1,
+        unit_price: 3000,
+        notes: ["Pedido #00000301", "Adición de: Dorado de Pollo"],
+      },
     ]);
-    expect(orderPayload.orders[0].notes).toEqual(["Pedido #00000301"]);
+    expect(orderPayload.orders[0].productsExtra).toBeUndefined();
+    expect(orderPayload.orders[1].productsExtra).toBeUndefined();
   });
 
   it("markFailed records pos_sync_status='failed' with the error message as the code", async () => {
@@ -133,5 +155,78 @@ describe("LoggroOrderSyncService", () => {
 
     expect(String(query.mock.calls[0][0])).toContain("pos_sync_status='failed'");
     expect(query.mock.calls[0][1]).toEqual([commercialRequestId, "Loggro API call failed with HTTP 500"]);
+  });
+
+  // D-194 (docs/decisions.md): the tenant no longer points at one fixed
+  // table — it keeps a real pool of tables sharing a name prefix (e.g.
+  // "Bot Convomerce N") and the sync service resolves the first free one
+  // live on every push, re-reading the real account so a table added later
+  // with the same prefix needs no code/config change.
+  describe("table pool resolution (D-188 punto 5, D-194)", () => {
+    function lineRow() {
+      return {
+        rows: [{ id: "line-1", description_snapshot: "Tacos de pollo", quantity: "1", unit_price_minor_snapshot: "1000000", external_product_id: "loggro-prod-1" }],
+      };
+    }
+
+    it("picks the lowest-numbered free table from the matching pool, ignoring tables outside the pattern", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce(connectionRow())
+        .mockResolvedValueOnce(requestRow())
+        .mockResolvedValueOnce(lineRow())
+        .mockResolvedValueOnce(noModifiers())
+        .mockResolvedValueOnce({ rows: [] });
+      const getTables = jest.fn().mockResolvedValue([
+        { _id: "table-2", name: "Bot Convomerce 2", isActive: true, isHomeDelivery: false },
+        { _id: "table-1", name: "Bot Convomerce 1", isActive: true, isHomeDelivery: false },
+        { _id: "table-10", name: "Bot Convomerce 10", isActive: true, isHomeDelivery: false },
+        { _id: "other", name: "Mesa 3", isActive: true, isHomeDelivery: false },
+      ]);
+      const getOccupiedTableIds = jest.fn().mockResolvedValue(new Set(["table-1"]));
+      const createOrder = jest.fn().mockResolvedValue([{ _id: "loggro-order-1", status: "Espera" }]);
+
+      await service(query, { createOrder, getTables, getOccupiedTableIds }).pushOrder(tenantId, commercialRequestId);
+
+      const [orderPayload] = createOrder.mock.calls[0].slice(2);
+      expect(orderPayload.table).toBe("table-2");
+      expect(getOccupiedTableIds).toHaveBeenCalledWith(tenantId, "conn-1", ["Espera", "Cocina", "Listo", "Entregado"]);
+    });
+
+    it("throws when no real Loggro table matches the configured pattern", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce(connectionRow())
+        .mockResolvedValueOnce(requestRow())
+        .mockResolvedValueOnce(lineRow())
+        .mockResolvedValueOnce(noModifiers());
+      const getTables = jest.fn().mockResolvedValue([
+        { _id: "other", name: "Mesa 3", isActive: true, isHomeDelivery: false },
+      ]);
+      const createOrder = jest.fn();
+
+      await expect(service(query, { createOrder, getTables }).pushOrder(tenantId, commercialRequestId))
+        .rejects.toThrow(/Bot Convomerce/);
+      expect(createOrder).not.toHaveBeenCalled();
+    });
+
+    it("throws when every table in the pool is occupied", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce(connectionRow())
+        .mockResolvedValueOnce(requestRow())
+        .mockResolvedValueOnce(lineRow())
+        .mockResolvedValueOnce(noModifiers());
+      const getTables = jest.fn().mockResolvedValue([
+        { _id: "table-1", name: "Bot Convomerce 1", isActive: true, isHomeDelivery: false },
+        { _id: "table-2", name: "Bot Convomerce 2", isActive: true, isHomeDelivery: false },
+      ]);
+      const getOccupiedTableIds = jest.fn().mockResolvedValue(new Set(["table-1", "table-2"]));
+      const createOrder = jest.fn();
+
+      await expect(service(query, { createOrder, getTables, getOccupiedTableIds }).pushOrder(tenantId, commercialRequestId))
+        .rejects.toThrow(/ocupadas/);
+      expect(createOrder).not.toHaveBeenCalled();
+    });
   });
 });

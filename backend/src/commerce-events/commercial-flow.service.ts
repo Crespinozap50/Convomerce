@@ -1793,32 +1793,14 @@ export class CommercialFlowService {
         `update app.conversation_workflows set status='completed',updated_at=now() where id=$1`,
         [flow.id],
       );
-      // Push to Loggro Restobar's POS (docs/decisions.md) — Workflow has no
-      // request_type field of its own (only id/commercial_request_id/step/
-      // context, see its type above), so it's queried here rather than
-      // widening that shared type just for this one branch. Both queries
-      // below are read-only and insert nothing for any tenant without
-      // loggro_pos enabled (every tenant but Santos Tacos today) — zero
-      // impact on the rest of this flow for everyone else.
-      const requestType = await client.query<{ request_type: string }>(
-        `select request_type from app.commercial_requests where id=$1`,
-        [flow.commercial_request_id],
-      );
-      const posEnabled = await client.query<{ enabled: boolean }>(
-        `select enabled from app.tenant_capabilities where tenant_id=$1 and capability='loggro_pos'`,
-        [input.tenantId],
-      );
-      if (requestType.rows[0]?.request_type === "order" && posEnabled.rows[0]?.enabled) {
-        await client.query(
-          `update app.commercial_requests set pos_sync_status='pending' where id=$1`,
-          [flow.commercial_request_id],
-        );
-        await client.query(
-          `insert into app.outbox_events(id,tenant_id,event_type,aggregate_type,aggregate_id,correlation_id,payload_schema_version,payload)
-           values($1,$2,'order.confirmed','commercial_request',$3,$4,1,jsonb_build_object('commercialRequestId',($3::uuid)::text))`,
-          [uuidv7(), input.tenantId, flow.commercial_request_id, uuidv7()],
-        );
-      }
+      // D-191 (docs/decisions.md): the push to Loggro Restobar's POS used
+      // to fire right here, the moment the customer confirmed by
+      // WhatsApp — moved to CommercialRequestsService.changeStatus()'s
+      // 'accepted' transition instead, so a real pedido only reaches the
+      // kitchen once an admin has actually accepted it from the panel
+      // (same moment the "tu pedido está en preparación" notification
+      // goes out, see notifyOrderAccepted there). Confirming by WhatsApp
+      // now only ever reaches 'ready', never touches Loggro on its own.
       return this.localizedReply(input.locale, "confirmed", {
         reference: flow.commercial_request_id.slice(-8).toUpperCase(),
       });

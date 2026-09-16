@@ -10,7 +10,7 @@ export type LoggroConnectionView = {
   connected: boolean;
   status: string;
   secretConfigured: boolean;
-  homeDeliveryTableId: string | null;
+  tableNamePattern: string | null;
   lastSyncedAt: Date | null;
   lastErrorCode: string | null;
 };
@@ -29,11 +29,11 @@ export class LoggroConnectionService {
       const result = await client.query<{
         status: string;
         secret_reference: string | null;
-        home_delivery_table_id: string | null;
+        table_name_pattern: string | null;
         last_synced_at: Date | null;
         last_error_code: string | null;
       }>(
-        `select status,secret_reference,home_delivery_table_id,last_synced_at,last_error_code
+        `select status,secret_reference,table_name_pattern,last_synced_at,last_error_code
            from app.pos_connections where tenant_id=$1 and provider='loggro_restobar'`,
         [tenantId],
       );
@@ -42,7 +42,7 @@ export class LoggroConnectionService {
         connected: row?.status === "connected",
         status: row?.status ?? "disconnected",
         secretConfigured: Boolean(row?.secret_reference),
-        homeDeliveryTableId: row?.home_delivery_table_id ?? null,
+        tableNamePattern: row?.table_name_pattern ?? null,
         lastSyncedAt: row?.last_synced_at ?? null,
         lastErrorCode: row?.last_error_code ?? null,
       };
@@ -93,19 +93,26 @@ export class LoggroConnectionService {
     return { connectionId };
   }
 
-  async setHomeDeliveryTable(
+  // D-194 (docs/decisions.md): the tenant no longer points at one fixed
+  // table — it keeps a pool of real tables sharing a name prefix (e.g.
+  // "Bot Convomerce 1", "Bot Convomerce 2", ...), and
+  // LoggroOrderSyncService.resolveAvailableTable() re-resolves the actual
+  // matching tables from the live account on every push, so a table added
+  // later with the same prefix is picked up automatically — nothing here
+  // stores table ids.
+  async setTableNamePattern(
     tenantId: string,
     userId: string,
-    tableId: string,
-  ): Promise<{ homeDeliveryTableId: string }> {
+    pattern: string,
+  ): Promise<{ tableNamePattern: string }> {
     await this.db.withTenantTransaction(tenantId, async (client) => {
       await this.assertManage(client, userId);
       const result = await client.query(
-        `update app.pos_connections set home_delivery_table_id=$2,updated_at=now() where tenant_id=$1 and provider='loggro_restobar'`,
-        [tenantId, tableId],
+        `update app.pos_connections set table_name_pattern=$2,updated_at=now() where tenant_id=$1 and provider='loggro_restobar'`,
+        [tenantId, pattern],
       );
       if (result.rowCount === 0)
-        throw badRequest("LOGGRO_NOT_CONNECTED", "Connect Loggro before selecting its delivery table");
+        throw badRequest("LOGGRO_NOT_CONNECTED", "Connect Loggro before configuring its table pool");
     });
     // Found live testing this exact panel: a NestJS controller method
     // returning void sends a 200 with an EMPTY body — the frontend's
@@ -113,7 +120,7 @@ export class LoggroConnectionService {
     // response, so an empty body throws "Unexpected end of JSON input" even
     // though the write itself already succeeded. Every write endpoint in
     // this module must return a real JSON body for that reason.
-    return { homeDeliveryTableId: tableId };
+    return { tableNamePattern: pattern };
   }
 
   // Lists real tables from the live Loggro account so an admin can pick

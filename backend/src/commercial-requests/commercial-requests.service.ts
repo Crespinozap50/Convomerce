@@ -113,6 +113,7 @@ export class CommercialRequestsService {
     // twice for the same order.
     if(status==='accepted'&&current.rows[0].request_type==='order'){
       await this.notifyOrderAccepted(client,tenantId,requestId);
+      await this.pushToLoggro(client,tenantId,requestId);
     }
     // Only 'draft'/'awaiting_confirmation' can still have an active
     // conversation_workflow at this point — every later transition
@@ -189,6 +190,25 @@ export class CommercialRequestsService {
       `insert into app.outbox_events(id,tenant_id,event_type,aggregate_type,aggregate_id,correlation_id,payload_schema_version,payload)
        values($1,$2,'message.send_requested','message',$3,$4,1,jsonb_build_object('messageId',($3::uuid)::text))`,
       [uuidv7(),tenantId,messageId,uuidv7()],
+    );
+  }
+  // D-191 (docs/decisions.md): moved here from commercial-flow.service.ts's
+  // handleAwaitingConfirmation() — a real pedido used to reach Loggro the
+  // moment the customer confirmed by WhatsApp, before any human at the
+  // restaurant had actually seen it. Same outbox pattern as before
+  // (order.confirmed → CommerceEventsWorker → LoggroOrderSyncService),
+  // just triggered by the admin's own "Aceptar pedido" action instead —
+  // read-only and inserts nothing for any tenant without loggro_pos
+  // enabled (every tenant but Santos Tacos today).
+  private async pushToLoggro(client:PoolClient,tenantId:string,requestId:string){
+    const posEnabled=await client.query<{enabled:boolean}>(
+      `select enabled from app.tenant_capabilities where tenant_id=$1 and capability='loggro_pos'`,[tenantId]);
+    if(!posEnabled.rows[0]?.enabled)return;
+    await client.query(`update app.commercial_requests set pos_sync_status='pending' where id=$1`,[requestId]);
+    await client.query(
+      `insert into app.outbox_events(id,tenant_id,event_type,aggregate_type,aggregate_id,correlation_id,payload_schema_version,payload)
+       values($1,$2,'order.confirmed','commercial_request',$3,$4,1,jsonb_build_object('commercialRequestId',($3::uuid)::text))`,
+      [uuidv7(),tenantId,requestId,uuidv7()],
     );
   }
   private async actor(client:PoolClient,userId:string,manage=false){const result=await client.query(`select role from app.tenant_users where tenant_id=app.current_tenant_id() and user_id=$1 and status='active'`,[userId]);if(result.rows[0]){if(manage&&result.rows[0].role==='viewer')throw forbidden('COMMERCIAL_REQUESTS_FORBIDDEN','Actor cannot manage commercial requests');return result.rows[0]}const platform=await client.query(`select app.can_manage_channel_connections($1) allowed`,[userId]);if(!platform.rows[0]?.allowed)throw forbidden('COMMERCIAL_REQUESTS_FORBIDDEN','Actor cannot access commercial requests');return{role:'platform_admin'}}
