@@ -2632,6 +2632,23 @@ header h1 {
 .compact-empty {
   padding: 35px 20px;
 }
+.message-load-older {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #748078;
+  padding: 6px 0 14px;
+}
+.message-load-older .loader-sm {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #d5e2da;
+  border-top-color: #158557;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
 .message-failure {
   margin-top: 8px;
   padding-top: 8px;

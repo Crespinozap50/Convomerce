@@ -797,6 +797,8 @@ export default {
       failed: "No enviados",
     },
     noFilteredMessages: "Ningún mensaje coincide con estos filtros.",
+    loadingOlder: "Cargando mensajes anteriores…",
+    scrollForOlder: "Desplázate hacia arriba para ver mensajes anteriores",
     latest: "Último mensaje",
     hideInbox: "Ocultar bandeja",
     showInbox: "Mostrar bandeja",

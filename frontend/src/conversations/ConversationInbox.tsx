@@ -108,6 +108,7 @@ type ConversationDetail = {
   canManage: boolean;
   conversation: ConversationRow;
   messages: ConversationMessage[];
+  hasMoreOlder: boolean;
 };
 
 // Time alone reads fine for today's messages, but the inbox keeps rows from
@@ -158,6 +159,13 @@ export function ConversationInbox({
     useState<ConversationMessage | null>(null);
   const [quickRepliesOpen, setQuickRepliesOpen] = useState(false);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  // D-204 (docs/decisions.md): WhatsApp-style "load more on scroll up" —
+  // set right before a loadOlder() prepend so the scroll-to-bottom effect
+  // below knows to restore the reading position instead of jumping to the
+  // newest message, and to know how much to restore it by.
+  const prependingRef = useRef(false);
+  const restoreScrollRef = useRef<{ height: number; top: number } | null>(null);
   useEffect(() => {
     if (!technicalMessage) return;
 
@@ -189,6 +197,69 @@ export function ConversationInbox({
     );
     setDetail(next);
   };
+  // D-204 (docs/decisions.md): the 2.5s poll, and any action that mutates
+  // the conversation (take/bot/close, sending a manual reply), used to
+  // call open() — a full reset back to just the most recent page. Once
+  // messages are paginated that would silently throw away any older
+  // history the reader had scrolled up to load. This only appends
+  // messages newer than what's already loaded, and refreshes the
+  // conversation header (status/handling mode can change with no new
+  // message), leaving hasMoreOlder and everything already loaded intact.
+  const refreshLatest = async (id: string) => {
+    const latest = await api<ConversationDetail>(
+      `/v1/admin/tenants/${tenant}/conversations/${id}/messages`,
+    );
+    setDetail((current) => {
+      if (!current || current.conversation.id !== id) return current;
+      // Also refreshes any already-loaded message still present in this
+      // latest page (e.g. a retried message's deliveryStatus changing from
+      // 'failed' to 'sent'), not just newly-arrived ones — retry() relies
+      // on this instead of a full reload.
+      const latestById = new Map(latest.messages.map((message) => [message.id, message]));
+      const knownIds = new Set(current.messages.map((message) => message.id));
+      const refreshed = current.messages.map((message) => latestById.get(message.id) ?? message);
+      const newer = latest.messages.filter((message) => !knownIds.has(message.id));
+      return {
+        ...current,
+        conversation: latest.conversation,
+        messages: newer.length ? [...refreshed, ...newer] : refreshed,
+      };
+    });
+  };
+  const loadOlder = async () => {
+    if (!selected || !detail || !detail.hasMoreOlder || loadingOlder) return;
+    const oldest = detail.messages[0];
+    if (!oldest) return;
+    setLoadingOlder(true);
+    const timeline = timelineRef.current;
+    restoreScrollRef.current = timeline
+      ? { height: timeline.scrollHeight, top: timeline.scrollTop }
+      : null;
+    prependingRef.current = true;
+    try {
+      const params = new URLSearchParams({
+        beforeAt: oldest.occurredAt,
+        beforeId: oldest.id,
+      });
+      const older = await api<ConversationDetail>(
+        `/v1/admin/tenants/${tenant}/conversations/${selected}/messages?${params.toString()}`,
+      );
+      setDetail((current) =>
+        current
+          ? {
+              ...current,
+              hasMoreOlder: older.hasMoreOlder,
+              messages: [...older.messages, ...current.messages],
+            }
+          : current,
+      );
+    } catch (error) {
+      prependingRef.current = false;
+      onNotice((error as Error).message, "error");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
   useEffect(() => {
     setDetail(null);
     setSelected(null);
@@ -213,7 +284,7 @@ export function ConversationInbox({
       void (async () => {
         const conversations = await load();
         if (!selected) return;
-        await open(selected);
+        await refreshLatest(selected);
         if (conversations.find((row) => row.id === selected)?.unreadCount) {
           await api(
             `/v1/admin/tenants/${tenant}/conversations/${selected}/read`,
@@ -226,13 +297,28 @@ export function ConversationInbox({
       })().catch(() => undefined);
     }, 2500);
     return () => window.clearInterval(timer);
-    // load/open are redefined every render; including them here would tear
-    // down and recreate the 2.5s poll interval on every render.
+    // load/refreshLatest are redefined every render; including them here
+    // would tear down and recreate the 2.5s poll interval on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenant, selected]);
   useEffect(() => {
     const timeline = timelineRef.current;
     if (!timeline) return;
+    // A loadOlder() prepend also changes messages.length, but the reader
+    // is scrolled up reading history — jumping them to the bottom would
+    // be exactly the wrong move. Restore their reading position instead
+    // (scrollHeight grew by however many older messages were inserted
+    // above what they were looking at).
+    if (prependingRef.current) {
+      const restore = restoreScrollRef.current;
+      prependingRef.current = false;
+      restoreScrollRef.current = null;
+      if (!restore) return;
+      const frame = requestAnimationFrame(() => {
+        timeline.scrollTop = timeline.scrollHeight - restore.height + restore.top;
+      });
+      return () => cancelAnimationFrame(frame);
+    }
     const frame = requestAnimationFrame(() => {
       timeline.scrollTop = timeline.scrollHeight;
     });
@@ -247,7 +333,7 @@ export function ConversationInbox({
         { method: "POST", body: JSON.stringify({ action }) },
       );
       await load();
-      await open(selected);
+      await refreshLatest(selected);
       onNotice(t(`conversations.${action}Done`));
     } catch (error) {
       onNotice((error as Error).message, "error");
@@ -265,7 +351,7 @@ export function ConversationInbox({
         { method: "POST", body: JSON.stringify({ text }) },
       );
       setText("");
-      await open(selected);
+      await refreshLatest(selected);
       await load();
     } catch (error) {
       onNotice((error as Error).message, "error");
@@ -281,7 +367,7 @@ export function ConversationInbox({
         `/v1/admin/tenants/${tenant}/conversations/${selected}/messages/${messageId}/retry`,
         { method: "POST" },
       );
-      await open(selected);
+      await refreshLatest(selected);
       await load();
       onNotice(t("conversations.retryQueued"));
     } catch (error) {
@@ -554,8 +640,17 @@ export function ConversationInbox({
                     element.clientHeight >
                     120,
                 );
+                if (element.scrollTop < 100) void loadOlder();
               }}
             >
+              {detail?.hasMoreOlder && (
+                <div className="message-load-older">
+                  {loadingOlder && <span className="loader-sm" aria-hidden="true" />}
+                  {loadingOlder
+                    ? t("conversations.loadingOlder")
+                    : t("conversations.scrollForOlder")}
+                </div>
+              )}
               {visibleMessages.map((message, index) => {
                 const previous = visibleMessages[index - 1];
                 const currentDate = new Date(

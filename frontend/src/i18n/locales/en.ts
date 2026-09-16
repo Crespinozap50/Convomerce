@@ -789,6 +789,8 @@ export default {
       failed: "Not sent",
     },
     noFilteredMessages: "No messages match these filters.",
+    loadingOlder: "Loading older messages…",
+    scrollForOlder: "Scroll up to see older messages",
     latest: "Latest",
     hideInbox: "Hide inbox",
     showInbox: "Show inbox",

@@ -95,7 +95,21 @@ export class ConversationsService {
     });
   }
 
-  messages(tenantId: string, userId: string, conversationId: string) {
+  // D-204 (docs/decisions.md): loads a recent window instead of the whole
+  // history at once — same "why load 1335 rows to render 50" motivation as
+  // D-203's fix just above, but for the normal case (not just the silent
+  // 500-row cutoff). `before` scrolls further back: strictly older than
+  // that message's (occurred_at,id), same tie-break the DESC/ASC ordering
+  // already uses everywhere else in this query. Fetches one extra row to
+  // report hasMoreOlder without a second count query.
+  messages(
+    tenantId: string,
+    userId: string,
+    conversationId: string,
+    before: { occurredAt: string; id: string } | null = null,
+    limit = 50,
+  ) {
+    const pageSize = Math.min(Math.max(limit, 1), 200);
     return this.db.withTenantTransaction(tenantId, async (client) => {
       const actor = await this.actor(client, userId);
       const conversation = await client.query(
@@ -141,20 +155,17 @@ export class ConversationsService {
            ) trigger_message on true
            left join app.ai_usage usage on usage.tenant_id=message.tenant_id and usage.message_id=trigger_message.id
           where message.conversation_id=$1
-          -- Found live: a real conversation with 1335+ messages (heavy
-          -- repeated testing on the same WhatsApp thread) silently showed
-          -- only its oldest 500 in the panel — DESC+LIMIT here takes the
-          -- most RECENT 500 instead, reversed back to chronological order
-          -- below before mapping, same "recent window, oldest first"
-          -- shape any chat UI needs.
-          order by message.occurred_at desc,message.id desc limit 500`,
-        [conversationId],
+            and ($2::timestamptz is null or (message.occurred_at,message.id)<($2::timestamptz,$3::uuid))
+          order by message.occurred_at desc,message.id desc limit $4`,
+        [conversationId, before?.occurredAt ?? null, before?.id ?? null, pageSize + 1],
       );
-      messages.rows.reverse();
+      const hasMoreOlder = messages.rows.length > pageSize;
+      const page = messages.rows.slice(0, pageSize).reverse();
       return {
         canManage: actor.role !== "viewer",
         conversation: this.mapConversation(conversation.rows[0]),
-        messages: messages.rows.map((row) => {
+        hasMoreOlder,
+        messages: page.map((row) => {
           const rewriting = row.content?.decision?.rewriting;
           const deterministicBody = rewriting?.deterministicBody ?? null;
           const generationMode = rewriting?.mode ?? null;

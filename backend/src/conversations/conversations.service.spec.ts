@@ -173,6 +173,59 @@ describe("ConversationsService", () => {
 
       expect(result.messages.map((m) => m.body)).toEqual(["primero", "segundo", "tercero"]);
     });
+
+    // D-204 (docs/decisions.md): WhatsApp-style "load more on scroll up" —
+    // loads a recent page instead of the whole conversation, with a cursor
+    // to page further back.
+    it("reports hasMoreOlder when the DB returns one more row than the page size (limit+1 probe)", async () => {
+      const { query } = clientWith({
+        tenantUserRow: { id: "m1", role: "admin" },
+        extra: (sql) => {
+          if (sql.includes("from app.conversations conversation"))
+            return { rows: [{ id: conversationId, status: "open" }] };
+          if (sql.includes("from app.messages message"))
+            return {
+              rows: [
+                { id: "msg-2", direction: "outbound", content: { body: "b" }, input_tokens: null },
+                { id: "msg-1", direction: "outbound", content: { body: "a" }, input_tokens: null },
+              ],
+            };
+          return undefined;
+        },
+      });
+
+      const result = await service({ query }).messages(tenantId, userId, conversationId, null, 1);
+
+      expect(result.hasMoreOlder).toBe(true);
+      expect(result.messages.map((m) => m.body)).toEqual(["b"]);
+    });
+
+    it("passes the before cursor through to the query params, clamping limit to [1,200]", async () => {
+      const query = jest.fn(async (sql: string, params: unknown[] = []) => {
+        void params;
+        if (sql.includes("from app.tenant_users")) return { rows: [{ role: "admin" }] };
+        if (sql.includes("from app.conversations conversation"))
+          return { rows: [{ id: conversationId, status: "open" }] };
+        if (sql.includes("from app.messages message")) return { rows: [] };
+        return { rows: [] };
+      });
+
+      await service({ query }).messages(
+        tenantId,
+        userId,
+        conversationId,
+        { occurredAt: "2026-09-01T00:00:00.000Z", id: "msg-cursor" },
+        99999,
+      );
+
+      const messagesCall = query.mock.calls.find(([sql]) => sql.includes("from app.messages message"));
+      expect(messagesCall?.[1]).toEqual([
+        conversationId,
+        "2026-09-01T00:00:00.000Z",
+        "msg-cursor",
+        201,
+      ]);
+    });
   });
 
   describe("act", () => {
