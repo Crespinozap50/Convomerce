@@ -405,6 +405,13 @@ export default {
       tablePatternSaved: "Table pattern saved.",
       tablePatternNoMatches: "No real table matches that pattern yet.",
       noTables: "No tables found on the Loggro account.",
+      enabledBadgeOn: "Active",
+      enabledBadgeOff: "Inactive",
+      enabledToggle: "Send confirmed orders to Loggro",
+      enabledHelp: "While on, every order accepted from the panel is really sent to the POS.",
+      enabledRequiresPattern: "Configure and save the table pool pattern before enabling it.",
+      enabledOn: "Loggro enabled — accepted orders are now sent to the POS.",
+      enabledOff: "Loggro disabled — accepted orders are no longer sent to the POS.",
     },
   },
   bot: {

@@ -13,6 +13,7 @@ export type LoggroConnectionView = {
   tableNamePattern: string | null;
   lastSyncedAt: Date | null;
   lastErrorCode: string | null;
+  enabled: boolean;
 };
 
 @Injectable()
@@ -38,6 +39,10 @@ export class LoggroConnectionService {
         [tenantId],
       );
       const row = result.rows[0];
+      const capability = await client.query<{ enabled: boolean }>(
+        `select enabled from app.tenant_capabilities where tenant_id=$1 and capability='loggro_pos'`,
+        [tenantId],
+      );
       return {
         connected: row?.status === "connected",
         status: row?.status ?? "disconnected",
@@ -45,6 +50,7 @@ export class LoggroConnectionService {
         tableNamePattern: row?.table_name_pattern ?? null,
         lastSyncedAt: row?.last_synced_at ?? null,
         lastErrorCode: row?.last_error_code ?? null,
+        enabled: capability.rows[0]?.enabled ?? false,
       };
     });
   }
@@ -121,6 +127,47 @@ export class LoggroConnectionService {
     // though the write itself already succeeded. Every write endpoint in
     // this module must return a real JSON body for that reason.
     return { tableNamePattern: pattern };
+  }
+
+  // D-201 (docs/decisions.md): loggro_pos used to be toggleable only via a
+  // direct SQL update — the project owner had no way to find or flip it
+  // from the panel. Reuses the same authoritative
+  // app.save_tenant_capabilities(actor, enabled text[]) function the
+  // generic knowledge-capabilities grid already calls (commerce_runtime
+  // only has SELECT on app.tenant_capabilities itself — a plain upsert from
+  // here would fail the same way D-190's missing column grant did), so the
+  // current full enabled set is read first and only 'loggro_pos' is
+  // flipped within it — every other capability's own state is preserved
+  // untouched.
+  async setEnabled(tenantId: string, userId: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    await this.db.withTenantTransaction(tenantId, async (client) => {
+      await this.assertManage(client, userId);
+      if (enabled) {
+        const connection = await client.query<{ table_name_pattern: string | null }>(
+          `select table_name_pattern from app.pos_connections where tenant_id=$1 and provider='loggro_restobar' and status='connected'`,
+          [tenantId],
+        );
+        if (!connection.rows[0])
+          throw badRequest("LOGGRO_NOT_CONNECTED", "Connect Loggro before enabling it");
+        if (!connection.rows[0].table_name_pattern)
+          throw badRequest(
+            "LOGGRO_TABLE_PATTERN_REQUIRED",
+            "Configure the table pool pattern before enabling loggro_pos",
+          );
+      }
+      const current = await client.query<{ capability: string }>(
+        `select capability from app.tenant_capabilities where tenant_id=$1 and enabled`,
+        [tenantId],
+      );
+      const enabledSet = new Set(current.rows.map((row) => row.capability));
+      if (enabled) enabledSet.add("loggro_pos");
+      else enabledSet.delete("loggro_pos");
+      await client.query("select app.save_tenant_capabilities($1,$2::text[])", [
+        userId,
+        [...enabledSet],
+      ]);
+    });
+    return { enabled };
   }
 
   // Lists real tables from the live Loggro account so an admin can pick

@@ -409,6 +409,13 @@ export default {
       tablePatternSaved: "Patrón de mesas guardado.",
       tablePatternNoMatches: "Ninguna mesa real coincide con ese patrón todavía.",
       noTables: "No se encontraron mesas en la cuenta de Loggro.",
+      enabledBadgeOn: "Activo",
+      enabledBadgeOff: "Inactivo",
+      enabledToggle: "Enviar pedidos confirmados a Loggro",
+      enabledHelp: "Con esto activado, cada pedido aceptado desde el panel se envía de verdad al POS.",
+      enabledRequiresPattern: "Configura y guarda el patrón de mesas antes de activarlo.",
+      enabledOn: "Loggro activado — los pedidos aceptados ya se envían al POS.",
+      enabledOff: "Loggro desactivado — los pedidos aceptados ya no se envían al POS.",
     },
   },
   bot: {

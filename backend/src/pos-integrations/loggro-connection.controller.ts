@@ -29,6 +29,20 @@ export class LoggroConnectionController {
     });
   }
 
+  @Put("enabled") setEnabled(
+    @Param("tenantId") tenantId: string,
+    @Body() body: unknown,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    requireUuid(tenantId);
+    const input = objectBody(body);
+    return this.connections.setEnabled(
+      tenantId,
+      request.actor.userId,
+      requiredBoolean(input.enabled, "enabled"),
+    );
+  }
+
   @Get("tables") tables(@Param("tenantId") tenantId: string, @Req() request: AuthenticatedRequest) {
     requireUuid(tenantId);
     return this.connections.listTables(tenantId, request.actor.userId);
@@ -64,4 +78,8 @@ function requiredString(value: unknown, field: string): string {
 }
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+function requiredBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") throw badRequest("VALIDATION_ERROR", `${field} is required`);
+  return value;
 }

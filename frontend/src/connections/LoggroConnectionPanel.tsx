@@ -10,6 +10,7 @@ type LoggroStatus = {
   tableNamePattern: string | null;
   lastSyncedAt: string | null;
   lastErrorCode: string | null;
+  enabled: boolean;
 };
 type LoggroTable = { _id: string; name: string; isActive: boolean; isHomeDelivery: boolean };
 
@@ -100,6 +101,30 @@ export function LoggroConnectionPanel({
     }
   }
 
+  // D-201 (docs/decisions.md): loggro_pos used to be toggleable only via a
+  // direct SQL update — this is the missing admin-facing switch. The
+  // backend re-checks the same connected+pattern preconditions on every
+  // save regardless of what's disabled here, so a stale UI state can never
+  // silently enable it incorrectly.
+  async function toggleEnabled() {
+    const next = !status?.enabled;
+    setBusy(true);
+    try {
+      await api(`/v1/admin/tenants/${tenant}/pos-connections/loggro/enabled`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled: next }),
+      });
+      await load();
+      onNotice(
+        next ? t("connections.loggro.enabledOn") : t("connections.loggro.enabledOff"),
+      );
+    } catch (error) {
+      onNotice((error as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const matchingTables = tables?.filter((table) =>
     pattern.trim() ? table.name.trim().toLowerCase().startsWith(pattern.trim().toLowerCase()) : false,
   );
@@ -139,6 +164,13 @@ export function LoggroConnectionPanel({
                 defaultValue: status?.status ?? "disconnected",
               })}
             </em>
+            {status?.connected && (
+              <span className={`loggro-enabled-badge ${status.enabled ? "on" : "off"}`}>
+                {status.enabled
+                  ? t("connections.loggro.enabledBadgeOn")
+                  : t("connections.loggro.enabledBadgeOff")}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -206,6 +238,29 @@ export function LoggroConnectionPanel({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {canManage && status?.connected && (
+        <div className="loggro-enabled-toggle">
+          <label className="switch-row">
+            <input
+              type="checkbox"
+              checked={status.enabled}
+              disabled={busy || (!status.enabled && !status.tableNamePattern)}
+              onChange={() => void toggleEnabled()}
+            />
+            <span className="switch-control" aria-hidden="true">
+              <span />
+            </span>
+            <span>
+              <b>{t("connections.loggro.enabledToggle")}</b>
+              <small>
+                {!status.enabled && !status.tableNamePattern
+                  ? t("connections.loggro.enabledRequiresPattern")
+                  : t("connections.loggro.enabledHelp")}
+              </small>
+            </span>
+          </label>
         </div>
       )}
     </section>

@@ -979,6 +979,26 @@ header h1 {
   background: #eaf6ef;
   font-size: 12px;
 }
+.loggro-enabled-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.loggro-enabled-badge.on {
+  background: #e7f5ec;
+  color: #1e7d43;
+}
+.loggro-enabled-badge.off {
+  background: #f1f1ef;
+  color: #6b6b66;
+}
+.loggro-enabled-toggle {
+  padding: 0 24px 16px;
+}
 .webhook-info {
   margin: 20px 24px 0;
   padding: 14px 16px;

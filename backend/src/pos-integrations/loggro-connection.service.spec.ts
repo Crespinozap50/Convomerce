@@ -108,14 +108,69 @@ describe("LoggroConnectionService", () => {
           status: "connected", secret_reference: "enc:real-secret", table_name_pattern: "Bot Convomerce",
           last_synced_at: null, last_error_code: null,
         }],
-      });
+      })
+      .mockResolvedValueOnce({ rows: [{ enabled: true }] });
 
     const status = await service(query).status(tenantId, userId);
 
     expect(status).toEqual({
       connected: true, status: "connected", secretConfigured: true,
-      tableNamePattern: "Bot Convomerce", lastSyncedAt: null, lastErrorCode: null,
+      tableNamePattern: "Bot Convomerce", lastSyncedAt: null, lastErrorCode: null, enabled: true,
     });
     expect(JSON.stringify(status)).not.toContain("real-secret");
+  });
+
+  describe("setEnabled (D-201)", () => {
+    it("refuses to enable when Loggro was never connected for this tenant", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ allowed: true }] })
+        .mockResolvedValueOnce({ rows: [] }); // no connected pos_connections row
+
+      await expect(service(query).setEnabled(tenantId, userId, true))
+        .rejects.toMatchObject({ response: { code: "LOGGRO_NOT_CONNECTED" } });
+    });
+
+    it("refuses to enable before a table pool pattern is configured", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ allowed: true }] })
+        .mockResolvedValueOnce({ rows: [{ table_name_pattern: null }] });
+
+      await expect(service(query).setEnabled(tenantId, userId, true))
+        .rejects.toMatchObject({ response: { code: "LOGGRO_TABLE_PATTERN_REQUIRED" } });
+    });
+
+    it("enables loggro_pos while preserving every other already-enabled capability", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ allowed: true }] })
+        .mockResolvedValueOnce({ rows: [{ table_name_pattern: "Bot Convomerce" }] })
+        .mockResolvedValueOnce({ rows: [{ capability: "orders" }, { capability: "delivery" }] })
+        .mockResolvedValueOnce({ rows: [] }); // save_tenant_capabilities
+
+      const result = await service(query).setEnabled(tenantId, userId, true);
+
+      expect(result).toEqual({ enabled: true });
+      const save = query.mock.calls[3];
+      expect(String(save[0])).toContain("select app.save_tenant_capabilities($1,$2::text[])");
+      expect(save[1][0]).toBe(userId);
+      expect(save[1][1]).toEqual(expect.arrayContaining(["orders", "delivery", "loggro_pos"]));
+      expect(save[1][1]).toHaveLength(3);
+    });
+
+    it("disables loggro_pos without touching or requiring a connection/pattern check", async () => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ allowed: true }] })
+        .mockResolvedValueOnce({ rows: [{ capability: "orders" }, { capability: "loggro_pos" }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const result = await service(query).setEnabled(tenantId, userId, false);
+
+      expect(result).toEqual({ enabled: false });
+      const save = query.mock.calls[2];
+      expect(save[1][1]).toEqual(["orders"]);
+    });
   });
 });
