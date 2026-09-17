@@ -345,6 +345,7 @@ export function KnowledgeSettings({
     "pickup",
     "on_site",
     "consultative_recommendations",
+    "command_recovery",
   ];
   const commerceProviders = [
     { id: "shopify", name: "Shopify" },

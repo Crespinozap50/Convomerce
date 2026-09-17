@@ -680,6 +680,10 @@ export default {
         title: "Recomendaciones consultivas",
         help: "Cuando el cliente no nombra un producto, deja que el asistente sugiera 2-3 productos reales del catálogo según lo que describe necesitar.",
       },
+      command_recovery: {
+        title: "Recuperación de intención por IA",
+        help: "Cuando el cliente escribe mal o de otra forma una acción (cancelar, modificar, ver el pedido, etc.) y el bot no la reconoce, deja que la IA identifique cuál de las acciones existentes quiso decir.",
+      },
     },
     offeringTypes: {
       product: "Producto",

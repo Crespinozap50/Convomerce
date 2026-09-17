@@ -672,6 +672,10 @@ export default {
         title: "Consultative recommendations",
         help: "When no product is named, let the assistant suggest 2-3 real catalog items based on what the customer describes needing.",
       },
+      command_recovery: {
+        title: "AI intent recovery",
+        help: "When the customer mistypes or rephrases an action (cancel, modify, view order, etc.) and the bot doesn't recognize it, let AI identify which existing action they meant.",
+      },
     },
     offeringTypes: {
       product: "Product",

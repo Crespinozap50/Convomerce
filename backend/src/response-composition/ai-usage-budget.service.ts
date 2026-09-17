@@ -9,7 +9,7 @@ export type AiRewriteContext={tenantId:string;conversationId:string;messageId:st
 // tracked — consultative_recommendation shares the same per-tenant budget
 // pool/gate (app.ai_response_policies) rather than getting a parallel
 // budget system, just labeled distinctly for reporting.
-export type AiUsagePurpose='response_rewriting'|'consultative_recommendation'|'business_faq';
+export type AiUsagePurpose='response_rewriting'|'consultative_recommendation'|'business_faq'|'command_recovery';
 export type AiBudgetReservation={id:string;tenantId:string;conversationId:string;messageId:string;reservedCostMinor:number;currency:string;purpose:AiUsagePurpose};
 export type AiBudgetDecision={allowed:boolean;reason?:'tenant_disabled'|'rollout_excluded'|'daily_limit'|'monthly_budget';reservation?:AiBudgetReservation};
 export type AiUsageSettlement={provider:string;model:string;inputTokens:number;outputTokens:number;actualCostMinor:number;latencyMs:number;success:boolean;failureReason?:string};

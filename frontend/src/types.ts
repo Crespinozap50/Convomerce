@@ -84,7 +84,8 @@ export type CapabilityName =
   | "delivery"
   | "pickup"
   | "on_site"
-  | "consultative_recommendations";
+  | "consultative_recommendations"
+  | "command_recovery";
 export type ExternalSource = {
   id: string;
   provider: string;

@@ -13,6 +13,7 @@ import { SECRET_PROVIDER } from "../secrets/secret-provider";
 import { DeterministicReplyService } from "./deterministic-reply.service";
 import { CommercialFlowService } from "./commercial-flow.service";
 import { ConsultativeRecommendationService } from "./consultative-recommendation.service";
+import { CommandRecoveryService } from "./command-recovery.service";
 import { BusinessFaqService } from "./business-faq.service";
 import { AppointmentFlowService } from "./appointment-flow.service";
 import { SchedulingModule } from "../scheduling/scheduling.module";
@@ -35,6 +36,7 @@ import { OperationalRequirementsModule } from "../operational-requirements/opera
     DeterministicReplyService,
     CommercialFlowService,
     ConsultativeRecommendationService,
+    CommandRecoveryService,
     BusinessFaqService,
     AppointmentFlowService,
     RecommendationService,

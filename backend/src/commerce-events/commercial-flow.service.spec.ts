@@ -7026,6 +7026,172 @@ describe("CommercialFlowService", () => {
     ).toBe(true);
   });
 
+  describe("D-207 AI command recovery", () => {
+    it("recovers a garbled control word inside an explicit purchase-style message before falling back to the generic catalog reply", async () => {
+      // Mirrors the D-206 real bug shape (a control word the deterministic
+      // classifier missed, "quiero" phrasing sets requestedAction to
+      // start_order) — startNewOrder()'s own AI fallback
+      // (tryConsultativeRecommendation) already ran and found nothing (no
+      // ConsultativeRecommendationService wired here), so this is the true
+      // last resort before the generic catalog fallback.
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return { rows: [] };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.commercial_requests") && sql.includes("status='ready'"))
+            return { rows: [] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("cancel");
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: "kiero anulal mi pedidoo",
+        understanding: {
+          locale: "es",
+          localeSource: "tenant_default",
+          intent: "order",
+          confidence: 0.5,
+          entities: {},
+          requestedAction: "start_order",
+          missingInformation: [],
+          requiresHuman: false,
+          provider: "deterministic",
+          providerVersion: "test",
+        } as never,
+      });
+
+      expect(recover).toHaveBeenCalledWith(
+        { tenantId: input.tenantId, conversationId: input.conversationId, messageId: "message-1" },
+        "kiero anulal mi pedidoo",
+        "es",
+        client,
+      );
+      expect(reply?.body).toBe("No tienes un proceso activo para cancelar.");
+    });
+
+    it("recovers a garbled command inside an active selecting_item step before falling back to the bare itemUnknown catalog", async () => {
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [{ id: "workflow-1", commercial_request_id: "request-1", step: "selecting_item", context: {} }],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("cancel");
+      const message = "anulalo porfa";
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(reply?.body).toBe("Proceso cancelado. No se realizó ningún cobro.");
+      expect(
+        client.query.mock.calls.some(([sql]) => String(sql).includes("status='cancelled'")),
+      ).toBe(true);
+    });
+
+    it('recovers "add_item" from a garbled request instead of the generic moreItemsAnswer fallback (D-206 documented-not-fixed finding)', async () => {
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("add_item");
+      const message = "Puedo agregar algo mas ?";
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(reply?.body).toBe("¿Qué producto deseas pedir?");
+    });
+
+    it("still shows the bare-match itemUnknown catalog fallback unchanged when command_recovery is wired but the tenant hasn't enabled the capability (non-regression)", async () => {
+      const catalogRows = {
+        rows: [
+          { item_id: "item-1", variant_id: "pastor-variant", name: "Tacos al pastor", category: "Tacos", variant_name: "Unidad", price_minor: "1890000", currency: "COP" },
+          { item_id: "item-2", variant_id: "birria-variant", name: "Tacos de birria", category: "Tacos", variant_name: "Unidad", price_minor: "2290000", currency: "COP" },
+        ],
+      };
+      const recover = jest.fn();
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "selecting_item", context: { returnToCart: true } },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: false }] };
+          return catalogRows;
+        }),
+      };
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: "Si",
+        understanding: await understand("Si"),
+      });
+
+      expect(recover).not.toHaveBeenCalled();
+      expect(
+        reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+      ).toEqual({
+        type: "list",
+        body: "",
+        buttonLabel: "Elegir",
+        options: [
+          { id: "pastor-variant", title: "Tacos al pastor", description: "$ 18.900" },
+          { id: "birria-variant", title: "Tacos de birria", description: "$ 22.900" },
+          { id: "cart:view_catalog", title: "Ver menú" },
+        ],
+      });
+    });
+  });
+
   describe("D-040 multi-entity extraction", () => {
     const filteringRequirements = (all: PendingRequirement[]) =>
       ({

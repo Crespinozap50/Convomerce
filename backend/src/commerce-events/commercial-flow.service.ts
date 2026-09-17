@@ -4,6 +4,7 @@ import { v7 as uuidv7 } from "uuid";
 import { DeterministicReply } from "./deterministic-reply.service";
 import { RecommendationService } from "../recommendations/recommendation.service";
 import { ConsultativeRecommendationService } from "./consultative-recommendation.service";
+import { CommandRecoveryService } from "./command-recovery.service";
 import {
   catalogFor,
   ConversationLocale,
@@ -103,7 +104,7 @@ type PlannedContent = {
     segments: CommercialSegment[];
   };
 };
-type FlowCommand =
+export type FlowCommand =
   | "catalog"
   | "view_order"
   | "add_item"
@@ -269,6 +270,10 @@ export class CommercialFlowService {
     // of them never exercise — absent, tryConsultativeRecommendation just
     // no-ops (same as the tenant capability being off).
     private readonly consultativeRecommendations?: ConsultativeRecommendationService,
+    // D-207: same optional-injection shape as consultativeRecommendations
+    // just above — absent, recoverCommand() just no-ops (same as the
+    // tenant capability being off).
+    private readonly commandRecovery?: CommandRecoveryService,
   ) {}
 
   async resolve(
@@ -412,43 +417,27 @@ export class CommercialFlowService {
     if (input.understanding.requiresHuman) return null;
     if (command === "help") return this.helpReply(input.locale);
     if (command === "catalog") return null;
-    // D-173 (docs/decisions.md): "cancela mi pedido" with no active draft
-    // always answered nothingToCancel, even when the customer had a real,
-    // just-confirmed order sitting in 'ready' status — the business
-    // hasn't accepted/started preparing it yet, so self-cancelling is
-    // still safe. Self-service cancellation stops being offered the
-    // moment status moves past 'ready' (accepted/in_progress/...),
-    // matching what the admin panel-only path already enforces for every
-    // other status — cancelReadyOrderReply only ever looks at 'ready'
-    // rows, never anything further along.
-    if (!flow && command === "cancel") return this.cancelReadyOrderReply(client, input);
-    // D-169 (docs/decisions.md) live finding (Santos Tacos): "quita el
-    // burrito de mi pedido" with no active order at all still fell
-    // through to startNewOrder() below, which — having no idea the intent
-    // was ever "remove" — matched "burrito" against the full catalog like
-    // any other product mention and tried to sell it back as a
-    // recommendation instead of saying there was nothing to remove. Same
-    // fix shape as the cancel guard directly above.
-    if (!flow && command === "remove_item")
-      return this.localizedReply(input.locale, "nothingToRemove");
-    // D-188 punto 4 (docs/decisions.md), mitad "modifica": "modificar mi
-    // pedido"/"cambiar mi pedido" con no active flow fell through to
-    // startNewOrder() below, exactly the same failure shape as the
-    // cancel/remove_item guards above (D-173/D-169) — the generic "change"
-    // command already exists and already matches this phrasing
-    // (es.rules.json/en.rules.json, "^(cambiar|cambio|modificar)\\b"), it
-    // was just never checked outside an active flow.
-    if (!flow && command === "change") return this.modifyReadyOrderReply(client, input);
-    // Found live reviewing a real conversation (Santiago, Santos Tacos):
-    // "Gracias" right after a confirmed order, with no active flow left,
-    // fell all the way through to startNewOrder() below — "gracias" isn't a
-    // stop word, so it became a searchTerm, matched nothing confidently in
-    // the catalog, and got answered with an unrelated AI product
-    // recommendation instead of a simple acknowledgment. Same guard shape
-    // as cancel/remove_item just above — deferred (return null) to
-    // DeterministicReplyService, which now has its own 'gratitude' intent.
-    if (!flow && input.understanding.intent === "gratitude") return null;
-    if (!flow) return this.startNewOrder(client, input);
+    if (!flow) {
+      // D-207 (docs/decisions.md): cancel/remove_item/change are the three
+      // commands meaningful with no active flow (they act on an
+      // already-confirmed order, never on a draft cart) — extracted into
+      // dispatchNoFlowCommand so startNewOrder()'s AI-recovery last resort
+      // can re-enter the same three branches when the deterministic
+      // classifier missed a typo'd control word, without duplicating this
+      // logic.
+      const noFlowDispatch = await this.dispatchNoFlowCommand(client, input, command);
+      if (noFlowDispatch !== undefined) return noFlowDispatch;
+      // Found live reviewing a real conversation (Santiago, Santos Tacos):
+      // "Gracias" right after a confirmed order, with no active flow left,
+      // fell all the way through to startNewOrder() below — "gracias" isn't a
+      // stop word, so it became a searchTerm, matched nothing confidently in
+      // the catalog, and got answered with an unrelated AI product
+      // recommendation instead of a simple acknowledgment. Same guard shape
+      // as cancel/remove_item just above — deferred (return null) to
+      // DeterministicReplyService, which now has its own 'gratitude' intent.
+      if (input.understanding.intent === "gratitude") return null;
+      return this.startNewOrder(client, input);
+    }
     const globalResult = await this.handleGlobalCommand(client, input, flow, command, negative);
     if (globalResult !== undefined) return globalResult;
     if (flow.step === "selecting_replace_target") return this.handleSelectingReplaceTarget(client, input, flow);
@@ -692,6 +681,21 @@ export class CommercialFlowService {
         const consultative = await this.tryConsultativeRecommendation(client, input);
         if (consultative) return consultative;
       }
+      // D-207 (docs/decisions.md D-206): last resort before giving up and
+      // showing the generic catalog — product-matching AND its own AI
+      // fallback (tryConsultativeRecommendation, just above) already tried
+      // and found nothing, so the message plausibly isn't naming a
+      // product at all. Classifies it against the closed set of known
+      // commands instead (e.g. a typo'd "editar" that classifyFlowCommand
+      // missed, exactly D-206's real bug) and, if recovered, re-enters the
+      // exact same no-flow dispatch a correctly-typed message would have
+      // hit — never a new mutation path. No-ops (returns null) unless the
+      // tenant has opted into the 'command_recovery' capability.
+      const recoveredCommand = await this.recoverCommand(client, input);
+      if (recoveredCommand) {
+        const dispatched = await this.dispatchNoFlowCommand(client, input, recoveredCommand);
+        if (dispatched !== undefined) return dispatched;
+      }
       const namedSomething = this.searchTerms(input).length > 0;
       const key: CommercialCopyKey = namedSomething
         ? input.understanding.entities.hasGreeting === true
@@ -741,6 +745,54 @@ export class CommercialFlowService {
           input.businessName ?? "Commerce",
         )
       : reply;
+  }
+
+  // D-207 (docs/decisions.md): the command branches that only make sense
+  // with no active flow — they act on an already-confirmed order
+  // (cancel/change) or say there's nothing yet to touch (remove_item),
+  // never on a draft cart, which is what handleGlobalCommand below handles
+  // instead once a flow exists. Reused both by resolve()'s deterministic
+  // !flow dispatch and by startNewOrder()'s AI-recovery last resort, so a
+  // command recovered from a typo'd/garbled message is handled by the
+  // exact same code a correctly-typed message would have hit. handoff/
+  // help/catalog are also included so a recovered command can resolve to
+  // them too, even though resolve()'s own unconditional checks (they apply
+  // regardless of flow) mean those three never actually reach this
+  // function via the deterministic path. Returns `undefined` (not `null`
+  // — a valid reply on its own) when the command doesn't match anything
+  // here.
+  private async dispatchNoFlowCommand(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+    command: FlowCommand,
+  ): Promise<DeterministicReply | null | undefined> {
+    if (command === "handoff") return null;
+    if (command === "help") return this.helpReply(input.locale);
+    if (command === "catalog") return null;
+    // D-173 (docs/decisions.md): "cancela mi pedido" with no active draft
+    // always answered nothingToCancel, even when the customer had a real,
+    // just-confirmed order sitting in 'ready' status — the business
+    // hasn't accepted/started preparing it yet, so self-cancelling is
+    // still safe. Self-service cancellation stops being offered the
+    // moment status moves past 'ready' (accepted/in_progress/...),
+    // matching what the admin panel-only path already enforces for every
+    // other status — cancelReadyOrderReply only ever looks at 'ready'
+    // rows, never anything further along.
+    if (command === "cancel") return this.cancelReadyOrderReply(client, input);
+    // D-169 (docs/decisions.md) live finding (Santos Tacos): "quita el
+    // burrito de mi pedido" with no active order at all still fell
+    // through to startNewOrder(), which — having no idea the intent was
+    // ever "remove" — matched "burrito" against the full catalog like any
+    // other product mention and tried to sell it back as a recommendation
+    // instead of saying there was nothing to remove.
+    if (command === "remove_item") return this.localizedReply(input.locale, "nothingToRemove");
+    // D-188 punto 4 (docs/decisions.md), mitad "modifica": "modificar mi
+    // pedido"/"cambiar mi pedido" con no active flow fell through to
+    // startNewOrder(), exactly the same failure shape as cancel/
+    // remove_item above (D-173/D-169) — the generic "change" command
+    // already matches this phrasing.
+    if (command === "change") return this.modifyReadyOrderReply(client, input);
+    return undefined;
   }
 
   // Global command overrides checked before any per-step handling — a
@@ -1188,11 +1240,33 @@ export class CommercialFlowService {
     // every single turn, with the workflow never leaving selecting_item —
     // permanently stuck, exactly the trap startNewOrder's own comment
     // above already warns against, just not fixed here too.
-    if (!match)
+    if (!match) {
+      // D-207 (docs/decisions.md D-206): last resort before the bare
+      // itemUnknown catalog — the message matched no product (tied items,
+      // multi-match already exhausted above) and no command was
+      // recognized either; try recovering a command from it (e.g. "puedo
+      // agregar algo mas ?", D-206's own documented-not-fixed finding)
+      // before assuming the customer meant an unrecognized product.
+      // Re-enters handleGlobalCommand — the exact same dispatcher a
+      // correctly-typed command inside this flow would already go
+      // through — never new logic. No-ops unless the tenant opted into
+      // 'command_recovery'.
+      const recoveredCommand = await this.recoverCommand(client, input);
+      if (recoveredCommand) {
+        const dispatched = await this.handleGlobalCommand(
+          client,
+          input,
+          flow,
+          recoveredCommand,
+          input.understanding.entities.response === "negative",
+        );
+        if (dispatched !== undefined) return dispatched;
+      }
       return (
         this.catalogChoiceReply(input.locale, await this.catalogItems(client, input.timezone ?? "UTC", input.locale), "itemUnknown", {}, input.categoryLabelPrefix ?? null) ??
         this.catalogButtonReply(input.locale, "itemUnknown")
       );
+    }
     // A customer who retypes instead of tapping while
     // disambiguating/replacing can just as easily be negating something
     // already in the cart ("ya no quiero la cerveza") as naming a new
@@ -1310,6 +1384,25 @@ export class CommercialFlowService {
       );
       await this.captureCustomerNote(client, input.tenantId, flow.commercial_request_id, input.body);
       return this.afterAddItem(client, input, flow.commercial_request_id, flow.id, match);
+    }
+    // D-207 (docs/decisions.md D-206) live finding: "Puedo agregar algo
+    // más ?" doesn't carry addItem's required noun (producto/articulo/
+    // item/plato/bebida), so it never classified as add_item and fell all
+    // the way here — one of D-206's own documented-not-fixed findings.
+    // Last resort before the generic moreItemsAnswer: try recovering a
+    // command and, if found, re-enter handleGlobalCommand (the same
+    // dispatcher a correctly-typed command would already go through).
+    // No-ops unless the tenant opted into 'command_recovery'.
+    const recoveredCommand = await this.recoverCommand(client, input);
+    if (recoveredCommand) {
+      const dispatched = await this.handleGlobalCommand(
+        client,
+        input,
+        flow,
+        recoveredCommand,
+        input.understanding.entities.response === "negative",
+      );
+      if (dispatched !== undefined) return dispatched;
     }
     // D-095 already set the rule ("no debería aparecer nada entre
     // comillas... no hagamos más respuestas de ese tipo") for item/
@@ -2452,6 +2545,32 @@ export class CommercialFlowService {
       .filter((item): item is Item & { description: string | null } => item !== undefined);
     if (tied.length === 0) return null;
     return { tied, reasons };
+  }
+  // D-207 (docs/decisions.md D-206): the last-resort AI fallback for a
+  // message that matched no command AND (at the three call sites this is
+  // used from) no product either — classifies the raw text against the
+  // closed FlowCommand set already wired into dispatchNoFlowCommand()/
+  // handleGlobalCommand() below, so a recovered command never runs any new
+  // mutation logic, only reroutes into code that already exists and is
+  // already tested. Same capability-gate split as consultativeRecommend()
+  // just above: the tenant opt-in check lives here (where `client` is
+  // guaranteed open), not inside CommandRecoveryService itself.
+  private async recoverCommand(
+    client: PoolClient,
+    input: UnderstoodFlowInput,
+  ): Promise<FlowCommand | null> {
+    if (!this.commandRecovery || !input.messageId) return null;
+    const capability = await client.query<{ enabled: boolean }>(
+      `select enabled from app.tenant_capabilities where tenant_id=$1 and capability='command_recovery'`,
+      [input.tenantId],
+    );
+    if (!capability.rows[0]?.enabled) return null;
+    return this.commandRecovery.recover(
+      { tenantId: input.tenantId, conversationId: input.conversationId, messageId: input.messageId },
+      input.body,
+      input.locale,
+      client,
+    );
   }
   private async tryConsultativeRecommendation(
     client: PoolClient,
