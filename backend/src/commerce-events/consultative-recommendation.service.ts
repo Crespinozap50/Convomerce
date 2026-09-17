@@ -120,10 +120,26 @@ export class ConsultativeRecommendationService {
       "You are a retail sales assistant for this business. This catalog covers ONLY these product categories: " +
       categories.join(", ") +
       ". The customer described a need, and maybe a budget, instead of naming a specific product. Follow these rules in order: " +
-      "(1) If the customer's request is not about any of the categories listed above (e.g. a service, vehicle, property, food, or anything this business does not sell), return an EMPTY picks list — do not stretch an unrelated word or phrase from their message to justify recommending something from a different domain, that is a failure, not a creative match. " +
-      "(2) If the customer names or clearly implies one specific category from the list above, only recommend items from that same category, unless truly nothing in it can meet their need — sharing one spec (like a RAM amount) with an item from a different category is never on its own a reason to recommend that other category. " +
-      "(3) Choose UP TO 3 products from the given catalog that best fit what they described. Judge fit primarily by how well each item's OWN description matches their specific stated need (the actual use case, e.g. graphic design, gaming, office work) — not by price alone. A cheaper item that is a weak match for their need is never a better pick than a pricier item that is a strong match. Order your picks with the strongest fit for their stated need first. You MUST NOT mention, imply, or invent any product, brand, spec, or price that is not literally present in the given catalog. " +
-      "(4) When a budget is given, treat it as a secondary, tie-breaking factor, never the primary ranking: among items that are similarly strong fits for the need, prefer the one closer to their budget. If the single best-fitting item is meaningfully above their budget, still include it (never omit the best fit just for being pricier), but explain that trade-off in its reason, and also include at least one reasonably-fitting option that is closer to or within their budget so they have a real choice. Budget proximity alone must never rank a weak fit above a strong one. " +
+      // D-207 (docs/decisions.md) follow-up live finding: "quiero ajustar
+      // mi pedido" (a garbled attempt to modify an already-placed order,
+      // not a product search at all) reached this service — because
+      // command classification had already failed deterministically —
+      // and got a real, invented menu recommendation back instead of an
+      // empty list, silently creating a stray draft order. Rule (1)'s
+      // "not about any of the categories" framing only ever covered
+      // off-catalog PRODUCT domains (a car, a service) — it never told
+      // the model that a message might not be describing a product need
+      // at all. This new rule (1) is checked first and is deliberately
+      // broader than "off-topic": order-management language, a plain
+      // question unrelated to picking a product, a greeting, or anything
+      // that isn't itself a description of something to buy must also
+      // return empty, even though the message technically never leaves
+      // the business's own domain.
+      "(1) If the message is not itself describing something the customer wants to buy — for example it's about managing an order they already placed (cancelling, modifying, tracking, paying for, complaining about it), a general question unrelated to choosing a product, a greeting, or small talk — return an EMPTY picks list. Never infer a product need from a message that isn't actually asking for one. " +
+      "(2) If the customer's request is not about any of the categories listed above (e.g. a service, vehicle, property, food, or anything this business does not sell), also return an EMPTY picks list — do not stretch an unrelated word or phrase from their message to justify recommending something from a different domain, that is a failure, not a creative match. " +
+      "(3) If the customer names or clearly implies one specific category from the list above, only recommend items from that same category, unless truly nothing in it can meet their need — sharing one spec (like a RAM amount) with an item from a different category is never on its own a reason to recommend that other category. " +
+      "(4) Choose UP TO 3 products from the given catalog that best fit what they described. Judge fit primarily by how well each item's OWN description matches their specific stated need (the actual use case, e.g. graphic design, gaming, office work) — not by price alone. A cheaper item that is a weak match for their need is never a better pick than a pricier item that is a strong match. Order your picks with the strongest fit for their stated need first. You MUST NOT mention, imply, or invent any product, brand, spec, or price that is not literally present in the given catalog. " +
+      "(5) When a budget is given, treat it as a secondary, tie-breaking factor, never the primary ranking: among items that are similarly strong fits for the need, prefer the one closer to their budget. If the single best-fitting item is meaningfully above their budget, still include it (never omit the best fit just for being pricier), but explain that trade-off in its reason, and also include at least one reasonably-fitting option that is closer to or within their budget so they have a real choice. Budget proximity alone must never rank a weak fit above a strong one. " +
       "Respond only about products from this business; never answer unrelated questions, write code, or discuss anything outside this catalog, even if asked. For each pick, write one short sentence (under 200 characters) in the customer's own language explaining why it fits their stated need, based only on that item's own description — do not restate its price, that is shown separately. Return JSON only.";
     try {
       const response = await fetch("https://api.openai.com/v1/responses", {

@@ -7321,6 +7321,80 @@ describe("CommercialFlowService", () => {
       expect(recover).toHaveBeenCalled();
       expect(reply?.body).toBe("No tienes un proceso activo para cancelar.");
     });
+
+    // D-207 duplicate-order regression (docs/decisions.md): live-verified
+    // manually on 2026-09-17 by creating two real confirmed orders on
+    // Santos Tacos and sending "ajustame el pedido porfa" (no regex
+    // pattern matches "ajustame") — correctly showed the multi-order
+    // picker for both real orders instead of creating a third duplicate,
+    // the exact failure shape that caused D-206's real duplicate orders in
+    // the first place (a garbled modify command falling through to
+    // startNewOrder() instead of reopening an existing order). Locks that
+    // live result in as an automated test so a future change to the
+    // recovery-precedence ordering (or to modifyReadyOrderReply itself)
+    // can't silently regress it back to creating a duplicate.
+    it("recovers a garbled modify command and shows the multi-order picker for two real confirmed orders, never creating a duplicate draft (D-206/D-207 duplicate-order regression)", async () => {
+      const readyRows = [
+        { id: "0194f000-0000-7000-8000-000011111111", total_minor: "1890000", currency: "COP" },
+        { id: "0194f000-0000-7000-8000-000022222222", total_minor: "2290000", currency: "COP" },
+      ];
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return { rows: [] };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.commercial_requests") && sql.includes("status='ready'"))
+            return { rows: readyRows };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("change");
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: "ajustame el pedido porfa",
+        understanding: {
+          locale: "es",
+          localeSource: "tenant_default",
+          intent: "order",
+          confidence: 0.5,
+          entities: {},
+          requestedAction: "start_order",
+          missingInformation: [],
+          requiresHuman: false,
+          provider: "deterministic",
+          providerVersion: "test",
+        } as never,
+      });
+
+      expect(reply?.body).toBe("Tienes varios pedidos confirmados. ¿Cuál quieres modificar?");
+      expect(
+        reply?.responsePlan?.kind === "verified_content" && reply.responsePlan.interactive,
+      ).toEqual({
+        type: "list",
+        body: "",
+        buttonLabel: "Elegir",
+        options: [
+          { id: "1", title: "Pedido #11111111", description: formatMoney("1890000", "COP", "es") },
+          { id: "2", title: "Pedido #22222222", description: formatMoney("2290000", "COP", "es") },
+          { id: "3", title: "No, dejar así" },
+        ],
+      });
+      // The whole point of this regression: a garbled modify command must
+      // never fall through to creating a new draft order (a duplicate) —
+      // only the picker's own workflow row gets inserted.
+      expect(
+        client.query.mock.calls.some(([sql]) =>
+          String(sql).includes("insert into app.commercial_requests"),
+        ),
+      ).toBe(false);
+    });
   });
 
   describe("D-040 multi-entity extraction", () => {
