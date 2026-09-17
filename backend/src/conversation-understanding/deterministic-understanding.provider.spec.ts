@@ -51,6 +51,37 @@ describe("DeterministicUnderstandingProvider", () => {
     });
   });
 
+  // D-207 (docs/decisions.md) systematic synonym audit (2026-09-17):
+  // directDesire only ever recognized "quiero" — a real customer message
+  // ("Necesito editar mi pedido...", D-206's own transcript) used
+  // "necesito" instead, which never set startsOrder/start_order at all,
+  // so a message like "necesito ajustar mi pedido" (no product-search
+  // verb in the "change" pattern either, before this same round) fell
+  // through as neither a recognized command nor an explicit order
+  // attempt — the worse of the two "not found" outcomes (D-129's
+  // questionOrNoMatch defers immediately, without ever trying the
+  // starts===true last-resort path this test locks in).
+  it('recognizes "necesito" as the same explicit intent signal as "quiero" (D-207 follow-up live finding)', async () => {
+    const result = await provider.understand({
+      ...base,
+      message: "Necesito hacer un pedido",
+      configuredLocale: "es-CO",
+    });
+    expect(result).toMatchObject({
+      intent: "order",
+      requestedAction: "start_order",
+    });
+  });
+
+  it('still defers "necesito saber el precio" to the informational/FAQ layer instead of treating it as an order start', async () => {
+    const result = await provider.understand({
+      ...base,
+      message: "Necesito saber el precio de los tacos",
+      configuredLocale: "es-CO",
+    });
+    expect(result.requestedAction).not.toBe("start_order");
+  });
+
   it("does not read a question about an existing order as a request to place one (D-078 follow-up)", async () => {
     // Found live testing D-078: "purchase" matched the bare noun "pedido"
     // ("an order") the same as the verb "pedir" ("to order"), so "¿Cuánto

@@ -102,6 +102,43 @@ describe("CommercialFlowService", () => {
     // all, unlike every sibling rule in this file (addItem/cancel/
     // changeQuantity already list both forms).
     ["Quita el burrito de mi pedido", "remove_item"],
+    // D-207 (docs/decisions.md) follow-up live finding: "bórrame los tacos
+    // de birria" (a real product name, plus a removal verb never in this
+    // list) fell all the way through the command check as command===null
+    // and was instead confidently ADDED to the cart by the deterministic
+    // item-matcher, which has no idea "borrame" ever signals removal —
+    // found live testing D-207's own AI recovery, since AI recovery is
+    // only ever tried when nothing matched a product, never when a real
+    // product WAS matched but for the wrong reason.
+    ["Bórrame los tacos de birria", "remove_item"],
+    ["Borra el agua", "remove_item"],
+    ["Descarta el agua", "remove_item"],
+    // D-207 (docs/decisions.md) systematic synonym audit (2026-09-17): the
+    // pattern for "quiero ajustar mi pedido" going all the way to command
+    // recovery instead of matching deterministically was itself a live
+    // finding — "ajustar" was never in the global "change" pattern at all
+    // (only in changeQuantity, which requires "cantidad"/"unidades" too).
+    // Prompted a broader audit of every command pattern for the same
+    // "regex list is missing an ordinary synonym" shape, rather than
+    // waiting for each one to surface one at a time in live testing.
+    ["Quiero ajustar mi pedido", "change"],
+    ["Necesito corregir mi pedido", "change"],
+    ["Quiero arreglar mi pedido", "change"],
+    ["Quiero anular mi pedido", "cancel"],
+    ["Anula mi pedido", "cancel"],
+    ["Revisa mi pedido", "view_order"],
+    ["Consultar mi pedido", "view_order"],
+    ["Súmale otro plato", "add_item"],
+    ["Incluye otro producto", "add_item"],
+    ["¿Qué preparan hoy?", "catalog"],
+    ["Reemplazar producto", "change_product"],
+    ["Sustituir el plato", "change_product"],
+    ["Cambiar modalidad", "change_fulfillment"],
+    ["Cambiar ubicación", "change_address"],
+    ["Aumentar cantidad", "change_quantity"],
+    ["Reducir unidades", "change_quantity"],
+    ["Ya está, gracias", "finish_items"],
+    ["Solo eso", "finish_items"],
     ["Cambiar cantidad", "change_quantity"],
     ["Cambia la cantidad a tres", "change_quantity"],
     ["Listo", "finish_items"],
@@ -7189,6 +7226,100 @@ describe("CommercialFlowService", () => {
           { id: "cart:view_catalog", title: "Ver menú" },
         ],
       });
+    });
+
+    it('tries command recovery BEFORE consultative recommendation for an explicit "quiero" message with no product match, instead of letting an open-ended product search invent an unrelated recommendation (D-207 follow-up live finding)', async () => {
+      // Found live: "quiero ajustar mi pedido" used to reach
+      // tryConsultativeRecommendation FIRST, which (being an open-ended
+      // product-search AI task) recommended unrelated menu items instead
+      // of recognizing this as a garbled "change" command and deferring —
+      // an empty draft order was created from a recommendation the
+      // customer never asked for. Command recovery must run first here:
+      // its closed 14-value enum is structurally unable to invent an
+      // off-topic answer the way open-ended product search can.
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return { rows: [] };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.commercial_requests") && sql.includes("status='ready'"))
+            return { rows: [{ id: "0194f000-0000-7000-8000-0000000ABCDE", total_minor: "1000000", currency: "COP" }] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("change");
+      const recommend = jest.fn().mockResolvedValue([{ variantId: "variant-x", reason: "no debería llamarse" }]);
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        { recommend } as never,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: "quiero ajustar mi pedido",
+        understanding: {
+          locale: "es",
+          localeSource: "tenant_default",
+          intent: "order",
+          confidence: 0.5,
+          entities: {},
+          requestedAction: "start_order",
+          missingInformation: [],
+          requiresHuman: false,
+          provider: "deterministic",
+          providerVersion: "test",
+        } as never,
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(recommend).not.toHaveBeenCalled();
+      expect(reply?.body).toBe("Tienes un pedido confirmado. ¿Quieres modificarlo?");
+    });
+
+    it("also recovers a command for a message with no purchase verb at all, instead of silently deferring to null (D-207 follow-up live finding)", async () => {
+      // Found live: "anular mi pedido" (no "quiero"/"pedir"/"comprar")
+      // never even reached the recovery code — questionOrNoMatch's own
+      // branch returned null unconditionally once tryConsultativeRecommendation
+      // found nothing, without ever trying command recovery first.
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return { rows: [] };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.commercial_requests") && sql.includes("status='ready'"))
+            return { rows: [] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("cancel");
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: "anular mi pedido",
+        understanding: {
+          locale: "es",
+          localeSource: "tenant_default",
+          intent: "order",
+          confidence: 0.5,
+          entities: {},
+          requestedAction: null,
+          missingInformation: [],
+          requiresHuman: false,
+          provider: "deterministic",
+          providerVersion: "test",
+        } as never,
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(reply?.body).toBe("No tienes un proceso activo para cancelar.");
     });
   });
 

@@ -638,6 +638,24 @@ export class CommercialFlowService {
     }
     const untrustedMatch = weakMatch || namesConflictingBrand;
     if (questionOrNoMatch || untrustedMatch) {
+      // D-207 follow-up (docs/decisions.md), live finding: a message with
+      // no purchase verb at all ("anular mi pedido", no "quiero") lands
+      // here (questionOrNoMatch, match===null) and used to go straight to
+      // tryConsultativeRecommendation — an open-ended product-search AI
+      // task ill-suited to recognizing a garbled control word, since its
+      // own prompt can (and, found live, did) still invent a product
+      // recommendation instead of reliably returning empty for an
+      // off-catalog message. Tried first here, only when there is
+      // genuinely no product signal (questionOrNoMatch, never for a real
+      // — if weak — product match): a closed 14-value classification is
+      // structurally far less likely to misfire than an open-ended one.
+      if (questionOrNoMatch) {
+        const recoveredCommand = await this.recoverCommand(client, input);
+        if (recoveredCommand) {
+          const dispatched = await this.dispatchNoFlowCommand(client, input, recoveredCommand);
+          if (dispatched !== undefined) return dispatched;
+        }
+      }
       const consultative = await this.tryConsultativeRecommendation(client, input);
       if (consultative) return consultative;
       // questionOrNoMatch always answers like nothing was found (matches
@@ -672,29 +690,33 @@ export class CommercialFlowService {
       // better to offer — that would defeat the entire point of flagging
       // it in the first place (D-133's original bug). It gets the exact
       // same "didn't find that product" treatment as no match at all,
-      // below. Only retry the AI here when it genuinely hasn't run yet for
-      // this message (both triggers above were false — the starts===true
-      // && match===null case, D-128's own original gap); an untrusted
-      // match or a question/no-match already went through it above, and
+      // below. Only retry AI here when neither trigger above already ran
+      // one (both triggers above were false — the starts===true &&
+      // match===null case, D-128's own original gap); an untrusted match
+      // or a question/no-match already went through the block above, and
       // failing twice costs budget for nothing.
       if (!questionOrNoMatch && !untrustedMatch) {
+        // D-207 (docs/decisions.md D-206) follow-up live finding: this used
+        // to call tryConsultativeRecommendation FIRST — an open-ended
+        // product-search AI task that can (and, found live, did for
+        // "quiero ajustar mi pedido") invent an unrelated recommendation
+        // instead of recognizing the message as a garbled command and
+        // deferring. Command recovery goes first now: its 14-value closed
+        // enum is structurally far less likely to misfire than open-ended
+        // product search, and this is exactly the "starts===true &&
+        // match===null" case its last-resort comment already describes —
+        // the customer explicitly asked to order something, but nothing
+        // matched, and it plausibly isn't naming a product at all.
+        // Re-enters the exact same no-flow dispatch a correctly-typed
+        // message would have hit — never a new mutation path. No-ops
+        // (returns null) unless the tenant opted into 'command_recovery'.
+        const recoveredCommand = await this.recoverCommand(client, input);
+        if (recoveredCommand) {
+          const dispatched = await this.dispatchNoFlowCommand(client, input, recoveredCommand);
+          if (dispatched !== undefined) return dispatched;
+        }
         const consultative = await this.tryConsultativeRecommendation(client, input);
         if (consultative) return consultative;
-      }
-      // D-207 (docs/decisions.md D-206): last resort before giving up and
-      // showing the generic catalog — product-matching AND its own AI
-      // fallback (tryConsultativeRecommendation, just above) already tried
-      // and found nothing, so the message plausibly isn't naming a
-      // product at all. Classifies it against the closed set of known
-      // commands instead (e.g. a typo'd "editar" that classifyFlowCommand
-      // missed, exactly D-206's real bug) and, if recovered, re-enters the
-      // exact same no-flow dispatch a correctly-typed message would have
-      // hit — never a new mutation path. No-ops (returns null) unless the
-      // tenant has opted into the 'command_recovery' capability.
-      const recoveredCommand = await this.recoverCommand(client, input);
-      if (recoveredCommand) {
-        const dispatched = await this.dispatchNoFlowCommand(client, input, recoveredCommand);
-        if (dispatched !== undefined) return dispatched;
       }
       const namedSomething = this.searchTerms(input).length > 0;
       const key: CommercialCopyKey = namedSomething
