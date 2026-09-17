@@ -104,6 +104,13 @@ export class CommandRecoveryService {
         body: JSON.stringify({
           model,
           store: false,
+          // D-207 follow-up (live testing, docs/decisions.md): the same
+          // exact message ("sácame los tacos de birria porfa") returned
+          // remove_item once and add_item the next time — without this,
+          // the model's default sampling temperature makes a 14-way
+          // closed classification non-deterministic, which can silently
+          // reintroduce the exact bug this service exists to fix.
+          temperature: 0,
           max_output_tokens: 50,
           instructions,
           input: JSON.stringify({
