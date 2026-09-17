@@ -35,6 +35,7 @@
   "help": "Puedes elegir cualquiera de estas opciones:",
   "nothingToCancel": "No tienes un proceso activo para cancelar.",
   "nothingToRemove": "No tienes ningún pedido activo del que quitar productos.",
+  "nothingToView": "No tienes ningún pedido activo en este momento.",
   "cancelled": "Proceso cancelado. No se realizó ningún cobro.",
   "cancelReadyChoiceOne": "Tienes un pedido confirmado. ¿Quieres cancelarlo?",
   "cancelReadyChoiceMany": "Tienes varios pedidos confirmados. ¿Cuál quieres cancelar?",

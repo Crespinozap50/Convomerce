@@ -7322,6 +7322,85 @@ describe("CommercialFlowService", () => {
       expect(reply?.body).toBe("No tienes un proceso activo para cancelar.");
     });
 
+    // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+    // Santos Tacos): "¿cómo va mi pedido?" with no active flow fell all the
+    // way through to startNewOrder(), which had no idea the intent was
+    // "check status" and answered the same generic out-of-domain fallback
+    // as any unrelated question — view_order was the only one of D-206's
+    // original commands dispatchNoFlowCommand never covered.
+    it("shows the most recently confirmed order when asked about order status with no active flow (D-207 follow-up)", async () => {
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return { rows: [] };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.commercial_requests where tenant_id") && sql.includes("status='ready'"))
+            return { rows: [{ id: "request-1" }] };
+          if (sql.includes("from app.commercial_requests request join app.request_lines line"))
+            return {
+              rows: [
+                {
+                  id: "line-1",
+                  description_snapshot: "Tacos de pollo (Orden de 3 tacos)",
+                  quantity: "2.000",
+                  line_total_minor: "3580000",
+                  total_minor: "3580000",
+                  currency: "COP",
+                },
+              ],
+            };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("view_order");
+      const message = "como va mi pedido?";
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(reply?.body).toContain("Tacos de pollo");
+    });
+
+    it("says there is no active order instead of the generic out-of-domain fallback when asked about order status with nothing to show (D-207 follow-up)", async () => {
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return { rows: [] };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.commercial_requests where tenant_id") && sql.includes("status='ready'"))
+            return { rows: [] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("view_order");
+      const message = "como va mi pedido?";
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(reply?.body).toBe("No tienes ningún pedido activo en este momento.");
+    });
+
     // D-207 follow-up (docs/decisions.md) live finding: "bórrame los tacos
     // de birria" matched the product with full confidence and got ADDED
     // instead of removed, because command recovery only ever ran when no

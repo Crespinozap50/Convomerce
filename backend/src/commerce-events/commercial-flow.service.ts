@@ -814,6 +814,26 @@ export class CommercialFlowService {
     // remove_item above (D-173/D-169) — the generic "change" command
     // already matches this phrasing.
     if (command === "change") return this.modifyReadyOrderReply(client, input);
+    // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+    // Santos Tacos): "¿cómo va mi pedido?" with no active flow fell all the
+    // way through to startNewOrder(), which has no idea the intent was
+    // "check status" — it just answered the same generic out-of-domain
+    // fallback as any unrelated question. Same shape as cancel/remove_item/
+    // change just above: only 'ready' orders are self-service-visible here
+    // (same scope cancelReadyOrderReply/modifyReadyOrderReply already use),
+    // showing the most recently confirmed one when there's more than one —
+    // read-only, so there's no ambiguity to resolve the way cancel/modify
+    // must.
+    if (command === "view_order") {
+      const ready = await client.query<{ id: string }>(
+        `select id from app.commercial_requests where tenant_id=$1 and conversation_id=$2 and contact_id=$3 and status='ready' order by confirmed_at desc limit 1`,
+        [input.tenantId, input.conversationId, input.contactId],
+      );
+      const requestId = ready.rows[0]?.id;
+      return requestId
+        ? this.plannedReply(await this.cart(client, requestId, input.locale))
+        : this.localizedReply(input.locale, "nothingToView");
+    }
     return undefined;
   }
 

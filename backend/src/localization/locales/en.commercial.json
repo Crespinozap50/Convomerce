@@ -35,6 +35,7 @@
   "help": "You can choose any of these options:",
   "nothingToCancel": "There is no active process to cancel.",
   "nothingToRemove": "You don't have an active order to remove items from.",
+  "nothingToView": "You don't have any active order right now.",
   "cancelled": "Process cancelled. No charge was made.",
   "cancelReadyChoiceOne": "You have a confirmed order. Do you want to cancel it?",
   "cancelReadyChoiceMany": "You have several confirmed orders. Which one do you want to cancel?",
