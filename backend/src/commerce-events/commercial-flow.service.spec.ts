@@ -7382,6 +7382,68 @@ describe("CommercialFlowService", () => {
       ).toBe(false);
     });
 
+    // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+    // Santos Tacos): "aumentame la kantidad de tacos de pollo a 3" — the
+    // typo ("kantidad") kept changeQuantity's own regex from firing, so the
+    // message fell through to the ordinary product matcher, which matched
+    // "tacos de pollo" with full confidence and ADDED 3 more on top of the
+    // 2 already in the cart (2+3=5) instead of setting the quantity to 3.
+    // negatedCartMatch() already pays for one recoverCommand() call here
+    // (to check for remove_item) whenever the message leaves something
+    // unexplained — reusing that same call to also recognize
+    // change_quantity, and reusing its cart lookup to resolve which
+    // candidate is the real target, costs nothing extra.
+    it("sets the cart quantity via AI recovery instead of adding on top when a quantity-change phrase's own verb isn't in changeQuantity's pattern (D-207 follow-up)", async () => {
+      const pollo = {
+        item_id: "item-pollo",
+        variant_id: "pollo-variant",
+        name: "Tacos de pollo",
+        variant_name: "Orden de 3 tacos",
+        price_minor: "1790000",
+        currency: "COP",
+      };
+      const client = {
+        query: jest.fn(async (sql: string, params: unknown[] = []) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [pollo] };
+          if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+            return { rows: [pollo] };
+          void params;
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("change_quantity");
+      const message = "aumentame la kantidad de tacos de pollo a 3";
+
+      await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      const setQuantityCall = client.query.mock.calls.find(([sql]) =>
+        String(sql).includes("update app.request_lines set quantity="),
+      );
+      expect(setQuantityCall).toBeDefined();
+      expect(setQuantityCall?.[1]).toEqual(["request-1", "pollo-variant", 3]);
+      expect(
+        client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+      ).toBe(false);
+    });
+
     it("never spends an AI call checking for a hidden removal signal when the message is an ordinary addition with nothing left unexplained (D-207 follow-up non-regression)", async () => {
       const birria = {
         item_id: "item-birria",

@@ -1112,6 +1112,26 @@ export class CommercialFlowService {
       // product matched at all".
       if (this.unexplainedTokens(candidates, input).length === 0) return null;
       const recovered = await this.recoverCommand(client, input);
+      // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+      // Santos Tacos): "aumentame la kantidad de tacos a 3" — a bare product
+      // category word ("tacos") plus a genuine quantity-change phrase the
+      // typo ("kantidad") kept out of changeQuantity's own pattern — tied
+      // against every taco variant in the whole catalog, and once resolved
+      // by tapping one, got ADDED on top of the 2 already in the cart (2+3)
+      // instead of set to 3. recoverCommand() was already being paid for
+      // right above to check for remove_item — reusing that same call for
+      // change_quantity is free, and the cart lookup below (already used to
+      // disambiguate removal by "which of these is actually in the cart")
+      // resolves the exact same ambiguity here: of everything the message
+      // could mean by "tacos", only the one already in the cart is a
+      // plausible quantity-change target.
+      if (recovered === "change_quantity") {
+        const quantity = input.understanding.entities.quantity;
+        if (typeof quantity !== "number") return null;
+        const cart = await this.cartItems(client, flow.commercial_request_id, locale);
+        const cartMatch = candidates.find((candidate) => cart.some((line) => line.variant_id === candidate.variant_id));
+        return cartMatch ? this.changeQuantity(client, flow, locale, cartMatch, quantity) : null;
+      }
       if (recovered !== "remove_item") return null;
     }
     const cart = await this.cartItems(client, flow.commercial_request_id, locale);
