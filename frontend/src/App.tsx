@@ -49,6 +49,7 @@ import {
 } from "./dashboard/routing";
 import { playNotificationSound, showDesktopNotification, roleName } from "./dashboard/utils";
 import { LanguageSwitcher } from "./components/LanguageSwitcher";
+import { NotificationCenter, NotificationEntry } from "./notifications/NotificationCenter";
 import { Login } from "./auth/Login";
 import { AcceptInvite } from "./auth/AcceptInvite";
 import { ForgotPassword } from "./auth/ForgotPassword";
@@ -224,13 +225,22 @@ function Dashboard({
   const [noticeState, setNoticeState] = useState<
     { id: number; message: string; type: "success" | "error" } | null
   >(null);
+  // D-205 (docs/decisions.md): the toast above still auto-dismisses after
+  // 5s, but a notice missed while looking away is no longer gone — every
+  // real notice (never the empty-message dismiss call) is also kept here,
+  // capped at the last 50, readable from the bell after it disappears.
+  const [notificationHistory, setNotificationHistory] = useState<NotificationEntry[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
   const setNotice = (message: string, type: "success" | "error" = "success") => {
     if (!message) {
       setNoticeState(null);
       return;
     }
     noticeIdRef.current += 1;
-    setNoticeState({ id: noticeIdRef.current, message, type });
+    const entry = { id: noticeIdRef.current, message, type, occurredAt: Date.now() };
+    setNoticeState(entry);
+    setNotificationHistory((current) => [entry, ...current].slice(0, 50));
+    setUnreadNotifications((count) => count + 1);
   };
   useEffect(() => {
     if (!noticeState) return;
@@ -600,13 +610,21 @@ function Dashboard({
                             : t("pages.conversations.description")}
             </p>
           </div>
-          {page !== "companies" && page !== "tenant-metrics" && (
-            <TenantSelector
-              value={tenant}
-              options={options}
-              onChange={setTenant}
+          <div className="header-actions">
+            <NotificationCenter
+              entries={notificationHistory}
+              unreadCount={unreadNotifications}
+              onOpen={() => setUnreadNotifications(0)}
+              onClear={() => setNotificationHistory([])}
             />
-          )}
+            {page !== "companies" && page !== "tenant-metrics" && (
+              <TenantSelector
+                value={tenant}
+                options={options}
+                onChange={setTenant}
+              />
+            )}
+          </div>
         </header>
         {noticeState &&
           createPortal(

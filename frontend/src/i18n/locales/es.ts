@@ -341,6 +341,16 @@ export default {
     new: "Nueva empresa",
     created: "Empresa creada correctamente",
   },
+  notifications: {
+    title: "Notificaciones",
+    empty: "No tienes notificaciones todavía.",
+    clear: "Borrar todo",
+    justNow: "Justo ahora",
+    minutesAgo_one: "Hace {{count}} minuto",
+    minutesAgo_other: "Hace {{count}} minutos",
+    hoursAgo_one: "Hace {{count}} hora",
+    hoursAgo_other: "Hace {{count}} horas",
+  },
   team: {
     members: "Miembros",
     active: "Activos",

@@ -337,6 +337,16 @@ export default {
     new: "New company",
     created: "Company created successfully",
   },
+  notifications: {
+    title: "Notifications",
+    empty: "No notifications yet.",
+    clear: "Clear all",
+    justNow: "Just now",
+    minutesAgo_one: "{{count}} minute ago",
+    minutesAgo_other: "{{count}} minutes ago",
+    hoursAgo_one: "{{count}} hour ago",
+    hoursAgo_other: "{{count}} hours ago",
+  },
   team: {
     members: "Members",
     active: "Active",
