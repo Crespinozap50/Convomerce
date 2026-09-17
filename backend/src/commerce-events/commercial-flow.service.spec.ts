@@ -7395,6 +7395,82 @@ describe("CommercialFlowService", () => {
         ),
       ).toBe(false);
     });
+
+    // D-207 follow-up live finding (docs/decisions.md): the final order
+    // review ("¿Confirmas el pedido?") was the one active-flow step none
+    // of D-207's original 3 recovery sites ever touched — found live
+    // testing "necesito corregir la dirección porfa" right at this
+    // screen, which just re-asked the same confirmation instead of
+    // recognizing it as change_address. Arguably the highest-value of the
+    // 4 sites: a customer reviewing the full order summary is exactly
+    // when they're most likely to notice something wrong and try to fix
+    // it in their own words.
+    it("recovers a garbled command at the final order-review step instead of just re-asking the same confirmation", async () => {
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_confirmation", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("cancel");
+      const message = "necesito corregir la direccion porfa";
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(reply?.body).toBe("Proceso cancelado. No se realizó ningún cobro.");
+      expect(
+        client.query.mock.calls.some(([sql]) => String(sql).includes("status='cancelled'")),
+      ).toBe(true);
+    });
+
+    it("still re-asks the same confirmation unchanged when command_recovery is wired but the tenant hasn't enabled the capability (non-regression)", async () => {
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_confirmation", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: false }] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn();
+      const message = "necesito corregir la direccion porfa";
+
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).not.toHaveBeenCalled();
+      expect(reply?.body).toBe("¿Confirmas el pedido?");
+    });
   });
 
   describe("D-040 multi-entity extraction", () => {

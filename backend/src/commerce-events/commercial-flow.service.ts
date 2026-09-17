@@ -1944,6 +1944,21 @@ export class CommercialFlowService {
       // already-global 'cancel' command, same as at any other step.
       return this.changeWhatReply(input.locale);
     }
+    // D-207 (docs/decisions.md) follow-up live finding: this was the one
+    // active-flow step D-207's own 3 recovery sites never touched — found
+    // live testing "necesito corregir la dirección porfa" right here,
+    // which just re-asked the same "¿Confirmas el pedido?" with no attempt
+    // to recognize it as change_address. The final review is arguably
+    // where a customer is MOST likely to notice something wrong and try
+    // to fix it in their own words, so it's the highest-value of the 4
+    // sites, not an edge case. Same shape as the other 3: re-enters
+    // handleGlobalCommand — the exact dispatcher a correctly-typed command
+    // would already go through — never a new mutation path.
+    const recoveredCommand = await this.recoverCommand(client, input);
+    if (recoveredCommand) {
+      const dispatched = await this.handleGlobalCommand(client, input, flow, recoveredCommand, negative);
+      if (dispatched !== undefined) return dispatched;
+    }
     return this.confirmOrderReply(input.locale);
   }
   // D-173: "cancela mi pedido" with no active draft — looks only at this
