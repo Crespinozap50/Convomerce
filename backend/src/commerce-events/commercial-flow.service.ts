@@ -967,6 +967,27 @@ export class CommercialFlowService {
         ["awaiting_more_items", "selecting_item"].includes(flow.step)) ||
       (["awaiting_more_items", "selecting_item"].includes(flow.step) && negative)
     ) {
+      // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+      // Santos Tacos): the `negative` disjunct above fires as soon as the
+      // customer answers "no" to the upsell/tie question, treating the
+      // ENTIRE message as nothing more than a decline — "no ya no quiero
+      // nada, cancelen esta vaina porfa" got read as just "no", silently
+      // dropping "cancelen esta vaina" (a real cancel request) before
+      // command/product matching or recovery ever ran. An ordinary decline
+      // ("no gracias", "no gracias eso es todo", "no quiero nada mas
+      // gracias") leaves nothing behind but DECLINE_FILLER_WORDS — a small,
+      // hand-verified set — so this stays free for the overwhelming
+      // majority of "no gracias" replies, same discipline as
+      // unexplainedTokens() below. Only tried when `negative` is what
+      // triggered this branch, not when the customer explicitly typed/
+      // tapped finish_items itself (no ambiguity to second-guess there).
+      if (command !== "finish_items" && this.hasSubstantiveContentBeyondDecline(input)) {
+        const recovered = await this.recoverCommand(client, input);
+        if (recovered && recovered !== "finish_items") {
+          const dispatched = await this.handleGlobalCommand(client, input, flow, recovered, false);
+          if (dispatched !== undefined) return dispatched;
+        }
+      }
       // D-122: "Listo" is also the global finish_items command — reaching
       // here while flow.step is "selecting_item" because of an unresolved
       // tie (flow.context.tiedItems, set by matchItemCandidates when a
@@ -1665,7 +1686,30 @@ export class CommercialFlowService {
           : input.understanding.requestedAction === "fulfillment.on_site"
             ? "on_site"
             : null;
-    if (!fulfillment) return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
+    if (!fulfillment) {
+      // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+      // Santos Tacos): confirmed 3 times — a customer who tries to change
+      // quantity/product/modality right here, mid-answer to "¿domicilio,
+      // recogida o local?", gets the same question repeated verbatim, no
+      // matter what they actually said, because nothing but the 3
+      // literal fulfillment answers was ever tried. Same shape as
+      // handleAwaitingConfirmation's own D-207 fix: this only runs once
+      // the message has already failed to answer the one question this
+      // step is asking, so there is nothing else to try first — re-enters
+      // handleGlobalCommand, never a new mutation path.
+      const recovered = await this.recoverCommand(client, input);
+      if (recovered) {
+        const dispatched = await this.handleGlobalCommand(
+          client,
+          input,
+          flow,
+          recovered,
+          input.understanding.entities.response === "negative",
+        );
+        if (dispatched !== undefined) return dispatched;
+      }
+      return this.fulfillmentReply(client, flow.commercial_request_id, input.locale);
+    }
     return this.applyFulfillment(client, input, flow, flow.context, fulfillment);
   }
   // Shared by handleAwaitingFulfillment (the customer answered the
@@ -1836,10 +1880,25 @@ export class CommercialFlowService {
         address,
         requirement?.validationRule,
       );
-      if (!valid)
+      if (!valid) {
+        // D-207 follow-up (docs/decisions.md), live finding (30-test
+        // battery, Santos Tacos): a customer who changes their mind about
+        // fulfillment modality ("mejor paso yo a recogerlo, cambienlo a
+        // recogida porfa") while this step is waiting for an address gets
+        // the same "¿Cuál es la dirección del domicilio?" repeated forever
+        // — the text obviously never validates as an address, but nothing
+        // ever tried reading it as anything else either. Only tried once
+        // the address validator has already given up on this message, same
+        // "last resort" discipline as every other D-207 recovery site.
+        const recovered = await this.recoverCommand(client, input);
+        if (recovered) {
+          const dispatched = await this.handleGlobalCommand(client, input, flow, recovered, false);
+          if (dispatched !== undefined) return dispatched;
+        }
         return requirement
           ? this.requirementPrompt(input.locale, requirement)
           : this.localizedReply(input.locale, "address");
+      }
       // D-123: same lead-in cleanup as the D-117 fast-path above — less
       // likely here (the customer is answering the address question
       // directly), but a "Domicilio, ..." prefix is still harmless to catch
@@ -5151,5 +5210,20 @@ export class CommercialFlowService {
     return this.searchTerms(input)
       .map(singularize)
       .filter((token) => !nameTokens.has(token));
+  }
+  // D-207 follow-up (docs/decisions.md) — only real filler words a plain
+  // decline ever leaves behind in searchTerms (stopwords are already
+  // stripped upstream); "no"/"si" themselves never appear here since
+  // searchTerms is built from the same normalizedText the response
+  // classifier already consumed. Kept short and hand-verified on purpose —
+  // widening it risks letting a real embedded command hide behind a filler
+  // word that only looks harmless out of context.
+  private static readonly DECLINE_FILLER_WORDS = new Set([
+    "gracias", "nada", "mas", "eso", "todo", "ya", "asi", "nomas",
+  ]);
+  private hasSubstantiveContentBeyondDecline(input: UnderstoodFlowInput): boolean {
+    return this.searchTerms(input).some(
+      (token) => !CommercialFlowService.DECLINE_FILLER_WORDS.has(token),
+    );
   }
 }

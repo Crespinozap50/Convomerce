@@ -7444,6 +7444,85 @@ describe("CommercialFlowService", () => {
       ).toBe(false);
     });
 
+    // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+    // Santos Tacos): handleGlobalCommand treats ANY negative response while
+    // awaiting_more_items/selecting_item as finish_items, regardless of what
+    // else the message says — "no ya no quiero nada, cancelen esta vaina
+    // porfa" got read as nothing more than declining the pending upsell,
+    // silently dropping "cancelen esta vaina" (a real cancel request)
+    // before command/product matching or recovery ever ran.
+    it("recovers a real command hiding behind a negative response instead of treating it as a bare decline (D-207 follow-up)", async () => {
+      const client = {
+        query: jest.fn(async (sql: string, params: unknown[] = []) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [] };
+          void params;
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("cancel");
+      const message = "no ya no quiero nada, cancelen esta vaina porfa";
+
+      await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(
+        client.query.mock.calls.some(([sql]) =>
+          String(sql).includes("update app.commercial_requests set status='cancelled'"),
+        ),
+      ).toBe(true);
+    });
+
+    it("never spends an AI call on an ordinary decline that leaves nothing but filler words behind (D-207 follow-up non-regression)", async () => {
+      const client = {
+        query: jest.fn(async (sql: string, params: unknown[] = []) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [] };
+          if (sql.includes("from app.request_lines where commercial_request_id")) return { rows: [{ exists: true }] };
+          void params;
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn();
+      const message = "no gracias eso es todo";
+
+      await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).not.toHaveBeenCalled();
+    });
+
     it("never spends an AI call checking for a hidden removal signal when the message is an ordinary addition with nothing left unexplained (D-207 follow-up non-regression)", async () => {
       const birria = {
         item_id: "item-birria",
@@ -7634,6 +7713,95 @@ describe("CommercialFlowService", () => {
 
       expect(recover).not.toHaveBeenCalled();
       expect(reply?.body).toBe("¿Confirmas el pedido?");
+    });
+
+    // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+    // Santos Tacos) — confirmed 3 separate times live: none of D-207's
+    // original 4 recovery sites ever covered awaiting_fulfillment itself,
+    // so any attempt to change/cancel the order right at "¿domicilio,
+    // recogida o local?" just got the same question repeated.
+    it("recovers a garbled command while awaiting the fulfillment answer instead of just re-asking the same question (D-207 follow-up)", async () => {
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_fulfillment", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("cancel");
+      const message = "no quiero seguir con esto, mejor no lo hagamos";
+
+      await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(
+        client.query.mock.calls.some(([sql]) =>
+          String(sql).includes("update app.commercial_requests set status='cancelled'"),
+        ),
+      ).toBe(true);
+    });
+
+    // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
+    // Santos Tacos): "mejor paso yo a recogerlo, cambienlo a recogida
+    // porfa" typed while this step was waiting for a delivery address just
+    // repeated "¿Cuál es la dirección del domicilio?" forever — the text
+    // never validates as an address, but nothing tried reading it as a
+    // change_fulfillment request either.
+    it("recovers a garbled command when free text fails the address validator instead of just re-asking for the address (D-207 follow-up)", async () => {
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                {
+                  id: "workflow-1",
+                  commercial_request_id: "request-1",
+                  step: "awaiting_requirement:delivery_address:value",
+                  context: { fulfillment: "delivery" },
+                },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.operational_requirements")) return { rows: [] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("change_fulfillment");
+      const message = "mejor paso yo a recogerlo, cambienlo a recogida porfa";
+
+      await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(
+        client.query.mock.calls.some(([sql]) =>
+          String(sql).includes("update app.commercial_requests set fulfillment_type=null"),
+        ),
+      ).toBe(true);
     });
   });
 
