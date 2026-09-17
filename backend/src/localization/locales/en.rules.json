@@ -13,7 +13,7 @@
     "changeAddress": ["\\b(change|modify)\\b.*\\b(address)\\b"],
     "back": ["^(back|return)\\b"],
     "help": ["\\b(help|commands)\\b", "\\bwhat can i do\\b"],
-    "change": ["^(change|modify)\\b"],
+    "change": ["^(change|modify|edit)\\b", "\\b(change|modify|edit)\\b.*\\b(order|cart)\\b"],
     "purchase": ["\\b(order|buy|purchase)\\b"],
     "directDesire": ["\\bi want\\b"],
     "informational": ["\\b(know|which|how much|price|gluten|has|do you have)\\b"],

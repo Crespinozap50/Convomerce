@@ -78,6 +78,17 @@ describe("CommercialFlowService", () => {
     ["Necesito ayuda", "help"],
     ["Quiero hablar con una persona", "handoff"],
     ["Cancelar pedido", "cancel"],
+    // D-206 (docs/decisions.md) live finding, real conversation (Carlos,
+    // Santos Tacos): "editar" was never recognized as a synonym of
+    // "cambiar"/"modificar" at all, and the anchored-at-start pattern
+    // never matched it mid-sentence either — the customer's own real
+    // words ("Necesito editar mi pedido para agregar algo más", "Quiero
+    // editar mi pedido 1FD9AF09") fell through to startNewOrder() instead
+    // of reopening the confirmed order, silently creating two duplicate
+    // real orders instead of one edited order.
+    ["Editar pedido", "change"],
+    ["Necesito editar mi pedido para agregar algo más", "change"],
+    ["Quiero editar mi pedido 1FD9AF09", "change"],
     ["Cambiar producto", "change_product"],
     ["Cambiar entrega", "change_fulfillment"],
     ["Cambiar dirección", "change_address"],

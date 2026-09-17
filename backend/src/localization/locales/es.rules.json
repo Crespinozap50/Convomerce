@@ -13,7 +13,7 @@
     "changeAddress": ["\\b(cambiar|cambio|modificar)\\b.*\\b(direccion)\\b"],
     "back": ["^(volver|atras|regresar)\\b"],
     "help": ["\\b(ayuda|comandos)\\b", "\\bque puedo hacer\\b"],
-    "change": ["^(cambiar|cambio|modificar)\\b"],
+    "change": ["^(cambiar|cambio|modificar|editar|edita)\\b", "\\b(cambiar|cambio|modificar|editar|edita)\\b.*\\b(pedido|orden)\\b"],
     "purchase": ["\\b(pedir|ordenar|comprar)\\b"],
     "directDesire": ["\\bquiero\\b"],
     "informational": ["\\b(saber|cual|cuanto|precio|gluten|tiene|tienen)\\b"],
