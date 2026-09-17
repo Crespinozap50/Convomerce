@@ -7322,6 +7322,108 @@ describe("CommercialFlowService", () => {
       expect(reply?.body).toBe("No tienes un proceso activo para cancelar.");
     });
 
+    // D-207 follow-up (docs/decisions.md) live finding: "bórrame los tacos
+    // de birria" matched the product with full confidence and got ADDED
+    // instead of removed, because command recovery only ever ran when no
+    // product matched — here one did. negatedCartMatch() now also tries
+    // recovery, but only when the message carries a word the matched
+    // item's own name doesn't explain, so an ordinary addition never pays
+    // for the extra AI call. "bórrame" itself is already a regex synonym
+    // (D-207's own earlier fix) — "sácame" here is a deliberately
+    // different, still-unlisted verb, proving the general mechanism, not
+    // just that one hand-added word.
+    it("removes an already-cart item via AI recovery when the message carries a genuine removal word the hardcoded negation list misses (D-207 follow-up)", async () => {
+      const birria = {
+        item_id: "item-birria",
+        variant_id: "birria-variant",
+        name: "Tacos de birria",
+        variant_name: "Unidad",
+        price_minor: "2290000",
+        currency: "COP",
+      };
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [birria] };
+          if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+            return { rows: [birria] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn().mockResolvedValue("remove_item");
+      const message = "sácame los tacos de birria";
+
+      await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).toHaveBeenCalled();
+      expect(
+        client.query.mock.calls.some(([sql]) =>
+          String(sql).includes("update app.request_lines set status='removed'"),
+        ),
+      ).toBe(true);
+      expect(
+        client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines")),
+      ).toBe(false);
+    });
+
+    it("never spends an AI call checking for a hidden removal signal when the message is an ordinary addition with nothing left unexplained (D-207 follow-up non-regression)", async () => {
+      const birria = {
+        item_id: "item-birria",
+        variant_id: "birria-variant",
+        name: "Tacos de birria",
+        variant_name: "Unidad",
+        price_minor: "2290000",
+        currency: "COP",
+      };
+      const client = {
+        query: jest.fn(async (sql: string) => {
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return {
+              rows: [
+                { id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} },
+              ],
+            };
+          if (sql.includes("from app.tenant_capabilities")) return { rows: [{ enabled: true }] };
+          if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [birria] };
+          if (sql.includes("from app.request_lines line") && sql.includes("is_packaging_fee=false"))
+            return { rows: [birria] };
+          return { rows: [] };
+        }),
+      };
+      const recover = jest.fn();
+      const message = "quiero un taco de birria";
+
+      await new CommercialFlowService(
+        { suggest: jest.fn().mockResolvedValue(null) } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+        undefined,
+        { recover } as never,
+      ).resolve(client as never, {
+        ...input,
+        messageId: "message-1",
+        body: message,
+        understanding: await understand(message),
+      });
+
+      expect(recover).not.toHaveBeenCalled();
+    });
+
     // D-207 duplicate-order regression (docs/decisions.md): live-verified
     // manually on 2026-09-17 by creating two real confirmed orders on
     // Santos Tacos and sending "ajustame el pedido porfa" (no regex

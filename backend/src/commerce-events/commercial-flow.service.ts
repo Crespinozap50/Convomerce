@@ -1094,7 +1094,26 @@ export class CommercialFlowService {
     input: UnderstoodFlowInput,
     candidates: Item[],
   ): Promise<DeterministicReply | null> {
-    if (!CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) return null;
+    if (!CommercialFlowService.NEGATION_MARKER_PATTERN.test(norm(input.body))) {
+      // D-207 follow-up (docs/decisions.md), live finding: "bórrame los
+      // tacos de birria" — a real product name plus a genuine removal verb
+      // never in NEGATION_MARKER_PATTERN's hand-picked list — matched the
+      // product with full confidence and got ADDED instead of removed,
+      // because command recovery (D-207) only ever runs when NO product
+      // matched, and here one did. Extending AI to check every match would
+      // mean a 1-2s/`$0.01` round trip on nearly every ordinary "quiero un
+      // taco" turn — instead this only tries it when the message carries a
+      // real word the matched candidate(s) don't explain (their own name
+      // tokens, plus the general stop-word list already used everywhere
+      // else in this file): an ordinary addition explains every word it
+      // says, so this stays free for the overwhelming majority of
+      // messages, same "last resort" discipline as the other 4 D-207
+      // sites, just gated on a leftover-token signal instead of "no
+      // product matched at all".
+      if (this.unexplainedTokens(candidates, input).length === 0) return null;
+      const recovered = await this.recoverCommand(client, input);
+      if (recovered !== "remove_item") return null;
+    }
     const cart = await this.cartItems(client, flow.commercial_request_id, locale);
     const cartMatch = candidates.find((candidate) => cart.some((line) => line.variant_id === candidate.variant_id));
     return cartMatch ? this.removeItem(client, flow, locale, cartMatch) : null;
@@ -5089,5 +5108,28 @@ export class CommercialFlowService {
     if (nameTokens.length === 0) return false;
     const matchedTokens = nameTokens.filter((token) => tokens.has(singularize(token))).length;
     return matchedTokens < nameTokens.length - 1;
+  }
+  // D-207 follow-up (docs/decisions.md): the inverse comparison of
+  // isWeakTokenMatch just above — instead of asking "how much of the
+  // item's own name did the message say", this asks "does the message
+  // say anything real that the matched item's name doesn't explain".
+  // Only call site is negatedCartMatch's AI-gate: an ordinary "quiero un
+  // taco de birria" explains every one of its own real words via the
+  // matched item's own name (plus the general stop-word list already used
+  // everywhere in this file for the same purpose), so this returns empty
+  // and costs nothing; "bórrame los tacos de birria" leaves "bórrame"
+  // unexplained, which is exactly the signal worth spending an AI call on.
+  private unexplainedTokens(candidates: Item[], input: UnderstoodFlowInput): string[] {
+    const nameTokens = new Set(
+      candidates.flatMap((item) =>
+        norm(item.name)
+          .split(" ")
+          .filter((token) => token.length > 2 || /^\d+$/.test(token))
+          .map(singularize),
+      ),
+    );
+    return this.searchTerms(input)
+      .map(singularize)
+      .filter((token) => !nameTokens.has(token));
   }
 }
