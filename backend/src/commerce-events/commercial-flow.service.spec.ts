@@ -7322,6 +7322,38 @@ describe("CommercialFlowService", () => {
       expect(reply?.body).toBe("No tienes un proceso activo para cancelar.");
     });
 
+    // D-207 follow-up (hallazgo #5): a modality named in the FIRST message is
+    // remembered on the workflow context instead of being asked again later.
+    it("remembers the fulfillment modality named in the opening order message (D-207 follow-up)", async () => {
+      const pollo = {
+        item_id: "item-pollo",
+        variant_id: "pollo-variant",
+        name: "Tacos de pollo",
+        variant_name: "Orden de 3 tacos",
+        price_minor: "1790000",
+        currency: "COP",
+      };
+      const client = {
+        query: jest.fn(async (sql: string, params: unknown[] = []) => {
+          void params;
+          if (sql.includes("from app.conversation_workflows where conversation_id")) return { rows: [] };
+          if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows: [pollo] };
+          return { rows: [] };
+        }),
+      };
+      const message = "quiero 1 taco de pollo para comer aqui";
+      await service().resolve(client as never, {
+        ...input,
+        body: message,
+        understanding: await understand(message),
+      });
+      const created = client.query.mock.calls.find(([sql]) =>
+        String(sql).includes("insert into app.conversation_workflows"),
+      );
+      expect(JSON.stringify(created)).toContain('fulfillmentHint');
+      expect(JSON.stringify(created)).toContain('on_site');
+    });
+
     // D-207 follow-up (docs/decisions.md), live finding (30-test battery):
     // "kiero dos taco de poyo" tied across every taco because "poyo" never
     // matched "pollo" exactly; phonetic keys (ll/y) now break that tie.

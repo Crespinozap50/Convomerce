@@ -2469,3 +2469,11 @@ Pedido explícito, 5 puntos, con la viabilidad de cada uno evaluada contra el c�
 - 673/673 tests, `tsc -b` limpio.
 
 **Hallazgo #8 (pedidos grandes) — decisión del dueño, 2026-09-18**: umbral de 15 unidades. Al confirmar un pedido con 15 o más unidades (líneas de empaque excluidas, `LARGE_ORDER_UNITS`) se agrega a `customer_notes` la nota "Pedido grande (N unidades): confirmar con el cliente." — visible en el panel, sin cambiar nada para el cliente ni detener el bot (acción por defecto elegida por ser reversible; la acción exacta no fue especificada). Verificado en vivo con un pedido de 15 unidades; pedido de prueba cancelado.
+
+### D-207 hallazgo #5 (2026-09-18) — la modalidad nombrada en el primer mensaje ya no se vuelve a preguntar
+
+**Estado: implementada y verificada en vivo.**
+
+- **Causa**: el motor ya detectaba `requestedAction: fulfillment.delivery` en "…a domicilio", pero (1) las reglas no reconocían "para comer aquí" ni "para llevar", y (2) `stepWorkflow` reemplaza el contexto completo en cada paso, así que el dato se perdía antes de llegar a la pregunta de modalidad.
+- **Corrección**: (a) `es.rules.json`: "para llevar" → pickup, "comer aquí/acá/ahí/allí" → on_site. (b) al crear el pedido (3 ramas: match único, empate, multi-ítem) se guarda `fulfillmentHint` en el contexto del workflow. (c) `step()` preserva solo esa llave entre transiciones salvo que el nuevo contexto la fije (null = consumida). (d) `askOrAutoSelectFulfillment` la aplica automáticamente si la modalidad está habilitada para el tenant; "Cambiar entrega" sigue preguntando normal porque no pasa por ese camino.
+- **Verificado en vivo**: "hola, 2 tacos de birria para comer aqui" + "no gracias" → directo a "Entrega: En el local — ¿Confirmas el pedido?"; "kiero 1 taco de pollo para llevar" → pickup con cargo de empaque. Tests 674/674, `tsc -b` limpio. Pedidos de prueba cancelados. Pendiente: reglas equivalentes en `en.rules.json` (no se tocaron).

@@ -482,8 +482,8 @@ export class CommercialFlowService {
         [requestId, input.tenantId, input.conversationId, input.contactId, currency],
       );
       await client.query(
-        `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','awaiting_more_items')`,
-        [flowId, input.tenantId, input.conversationId, input.contactId, requestId],
+        `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step,context) values($1,$2,$3,$4,$5,'order','awaiting_more_items',$6::jsonb)`,
+        [flowId, input.tenantId, input.conversationId, input.contactId, requestId, JSON.stringify(this.fulfillmentHintContext(input))],
       );
       for (const { item, quantity } of multi.matches) {
         await this.addItem(client, input.tenantId, requestId, item, quantity);
@@ -557,8 +557,8 @@ export class CommercialFlowService {
         [requestId, input.tenantId, input.conversationId, input.contactId, tied[0].currency],
       );
       await client.query(
-        `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','selecting_item')`,
-        [flowId, input.tenantId, input.conversationId, input.contactId, requestId],
+        `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step,context) values($1,$2,$3,$4,$5,'order','selecting_item',$6::jsonb)`,
+        [flowId, input.tenantId, input.conversationId, input.contactId, requestId, JSON.stringify(this.fulfillmentHintContext(input))],
       );
       // Captures the quantity from *this* message ("quiero 2 aguas") so
       // resolving the tie via a tap still applies it — not the tap's own
@@ -747,8 +747,8 @@ export class CommercialFlowService {
       [requestId, input.tenantId, input.conversationId, input.contactId, match.currency],
     );
     await client.query(
-      `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step) values($1,$2,$3,$4,$5,'order','awaiting_more_items')`,
-      [flowId, input.tenantId, input.conversationId, input.contactId, requestId],
+      `insert into app.conversation_workflows(id,tenant_id,conversation_id,contact_id,commercial_request_id,operation_type,step,context) values($1,$2,$3,$4,$5,'order','awaiting_more_items',$6::jsonb)`,
+      [flowId, input.tenantId, input.conversationId, input.contactId, requestId, JSON.stringify(this.fulfillmentHintContext(input))],
     );
     await this.addItem(
       client,
@@ -1830,6 +1830,11 @@ export class CommercialFlowService {
     const enabledList = (["delivery", "pickup", "on_site"] as const).filter(
       (modality) => enabled[modality],
     );
+    const hint = context.fulfillmentHint ?? flow.context.fulfillmentHint;
+    const hinted = enabledList.find((modality) => modality === hint);
+    if (hinted) {
+      return this.applyFulfillment(client, input, flow, { ...context, fulfillmentHint: null }, hinted);
+    }
     if (enabledList.length === 1) {
       return this.applyFulfillment(client, input, flow, context, enabledList[0]);
     }
@@ -4440,7 +4445,30 @@ export class CommercialFlowService {
     step: string,
     context: Record<string, unknown>,
   ) {
-    return stepWorkflow(client, id, step, context);
+    // D-207 follow-up (docs/decisions.md, hallazgo #5): every step
+    // transition replaces context wholesale, which used to wipe the
+    // fulfillment modality the customer named in their FIRST message ("...a
+    // domicilio"). fulfillmentHint alone survives a transition unless the
+    // new context sets the key itself (null = consumed/cleared).
+    return client.query(
+      `update app.conversation_workflows
+          set step=$2,
+              context=case when context ? 'fulfillmentHint' and not ($3::jsonb ? 'fulfillmentHint')
+                           then $3::jsonb || jsonb_build_object('fulfillmentHint',context->'fulfillmentHint')
+                           else $3::jsonb end,
+              updated_at=now()
+        where id=$1`,
+      [id, step, JSON.stringify(context)],
+    );
+  }
+  private fulfillmentHintContext(input: UnderstoodFlowInput): Record<string, unknown> {
+    const action = input.understanding.requestedAction;
+    const hint =
+      action === "fulfillment.delivery" ? "delivery"
+      : action === "fulfillment.pickup" ? "pickup"
+      : action === "fulfillment.on_site" ? "on_site"
+      : null;
+    return hint ? { fulfillmentHint: hint } : {};
   }
   // Looks up the currently-filled field keys from context, asks for the next
   // configured requirement for this fulfillment modality if any remain, or
