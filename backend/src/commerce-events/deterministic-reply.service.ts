@@ -108,6 +108,15 @@ const matchesHandoffPhrase = (text: string, phrase: string): boolean => {
   return words.length > 0 && words.every((word) => text.includes(word));
 };
 
+export function profileIntentsIn(message: string, locale: ConversationLocale = 'es'): Array<'hours' | 'location' | 'delivery' | 'payments'> {
+  const text = normalize(message);
+  const intents = catalogFor(locale).intents;
+  const fallbackIntents = catalogFor('en').intents;
+  return (['delivery', 'hours', 'location', 'payments'] as const).filter((intent) =>
+    includesAny(text, [...intents[intent], ...fallbackIntents[intent]].map(normalize)),
+  );
+}
+
 export function classifyMessage(message: string, handoffKeywords: string[] = [], locale: ConversationLocale = 'es'): ReplyIntent {
   const text = normalize(message);
   if (handoffKeywords.some((phrase) => matchesHandoffPhrase(text, phrase))) return 'handoff';
@@ -249,7 +258,18 @@ export class DeterministicReplyService {
       if (intent === 'menu' || intent === 'price') {
         return this.offeringReply(client, message, intent, copy, bot.locale, bot.timezone, bot.categoryLabelPrefix ?? null);
       }
-      return this.profileReply(client, intent, bot.fallbackMessage, bot.locale);
+      const primary = await this.profileReply(client, intent, bot.fallbackMessage, bot.locale);
+      // D-207 follow-up (docs/decisions.md), live finding (30-test battery):
+      // "a que hora abren y si reciben tarjeta" only got the hours answer —
+      // classifyMessage returns the first matching intent. Every other
+      // profile intent the same message also mentions is answered too, but
+      // only when it has real profile data (never appends a fallback line).
+      const extras = profileIntentsIn(message, bot.locale).filter((other) => other !== intent);
+      for (const other of extras) {
+        const extra = await this.profileReply(client, other, '', bot.locale);
+        if (extra.sources.length) primary.body = `${primary.body}\n\n${extra.body}`;
+      }
+      return primary;
     }
     // Every other message — anything that isn't one of the small, genuinely
     // universal fixed intents above — is answered purely from this tenant's

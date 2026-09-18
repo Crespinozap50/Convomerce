@@ -7322,6 +7322,40 @@ describe("CommercialFlowService", () => {
       expect(reply?.body).toBe("No tienes un proceso activo para cancelar.");
     });
 
+    // D-207 follow-up (docs/decisions.md), live finding (30-test battery):
+    // "kiero dos taco de poyo" tied across every taco because "poyo" never
+    // matched "pollo" exactly; phonetic keys (ll/y) now break that tie.
+    it("resolves a phonetic typo ('poyo' for 'pollo') instead of tying across every taco (D-207 follow-up)", async () => {
+      const mk = (id: string, name: string) => ({
+        item_id: `item-${id}`,
+        variant_id: `${id}-variant`,
+        name,
+        variant_name: "Orden de 3 tacos",
+        price_minor: "1790000",
+        currency: "COP",
+      });
+      const rows = [mk("birria", "Tacos de birria"), mk("pollo", "Tacos de pollo"), mk("veg", "Tacos vegetarianos")];
+      const client = {
+        query: jest.fn(async (sql: string, params: unknown[] = []) => {
+          void params;
+          if (sql.includes("from app.conversation_workflows where conversation_id")) return { rows: [] };
+          if (sql.includes("from app.catalog_items item join app.item_variants")) return { rows };
+          return { rows: [] };
+        }),
+      };
+      const message = "kiero dos taco de poyo";
+      await service().resolve(client as never, {
+        ...input,
+        body: message,
+        understanding: await understand(message),
+      });
+      const inserted = client.query.mock.calls.find(([sql]) =>
+        String(sql).includes("insert into app.request_lines"),
+      );
+      expect(inserted).toBeDefined();
+      expect(JSON.stringify(client.query.mock.calls)).toContain("pollo-variant");
+    });
+
     // D-207 follow-up (docs/decisions.md), live finding (30-test battery,
     // Santos Tacos): "¿cómo va mi pedido?" with no active flow fell all the
     // way through to startNewOrder(), which had no idea the intent was

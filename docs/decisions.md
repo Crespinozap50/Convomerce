@@ -2457,3 +2457,13 @@ Pedido explícito, 5 puntos, con la viabilidad de cada uno evaluada contra el c�
 - Corrección: nueva rama `view_order` en `dispatchNoFlowCommand` — busca el pedido `ready` más reciente del contacto (mismo alcance que `cancelReadyOrderReply`/`modifyReadyOrderReply`) y muestra su carrito; si no hay ninguno, responde con la nueva copy `nothingToView` en vez del fallback genérico. Se reutiliza sin cambios el mecanismo de recuperación de comando ya existente (los 2 sitios de `startNewOrder()` que llaman `dispatchNoFlowCommand` con el comando recuperado por IA).
 - 2 tests nuevos en `commercial-flow.service.spec.ts`. 671/671 tests, `tsc -b` limpio.
 - Pendiente, quedó fuera de esta ronda por límite de tiempo/tokens de la sesión: hallazgos #2 (preguntas compuestas), #3 (typos fonéticos), #4/#5 (cantidad/modalidad perdidas tras recomendación o no extraídas del primer mensaje), #6 (instrucciones especiales no confirmadas al cliente), #7 (idioma inglés) y #8 (pedidos grandes/catering) de la batería de 30 pruebas.
+
+### D-207 décima ronda (2026-09-18) — typos fonéticos y preguntas de perfil compuestas; #7 ya era por diseño, #8 pendiente de decisión de negocio
+
+**Estado: implementada y verificada en vivo.**
+
+- **Typos fonéticos (hallazgo #3)**: "kiero dos taco de poyo" empataba entre todos los tacos. Nuevo `scorePhonetically()` con llave fonética (ll→y, v→b, h muda, z/c→s, qu/c→k, tokens ≥4 letras) usada solo cuando no hubo ningún match exacto, o para desempatar candidatos ya empatados — un empate fonético deja el empate igual. Verificado en vivo: resuelve directo a "2 × Tacos de pollo".
+- **Preguntas compuestas (hallazgo #2)**: "a que hora abren y si reciben tarjeta" solo respondía horario porque `classifyMessage` devuelve la primera intención. Nuevo `profileIntentsIn()`; la respuesta de perfil (horario/ubicación/domicilio/pagos) agrega las demás intenciones mencionadas que tengan datos reales (nunca agrega un fallback). Verificado en vivo: una sola respuesta con horario y medios de pago.
+- **Idioma (#7)**: sin cambio — `ConversationLanguageService` ya exige 2 mensajes consecutivos en otro idioma (`SWITCH_EVIDENCE_THRESHOLD=2`) antes de cambiar; un solo mensaje mezclado no cambia el idioma a propósito.
+- **Sin cambio, decisión del dueño**: #8 (pedidos grandes: requiere definir umbral y acción, p. ej. derivar a humano), #5 (modalidad del primer mensaje: el dueño decidió dejarlo así), #6 (notas "sin cebolla" van a `customer_notes` para cocina por diseño D-171).
+- 673/673 tests, `tsc -b` limpio.

@@ -3149,11 +3149,28 @@ export class CommercialFlowService {
       }))
       .sort((a, b) => b.score - a.score);
     const best = scored[0];
-    if (!best || best.score === 0) return { match: null, tied: [] };
+    if (!best || best.score === 0) {
+      // D-207 follow-up (docs/decisions.md), live finding (30-test battery):
+      // "kiero dos taco de poyo" matched nothing exactly ("poyo" != "pollo"),
+      // so the customer got a tie across every taco. Only when NOTHING
+      // matched exactly, retry comparing phonetic keys (ll/y, v/b, silent h,
+      // z/c/s, qu/c/k) — never runs when an exact match exists, so it can
+      // only ever rescue a message that would otherwise match nothing.
+      return this.scorePhonetically(rows, tokens);
+    }
     const equallyRelevant = scored.filter(
       (candidate) => candidate.score === best.score,
     );
     if (equallyRelevant.length === 1) return { match: best.item, tied: [] };
+    // Same phonetic comparison as the zero-match fallback above, used only
+    // to break an exact-token tie ("taco de poyo" ties every taco on "taco";
+    // "poyo" ≈ "pollo" is what separates them) — a phonetic tie leaves the
+    // tie exactly as it was.
+    const phonetic = this.scorePhonetically(
+      equallyRelevant.map((candidate) => candidate.item),
+      tokens,
+    );
+    if (phonetic.match) return phonetic;
     // Scoring above only ever looks at item.name, so two variants of the
     // same product ("Agua fresca" 12oz/16oz) always tie on it — even when
     // the customer already named the size ("...de 16 oz"). Re-score just
@@ -3177,6 +3194,39 @@ export class CommercialFlowService {
     return bestVariant.variantScore > 0 && tiedByVariant.length === 1
       ? { match: tiedByVariant[0].item, tied: [] }
       : { match: null, tied: equallyRelevant.map((candidate) => candidate.item) };
+  }
+  private static phoneticKey(token: string): string {
+    return token
+      .replace(/h/g, "")
+      .replace(/ll/g, "y")
+      .replace(/v/g, "b")
+      .replace(/z/g, "s")
+      .replace(/c(?=[ei])/g, "s")
+      .replace(/qu/g, "k")
+      .replace(/c/g, "k");
+  }
+  private scorePhonetically(
+    rows: Item[],
+    tokens: Set<string>,
+  ): { match: Item | null; tied: Item[] } {
+    const keys = new Set(
+      [...tokens].filter((token) => token.length >= 4).map(CommercialFlowService.phoneticKey),
+    );
+    const scored = rows
+      .map((item) => ({
+        item,
+        score: norm(item.name)
+          .split(" ")
+          .map(singularize)
+          .filter((x) => x.length >= 4 && keys.has(CommercialFlowService.phoneticKey(x))).length,
+      }))
+      .sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    if (!best || best.score === 0) return { match: null, tied: [] };
+    const top = scored.filter((candidate) => candidate.score === best.score);
+    return top.length === 1
+      ? { match: best.item, tied: [] }
+      : { match: null, tied: top.map((candidate) => candidate.item) };
   }
   // D-172: see the live finding comment at its one call site
   // (handleAwaitingMoreItems) for why this is scoped so narrowly —

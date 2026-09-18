@@ -800,3 +800,11 @@ describe('DeterministicReplyService', () => {
     expect(reply.body).toBe('¡Hola, Carlos! Soy el asistente del negocio.');
   });
 });
+
+describe('profileIntentsIn (D-207 follow-up compound questions)', () => {
+  it('finds both hours and payments in one message', () => {
+    const { profileIntentsIn } = require('./deterministic-reply.service');
+    expect(profileIntentsIn('a que hora abren y si reciben tarjeta')).toEqual(['hours', 'payments']);
+    expect(profileIntentsIn('a que hora abren')).toEqual(['hours']);
+  });
+});
