@@ -2034,6 +2034,19 @@ export class CommercialFlowService {
       // stale by the time the customer actually confirms (D-104).
       await this.syncPackagingFee(client, flow.commercial_request_id, input.locale);
       await this.recalculate(client, flow.commercial_request_id);
+      // D-207 follow-up (docs/decisions.md): orders of LARGE_ORDER_UNITS or
+      // more (packaging-fee lines excluded) get a staff-visible note in
+      // customer_notes — nothing changes for the customer or the bot.
+      await client.query(
+        `update app.commercial_requests r set customer_notes=concat_ws(E'\n',nullif(r.customer_notes,''),'Pedido grande ('||round(totals.units)::bigint::text||' unidades): confirmar con el cliente.')
+           from (select coalesce(sum(line.quantity),0) as units
+                   from app.request_lines line
+                   left join app.item_variants variant on variant.tenant_id=line.tenant_id and variant.id=line.item_variant_id
+                   left join app.catalog_items item on item.tenant_id=variant.tenant_id and item.id=variant.catalog_item_id
+                  where line.commercial_request_id=$1 and line.status='active' and coalesce(item.is_packaging_fee,false)=false) totals
+          where r.id=$1 and totals.units>=$2`,
+        [flow.commercial_request_id, CommercialFlowService.LARGE_ORDER_UNITS],
+      );
       await client.query(
         `update app.commercial_requests set status='ready',confirmed_at=now(),updated_at=now() where id=$1`,
         [flow.commercial_request_id],
@@ -4155,6 +4168,7 @@ export class CommercialFlowService {
   // so a retried/duplicate call from the same message never repeats
   // itself; appends rather than overwrites so more than one such message
   // across the same order isn't lost.
+  private static readonly LARGE_ORDER_UNITS = 15;
   private static readonly CUSTOMER_NOTE_PATTERN = /\bsin\b/i;
   private async captureCustomerNote(
     client: PoolClient,

@@ -2467,3 +2467,5 @@ Pedido explícito, 5 puntos, con la viabilidad de cada uno evaluada contra el c�
 - **Idioma (#7)**: sin cambio — `ConversationLanguageService` ya exige 2 mensajes consecutivos en otro idioma (`SWITCH_EVIDENCE_THRESHOLD=2`) antes de cambiar; un solo mensaje mezclado no cambia el idioma a propósito.
 - **Sin cambio, decisión del dueño**: #8 (pedidos grandes: requiere definir umbral y acción, p. ej. derivar a humano), #5 (modalidad del primer mensaje: el dueño decidió dejarlo así), #6 (notas "sin cebolla" van a `customer_notes` para cocina por diseño D-171).
 - 673/673 tests, `tsc -b` limpio.
+
+**Hallazgo #8 (pedidos grandes) — decisión del dueño, 2026-09-18**: umbral de 15 unidades. Al confirmar un pedido con 15 o más unidades (líneas de empaque excluidas, `LARGE_ORDER_UNITS`) se agrega a `customer_notes` la nota "Pedido grande (N unidades): confirmar con el cliente." — visible en el panel, sin cambiar nada para el cliente ni detener el bot (acción por defecto elegida por ser reversible; la acción exacta no fue especificada). Verificado en vivo con un pedido de 15 unidades; pedido de prueba cancelado.
