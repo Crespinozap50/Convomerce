@@ -44,6 +44,8 @@ export type LoggroOrderPayload = {
   orders: LoggroOrderLine[];
 };
 export type LoggroCreatedOrder = { _id: string; status: string };
+// GET /orders?tableId= returns a bare array; each order embeds its table.
+export type LoggroOrderSummary = { _id: string; status: string; table?: { _id?: string; name?: string } };
 
 @Injectable()
 export class LoggroApiClient {
@@ -149,6 +151,44 @@ export class LoggroApiClient {
       for (const row of rows) occupied.add(row._id);
     }
     return occupied;
+  }
+
+  async getOrdersByTable(tenantId: string, connectionId: string, tableId: string): Promise<LoggroOrderSummary[]> {
+    return this.withAuth<LoggroOrderSummary[]>(tenantId, connectionId, (token) =>
+      fetch(`${LOGGRO_BASE_URL}/orders?tableId=${encodeURIComponent(tableId)}`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10_000),
+      }),
+    );
+  }
+
+  // GET /orders/:id also answers for cancelled orders (the by-table list
+  // above hides them, and a cancelled order no longer embeds its table).
+  async getOrder(tenantId: string, connectionId: string, orderId: string): Promise<LoggroOrderSummary> {
+    return this.withAuth<LoggroOrderSummary>(tenantId, connectionId, (token) =>
+      fetch(`${LOGGRO_BASE_URL}/orders/${encodeURIComponent(orderId)}`, {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10_000),
+      }),
+    );
+  }
+
+  // D-192 (docs/decisions.md): PUT /orders {_id,status:"Cancelada",causeCancel}
+  // — validated live. `causeCancel` is the note Loggro requires.
+  async cancelOrder(
+    tenantId: string,
+    connectionId: string,
+    orderId: string,
+    causeCancel: string,
+  ): Promise<LoggroOrderSummary> {
+    return this.withAuth<LoggroOrderSummary>(tenantId, connectionId, (token) =>
+      fetch(`${LOGGRO_BASE_URL}/orders`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ _id: orderId, status: "Cancelada", causeCancel }),
+        signal: AbortSignal.timeout(10_000),
+      }),
+    );
   }
 
   async createOrder(

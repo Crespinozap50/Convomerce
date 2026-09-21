@@ -157,6 +157,18 @@ export default {
     confirmed: "Confirmed",
     lines: "Products or services",
     notes: "Customer notes",
+      cancelSent: {
+        sectionTitle: "Cancel an order already sent to the kitchen",
+        sectionHelp: "Administrators only. It is also cancelled in Loggro and the customer is notified on WhatsApp.",
+        button: "Cancel order",
+        title: "Cancel order #{{reference}}",
+        warning: "The order was already sent to Loggro and may be in preparation. It will be cancelled in Loggro (only if it is on a Bot Convomerce table) and the customer will get a cancellation notice.",
+        noteLabel: "Reason for cancelling (required)",
+        notePlaceholder: "E.g.: the customer asked to cancel by phone",
+        noteHelp: "Loggro requires a note. At least {{min}} characters. The customer does not see it.",
+        confirm: "Yes, cancel order",
+        done: "Order cancelled in Loggro and in the panel. The customer was notified.",
+      },
     cancellationNote: "Cancellation note",
     appointment: {
       schedule: "Booked time",

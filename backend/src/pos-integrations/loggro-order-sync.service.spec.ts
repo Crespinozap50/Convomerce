@@ -318,4 +318,79 @@ describe("LoggroOrderSyncService", () => {
       expect(orderPayload.table).toBe("table-2");
     });
   });
+
+  describe("cancelOrder (D-202 reversed)", () => {
+    const cancelService = (opts: {
+      pattern?: string | null;
+      externalIds?: string[] | null;
+      tables?: { _id: string; name: string }[];
+      ordersByTable?: Record<string, { _id: string; status: string }[]>;
+      orderStatuses?: Record<string, string>;
+    }) => {
+      const query = jest.fn(async (sql: string) => {
+        if (sql.includes("from app.pos_connections"))
+          return { rows: [{ id: "conn-1", table_name_pattern: opts.pattern === undefined ? "Bot Convomerce" : opts.pattern }] };
+        if (sql.includes("pos_external_order_id"))
+          return { rows: [{ pos_external_order_id: opts.externalIds === undefined ? ["o1", "o2"] : opts.externalIds }] };
+        return { rows: [] };
+      });
+      const api = {
+        getTables: jest.fn().mockResolvedValue(
+          opts.tables ?? [
+            { _id: "t-bot", name: "Bot Convomerce 1" },
+            { _id: "t-real", name: "Mesa 7" },
+          ],
+        ),
+        getOrdersByTable: jest.fn(async (_t: string, _c: string, tableId: string) => opts.ordersByTable?.[tableId] ?? []),
+        cancelOrder: jest.fn().mockResolvedValue({ _id: "x", status: "Cancelada" }),
+        getOrder: jest.fn(async (_t: string, _c: string, id: string) => ({ _id: id, status: opts.orderStatuses?.[id] ?? "Espera" })),
+      };
+      const svc = new LoggroOrderSyncService(
+        { withTenantTransaction: (_id: string, op: (c: unknown) => unknown) => op({ query }) } as never,
+        api as never,
+      );
+      return { svc, api };
+    };
+
+    it("cancels every order of the request that sits on a Bot Convomerce table, skipping ones already cancelled", async () => {
+      const { svc, api } = cancelService({
+        ordersByTable: { "t-bot": [{ _id: "o1", status: "Espera" }, { _id: "o2", status: "Cancelada" }] },
+      });
+      const result = await svc.cancelOrder(tenantId, commercialRequestId, "Cliente pidió cancelar");
+      expect(result).toEqual({ cancelled: ["o1"], alreadyCancelled: ["o2"] });
+      expect(api.cancelOrder).toHaveBeenCalledTimes(1);
+      expect(api.cancelOrder).toHaveBeenCalledWith(tenantId, "conn-1", "o1", "Cliente pidió cancelar");
+      expect(api.getOrdersByTable).not.toHaveBeenCalledWith(tenantId, "conn-1", "t-real");
+    });
+
+    it("refuses, cancelling NOTHING, when any order is not on a Bot Convomerce table", async () => {
+      const { svc, api } = cancelService({
+        ordersByTable: { "t-bot": [{ _id: "o1", status: "Espera" }], "t-real": [{ _id: "o2", status: "Espera" }] },
+      });
+      await expect(svc.cancelOrder(tenantId, commercialRequestId, "nota valida")).rejects.toMatchObject({ status: 400 });
+      expect(api.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it("treats an order missing from the active by-table list but already cancelled in Loggro as done, so a retry after a partial failure works", async () => {
+      const { svc, api } = cancelService({
+        ordersByTable: { "t-bot": [{ _id: "o1", status: "Espera" }] },
+        orderStatuses: { o2: "Cancelada" },
+      });
+      const result = await svc.cancelOrder(tenantId, commercialRequestId, "nota valida");
+      expect(result).toEqual({ cancelled: ["o1"], alreadyCancelled: ["o2"] });
+      expect(api.cancelOrder).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses when no Bot table pattern is configured (nothing to verify against)", async () => {
+      const { svc, api } = cancelService({ pattern: null });
+      await expect(svc.cancelOrder(tenantId, commercialRequestId, "nota valida")).rejects.toMatchObject({ status: 400 });
+      expect(api.cancelOrder).not.toHaveBeenCalled();
+    });
+
+    it("does nothing for an order that never reached Loggro", async () => {
+      const { svc, api } = cancelService({ externalIds: null });
+      expect(await svc.cancelOrder(tenantId, commercialRequestId, "nota valida")).toEqual({ cancelled: [], alreadyCancelled: [] });
+      expect(api.getTables).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -1,3 +1,4 @@
+import { CancelSentOrderModal } from "./CancelSentOrderModal";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CalendarDays, ShoppingBag } from "lucide-react";
@@ -41,6 +42,8 @@ export function CommercialRequests({
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<CommercialRequestDetail | null>(null);
   const [canManage, setCanManage] = useState(false);
+  const [canCancelSent, setCanCancelSent] = useState(false);
+  const [cancelSentOpen, setCancelSentOpen] = useState(false);
   const [filter, setFilter] = useState("active");
   const [busy, setBusy] = useState(false);
   // D-188 (docs/decisions.md): alerta sonora/de escritorio cuando llega un
@@ -124,11 +127,13 @@ export function CommercialRequests({
   const load = async () => {
     const value = await api<{
       canManage: boolean;
+      canCancelSent?: boolean;
       newCount: number;
       requests: CommercialRequest[];
     }>(`/v1/admin/tenants/${tenant}/commercial-requests`);
     setRows(value.requests);
     setCanManage(value.canManage);
+    setCanCancelSent(value.canCancelSent === true);
     setSelected((current) =>
       current && value.requests.some((row) => row.id === current)
         ? current
@@ -250,6 +255,25 @@ export function CommercialRequests({
       await load();
       await loadDetail(detail.request.id);
       onNotice(t("requests.posSyncRetried"));
+    } catch (error) {
+      onNotice((error as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function cancelSent(note: string) {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await api(
+        `/v1/admin/tenants/${tenant}/commercial-requests/${detail.request.id}/cancel-sent`,
+        { method: "POST", body: JSON.stringify({ note }) },
+      );
+      setCancelSentOpen(false);
+      await load();
+      await loadDetail(detail.request.id);
+      await onCountsChanged();
+      onNotice(t("requests.cancelSent.done"));
     } catch (error) {
       onNotice((error as Error).message, "error");
     } finally {
@@ -504,6 +528,31 @@ export function CommercialRequests({
                   ))}
                 </div>
               )}
+            {canCancelSent &&
+              detail.request.type === "order" &&
+              ["accepted", "in_progress"].includes(detail.request.status) && (
+                <div className="request-actions">
+                  <span>
+                    <b>{t("requests.cancelSent.sectionTitle")}</b>
+                    <small>{t("requests.cancelSent.sectionHelp")}</small>
+                  </span>
+                  <button
+                    disabled={busy}
+                    className="danger-soft"
+                    onClick={() => setCancelSentOpen(true)}
+                  >
+                    {t("requests.cancelSent.button")}
+                  </button>
+                </div>
+              )}
+            {cancelSentOpen && (
+              <CancelSentOrderModal
+                reference={detail.request.id.slice(-8).toUpperCase()}
+                busy={busy}
+                onConfirm={(note) => void cancelSent(note)}
+                onCancel={() => setCancelSentOpen(false)}
+              />
+            )}
           </>
         ) : (
           <div className="request-detail-empty">

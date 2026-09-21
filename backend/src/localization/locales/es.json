@@ -23,7 +23,8 @@
     "recommendationReject": "No, gracias",
     "personalizedGreeting": "¡Hola, {{name}}! {{welcome}}",
     "gratitude": "¡Con gusto! Si necesitas algo más, aquí estoy.",
-    "orderAccepted": "¡Tu pedido #{{reference}} está en preparación!"
+    "orderAccepted": "¡Tu pedido #{{reference}} está en preparación!",
+    "orderCancelledByBusiness": "Lo sentimos, tu pedido #{{reference}} fue cancelado por el negocio. No se realizó ningún cobro. Si tienes dudas, escríbenos."
   },
   "labels": { "unit": "Unidad", "orderPrefix": "Orden de" },
   "intents": {

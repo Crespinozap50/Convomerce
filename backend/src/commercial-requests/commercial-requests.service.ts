@@ -1,3 +1,4 @@
+import { LoggroOrderSyncService } from '../pos-integrations/loggro-order-sync.service';
 import { Injectable } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { v7 as uuidv7 } from 'uuid';
@@ -28,7 +29,7 @@ const transitions:Record<string,CommercialRequestStatus[]>={
 
 @Injectable()
 export class CommercialRequestsService {
-  constructor(private readonly db:DatabaseService) {}
+  constructor(private readonly db:DatabaseService,private readonly orderSync:LoggroOrderSyncService) {}
   list(tenantId:string,userId:string){return this.db.withTenantTransaction(tenantId,async client=>{
     const actor=await this.actor(client,userId);
     const unread=await client.query<{count:number}>(`select count(*)::integer count
@@ -52,7 +53,7 @@ export class CommercialRequestsService {
       left join app.booking_resources resource on resource.tenant_id=appointment.tenant_id and resource.id=appointment.resource_id
       group by request.id,contact.display_name,identity.provider_subject,appointment.id,resource.id
       order by case request.status when 'ready' then 0 when 'accepted' then 1 when 'in_progress' then 2 else 3 end,request.updated_at desc limit 200`);
-    return{canManage:actor.role!=='viewer',newCount:Number(unread.rows[0]?.count??0),requests:result.rows.map(this.map)};
+    return{canManage:actor.role!=='viewer',canCancelSent:['owner','admin','platform_admin'].includes(actor.role),newCount:Number(unread.rows[0]?.count??0),requests:result.rows.map(this.map)};
   })}
   markSeen(tenantId:string,userId:string){return this.db.withTenantTransaction(tenantId,async client=>{
     await this.actor(client,userId);
@@ -88,7 +89,7 @@ export class CommercialRequestsService {
       list.push({description:row.description_snapshot,unitPriceDeltaMinor:Number(row.unit_price_delta_minor_snapshot),quantity:Number(row.quantity),totalDeltaMinor:Number(row.total_delta_minor)});
       modifiersByLine.set(row.request_line_id,list);
     }
-    return{canManage:actor.role!=='viewer',request:this.map(request.rows[0]),lines:lines.rows.map(row=>({id:row.id,description:row.description_snapshot,unitPriceMinor:Number(row.unit_price_minor_snapshot),currency:row.currency,quantity:Number(row.quantity),lineTotalMinor:Number(row.line_total_minor),attributes:row.attributes_snapshot,status:row.status,modifiers:modifiersByLine.get(row.id)??[]}))};
+    return{canManage:actor.role!=='viewer',canCancelSent:['owner','admin','platform_admin'].includes(actor.role),request:this.map(request.rows[0]),lines:lines.rows.map(row=>({id:row.id,description:row.description_snapshot,unitPriceMinor:Number(row.unit_price_minor_snapshot),currency:row.currency,quantity:Number(row.quantity),lineTotalMinor:Number(row.line_total_minor),attributes:row.attributes_snapshot,status:row.status,modifiers:modifiersByLine.get(row.id)??[]}))};
   })}
   changeStatus(tenantId:string,userId:string,requestId:string,status:CommercialRequestStatus){return this.db.withTenantTransaction(tenantId,async client=>{
     await this.actor(client,userId,true);
@@ -150,6 +151,36 @@ export class CommercialRequestsService {
     }
     return{request:this.map(result.rows[0])};
   })}
+  // D-202 reversed (docs/decisions.md): an administrator can cancel an order
+  // that was already sent to Loggro, from the panel, with a mandatory note
+  // (Loggro's own `causeCancel`). Loggro is cancelled FIRST — if it refuses
+  // (or the order isn't on a "Bot Convomerce N" table) nothing changes here.
+  // Then, in one transaction: status/note/workflows and the customer's
+  // WhatsApp notice commit together. The note is internal — the customer's
+  // message never includes it.
+  async cancelSentOrder(tenantId:string,userId:string,requestId:string,note:string){
+    const externalIds=await this.db.withTenantTransaction(tenantId,async client=>{
+      const actor=await this.actor(client,userId,true);
+      if(!['owner','admin','platform_admin'].includes(actor.role))
+        throw forbidden('CANCEL_SENT_ORDER_FORBIDDEN','Only administrators can cancel an order already sent to the kitchen');
+      const row=await client.query<{status:string;request_type:string;pos_external_order_id:string[]|null}>(
+        `select status,request_type,pos_external_order_id from app.commercial_requests where id=$1`,[requestId]);
+      if(!row.rows[0])throw notFound('COMMERCIAL_REQUEST_NOT_FOUND','Commercial request was not found');
+      if(row.rows[0].request_type!=='order'||!['accepted','in_progress'].includes(row.rows[0].status))
+        throw badRequest('ORDER_NOT_CANCELLABLE_HERE','Only accepted or in-preparation orders can be cancelled this way');
+      return row.rows[0].pos_external_order_id??[];
+    });
+    if(externalIds.length>0)await this.orderSync.cancelOrder(tenantId,requestId,note);
+    return this.db.withTenantTransaction(tenantId,async client=>{
+      const result=await client.query(
+        `update app.commercial_requests set status='cancelled',cancellation_note=$2,updated_at=now(),version=version+1
+          where id=$1 and status in ('accepted','in_progress') returning *`,[requestId,note]);
+      if(!result.rows[0])throw badRequest('ORDER_NOT_CANCELLABLE_HERE','The order changed status while it was being cancelled');
+      await client.query(`update app.conversation_workflows set status='cancelled',updated_at=now() where commercial_request_id=$1 and status='active'`,[requestId]);
+      await this.notifyCustomer(client,tenantId,requestId,'orderCancelledByBusiness');
+      return{request:this.map(result.rows[0])};
+    });
+  }
   // D-1xx (docs/decisions.md): Loggro POS push tracks its own outcome
   // directly on this row (pos_sync_status/pos_external_order_id/
   // pos_last_error_code — see database/sql/085_loggro_pos_integration.sql)
@@ -180,7 +211,8 @@ export class CommercialRequestsService {
   // notification, not a human agent's typed message, so it must not flip
   // the conversation into human-handling mode the way conversations.
   // service.ts's send() deliberately does for a real agent reply.
-  private async notifyOrderAccepted(client:PoolClient,tenantId:string,requestId:string){
+  private notifyOrderAccepted(client:PoolClient,tenantId:string,requestId:string){return this.notifyCustomer(client,tenantId,requestId,'orderAccepted')}
+  private async notifyCustomer(client:PoolClient,tenantId:string,requestId:string,copyKey:'orderAccepted'|'orderCancelledByBusiness'){
     const conversation=await client.query<{conversation_id:string;channel_id:string;locale:string|null}>(
       `select request.conversation_id,conv.channel_id,coalesce(conv.language_locale,tenant.default_locale) locale
          from app.commercial_requests request
@@ -190,7 +222,7 @@ export class CommercialRequestsService {
     if(!conversation.rows[0])return;
     const {conversation_id,channel_id,locale}=conversation.rows[0];
     const reference=requestId.slice(-8).toUpperCase();
-    const text=interpolate(catalogFor(locale).bot.orderAccepted,{reference});
+    const text=interpolate(catalogFor(locale).bot[copyKey],{reference});
     const messageId=uuidv7();
     await client.query(
       `insert into app.messages(id,tenant_id,conversation_id,channel_id,direction,sender_type,message_type,content,delivery_status,occurred_at)

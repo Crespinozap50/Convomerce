@@ -159,6 +159,18 @@ export default {
     confirmed: "Confirmada",
     lines: "Productos o servicios",
     notes: "Notas del cliente",
+      cancelSent: {
+        sectionTitle: "Cancelar pedido enviado a cocina",
+        sectionHelp: "Solo administradores. Se cancela también en Loggro y se avisa al cliente por WhatsApp.",
+        button: "Cancelar pedido",
+        title: "Cancelar el pedido #{{reference}}",
+        warning: "El pedido ya fue enviado a Loggro y puede estar en preparación. Se cancelará en Loggro (solo si está en una mesa Bot Convomerce) y el cliente recibirá un aviso de cancelación.",
+        noteLabel: "Motivo de la cancelación (obligatorio)",
+        notePlaceholder: "Ej.: el cliente pidió cancelar por teléfono",
+        noteHelp: "Loggro exige una nota. Mínimo {{min}} caracteres. El cliente no la ve.",
+        confirm: "Sí, cancelar pedido",
+        done: "Pedido cancelado en Loggro y en el panel. Se avisó al cliente.",
+      },
     cancellationNote: "Nota de cancelación",
     appointment: {
       schedule: "Horario reservado",

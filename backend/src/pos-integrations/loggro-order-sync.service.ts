@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { PoolClient } from "pg";
 import { randomBytes } from "node:crypto";
 import { DatabaseService } from "../database/database.service";
+import { badRequest } from "../observability/http-errors";
 import { LoggroApiClient, LoggroOrderLine } from "./loggro-api-client.service";
 
 // Loggro's backend is Mongo-based and `group` must be a real 24-hex-char
@@ -157,6 +158,71 @@ export class LoggroOrderSyncService {
     const newTableName = `${pattern.trim()} ${highestNumber + 1}`;
     const created = await this.apiClient.createTable(tenantId, connectionId, newTableName);
     return created._id;
+  }
+
+  // Cancels, in Loggro, every order created for this request. Safety rule of
+  // the project owner (D-188/D-194): only ever touch orders sitting on a
+  // "Bot Convomerce N" table — each id is verified against those tables'
+  // own orders BEFORE any PUT, and one id outside them aborts the whole
+  // operation with nothing cancelled. Orders already "Cancelada" are skipped.
+  async cancelOrder(
+    tenantId: string,
+    commercialRequestId: string,
+    cause: string,
+  ): Promise<{ cancelled: string[]; alreadyCancelled: string[] }> {
+    const context = await this.db.withTenantTransaction(tenantId, async (client) => {
+      const connection = await client.query<{ id: string; table_name_pattern: string | null }>(
+        `select id,table_name_pattern from app.pos_connections where tenant_id=$1 and provider='loggro_restobar' and status in ('connected','error')`,
+        [tenantId],
+      );
+      if (!connection.rows[0]) throw badRequest("LOGGRO_NOT_CONNECTED", "Loggro is not connected for this tenant");
+      const request = await client.query<{ pos_external_order_id: string[] | null }>(
+        `select pos_external_order_id from app.commercial_requests where id=$1`,
+        [commercialRequestId],
+      );
+      return {
+        connectionId: connection.rows[0].id,
+        pattern: connection.rows[0].table_name_pattern,
+        externalIds: request.rows[0]?.pos_external_order_id ?? [],
+      };
+    });
+    if (context.externalIds.length === 0) return { cancelled: [], alreadyCancelled: [] };
+    const pattern = context.pattern?.trim().toLowerCase();
+    if (!pattern)
+      throw badRequest("LOGGRO_TABLE_PATTERN_MISSING", "No Bot table pattern is configured, so the order cannot be verified");
+    const tables = (await this.apiClient.getTables(tenantId, context.connectionId)).filter((table) =>
+      table.name.trim().toLowerCase().startsWith(pattern),
+    );
+    const statusById = new Map<string, string>();
+    for (const table of tables)
+      for (const order of await this.apiClient.getOrdersByTable(tenantId, context.connectionId, table._id))
+        statusById.set(order._id, order.status);
+    // Loggro's by-table list only shows ACTIVE orders, so an id missing from
+    // it is either already cancelled (fine — skipped, which also makes a
+    // retry after a partial failure safe) or active on some OTHER table
+    // (refused). Told apart by asking Loggro for that one order.
+    for (const id of context.externalIds) {
+      if (statusById.has(id)) continue;
+      const order = await this.apiClient.getOrder(tenantId, context.connectionId, id);
+      if (order.status === "Cancelada") statusById.set(id, "Cancelada");
+    }
+    const outside = context.externalIds.filter((id) => !statusById.has(id));
+    if (outside.length > 0)
+      throw badRequest(
+        "LOGGRO_ORDER_NOT_ON_BOT_TABLE",
+        `Order ${outside.join(", ")} is not on a "${context.pattern}" table — refusing to cancel it`,
+      );
+    const cancelled: string[] = [];
+    const alreadyCancelled: string[] = [];
+    for (const id of context.externalIds) {
+      if (statusById.get(id) === "Cancelada") {
+        alreadyCancelled.push(id);
+        continue;
+      }
+      await this.apiClient.cancelOrder(tenantId, context.connectionId, id, cause);
+      cancelled.push(id);
+    }
+    return { cancelled, alreadyCancelled };
   }
 
   async markFailed(tenantId: string, commercialRequestId: string, error: unknown): Promise<void> {
