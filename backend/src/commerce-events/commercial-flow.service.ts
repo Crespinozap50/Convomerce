@@ -376,6 +376,27 @@ export class CommercialFlowService {
       );
       if (!accepted)
         return this.localizedReply(input.locale, "recommendationExpired");
+      // A suggested product with several sellable variants ("Agua fresca":
+      // Tamarindo / Horchata / Jamaica) can't be added blindly — the
+      // customer picks which one, through the same tied-options mechanism
+      // (tiedItems + pendingQuantity) an ambiguous product mention uses.
+      const siblings = await client.query<Item>(
+        `select item.id item_id,variant.id variant_id,item.name,variant.name variant_name,variant.price_minor::text,variant.currency
+           from app.item_variants chosen
+           join app.catalog_items item on item.tenant_id=chosen.tenant_id and item.id=chosen.catalog_item_id
+           join app.item_variants variant on variant.tenant_id=item.tenant_id and variant.catalog_item_id=item.id
+          where chosen.id=$1 and item.status='active' and variant.status='active' and variant.availability_status='available'
+          order by variant.created_at,variant.name`,
+        [accepted.variantId],
+      );
+      if (siblings.rows.length > 1) {
+        await this.step(client, flow.id, "selecting_item", {
+          ...flow.context,
+          tiedItems: siblings.rows,
+          pendingQuantity: 1,
+        });
+        return this.itemChoiceReply(input.locale, siblings.rows);
+      }
       await this.addItem(client, input.tenantId, flow.commercial_request_id, {
         item_id: "",
         variant_id: accepted.variantId,

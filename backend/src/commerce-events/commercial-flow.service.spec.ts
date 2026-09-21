@@ -7354,6 +7354,42 @@ describe("CommercialFlowService", () => {
       expect(JSON.stringify(created)).toContain('on_site');
     });
 
+    it("asks which variant when an accepted suggestion has several (Agua fresca: tamarindo/horchata/jamaica) instead of adding one blindly", async () => {
+      const flavor = (id: string, name: string) => ({
+        item_id: "item-agua",
+        variant_id: `${id}-variant`,
+        name: "Agua fresca",
+        variant_name: name,
+        price_minor: "700000",
+        currency: "COP",
+      });
+      const client = {
+        query: jest.fn(async (sql: string, params: unknown[] = []) => {
+          void params;
+          if (sql.includes("from app.conversation_workflows where conversation_id"))
+            return { rows: [{ id: "workflow-1", commercial_request_id: "request-1", step: "awaiting_more_items", context: {} }] };
+          if (sql.includes("from app.item_variants chosen"))
+            return { rows: [flavor("t", "Tamarindo"), flavor("h", "Horchata"), flavor("j", "Jamaica")] };
+          return { rows: [] };
+        }),
+      };
+      const accept = jest.fn().mockResolvedValue({
+        eventId: "event-1", variantId: "t-variant", itemName: "Agua fresca", variantName: "Tamarindo", priceMinor: "700000", currency: "COP",
+      });
+      const base = await understand("si");
+      const reply = await new CommercialFlowService(
+        { suggest: jest.fn(), accept } as never,
+        { getPendingRequirements: jest.fn().mockResolvedValue([]) } as never,
+      ).resolve(client as never, {
+        ...input,
+        body: "Sí, agregar",
+        understanding: { ...base, entities: { ...base.entities, recommendationAction: "add", recommendationEventId: "event-1" } } as never,
+      });
+      expect(accept).toHaveBeenCalled();
+      expect(JSON.stringify(reply)).toContain("Horchata");
+      expect(client.query.mock.calls.some(([sql]) => String(sql).includes("insert into app.request_lines"))).toBe(false);
+    });
+
     // D-207 follow-up (docs/decisions.md), live finding (30-test battery):
     // "kiero dos taco de poyo" tied across every taco because "poyo" never
     // matched "pollo" exactly; phonetic keys (ll/y) now break that tie.

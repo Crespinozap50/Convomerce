@@ -2487,3 +2487,10 @@ Pedido explícito, 5 puntos, con la viabilidad de cada uno evaluada contra el c�
 - **Panel**: `UpsellSuggestionsPanel` en Conocimiento → Perfil: interruptor general + una tarjeta por producto ofrecido, con "Se ofrece: X (precio)" y "cuando el cliente pide (N): …", avisos de no disponible / general apagado.
 - **Acceso remoto de desarrollo**: `frontend/vite.config.ts` con `allowedHosts` y proxy `/v1` que reescribe `Origin` (ngrok/túneles); usar `VITE_API_URL=""`.
 - 680/680 tests, `tsc -b` limpio en backend y frontend.
+
+### Agua fresca con elección de sabor al aceptar la sugerencia (2026-09-21)
+
+- **Decisión**: "Agua fresca" es UN producto con tres variantes de sabor (Tamarindo, Horchata, Jamaica; $7.000; cada una mapeada a su producto de Loggro) y no tres productos sueltos. Los tres items separados creados antes se eliminaron (sin pedidos); las variantes de 12/16 oz quedan archivadas y la de 12 oz mapeada a Tamarindo para poder reintentar el pedido antiguo que falló.
+- **Código**: al aceptar una sugerencia cuyo producto tiene varias variantes vendibles, `commercial-flow.service.ts` ya no agrega una a ciegas: muestra la lista de opciones ("Encontré varias opciones, ¿cuál prefieres?") reutilizando el mecanismo de empate (`tiedItems` + `pendingQuantity`).
+- **Panel**: la sección "Sugerencias al pedir" solo muestra la empresa seleccionada; en una empresa distinta a Santos Tacos aparece "No hay sugerencias configuradas" (era el caso de `…0004`).
+- **Verificado en vivo**: pedir tacos → "¿Te agrego Agua fresca?" → "Sí, agregar" → lista Horchata/Jamaica/Tamarindo → elegir Jamaica → "Agua fresca (Jamaica)" $7.000 en el pedido. 681 tests, `tsc -b` limpio.
