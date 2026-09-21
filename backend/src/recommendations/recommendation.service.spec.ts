@@ -16,4 +16,12 @@ describe('RecommendationService',()=>{
     await expect(new RecommendationService().suggest(client as never,{tenantId:'tenant-1',conversationId:'conversation-1',requestId:'request-1',locale:'es'})).resolves.toBeNull();
     expect(client.query).toHaveBeenCalledTimes(1);
   });
+  it('respects the tenant general switch and only offers active, available products',async()=>{
+    const client={query:jest.fn().mockResolvedValue({rows:[]})};
+    await new RecommendationService().suggest(client as never,{tenantId:'tenant-1',conversationId:'conversation-1',requestId:'request-1',locale:'es'});
+    const sql=String(client.query.mock.calls[0][0]);
+    expect(sql).toContain('upsell_enabled');
+    expect(sql).toContain("recommendation.status='active'");
+    expect(sql).toContain("target.availability_status='available'");
+  });
 });

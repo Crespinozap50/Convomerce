@@ -643,6 +643,18 @@ export default {
     archiveAnswer: "Retirar",
     archiveConfirm:
       "¿Quieres retirar esta respuesta? Dejará de ser utilizada por el asistente.",
+    upsell: {
+      title: "Sugerencias al pedir",
+      help: "Producto que el bot ofrece automáticamente cuando el cliente ya pidió algo (por ejemplo: ¿Te agrego Agua fresca?). Apaga todas o solo una.",
+      general: "Ofrecer sugerencias al pedir",
+      generalHelp: "Interruptor general. Apagado, el bot no ofrece ningún producto adicional.",
+      offers: "Se ofrece: {{product}} ({{price}})",
+      when: "Se ofrece cuando el cliente pide ({{count}}): {{products}}.",
+      unavailable: "Ahora está marcado como no disponible, por eso no se ofrece.",
+      generalOff: "El interruptor general está apagado.",
+      empty: "No hay sugerencias configuradas.",
+      saved: "Sugerencias actualizadas.",
+    },
     capabilitiesTitle: "Capacidades del negocio",
     capabilitiesHelp:
       "Activa únicamente los módulos operativos que esta empresa necesita.",

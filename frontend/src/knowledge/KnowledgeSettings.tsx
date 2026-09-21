@@ -1,3 +1,4 @@
+import { UpsellSuggestionsPanel } from "./UpsellSuggestionsPanel";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -441,6 +442,12 @@ export function KnowledgeSettings({
           </div>
         )}
       </section>
+      <UpsellSuggestionsPanel
+        tenant={tenant}
+        canManage={value.canManage}
+        hidden={section !== "profile"}
+        onNotice={onNotice}
+      />
       <div className="knowledge-layout">
         <section
           className="panel knowledge-profile"

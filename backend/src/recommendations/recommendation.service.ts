@@ -19,6 +19,7 @@ export class RecommendationService {
            on target.tenant_id=recommendation.tenant_id and target.id=recommendation.target_variant_id
          join app.catalog_items item on item.tenant_id=target.tenant_id and item.id=target.catalog_item_id
         where line.commercial_request_id=$1 and line.status='active'
+          and coalesce((select config.upsell_enabled from app.bot_configurations config where config.tenant_id=recommendation.tenant_id),true)
           and target.status='active' and target.availability_status='available' and item.status='active'
           and not exists(select 1 from app.request_lines existing where existing.commercial_request_id=$1 and existing.item_variant_id=target.id and existing.status='active')
           and not exists(select 1 from app.recommendation_events previous where previous.commercial_request_id=$1 and previous.target_variant_id=target.id and previous.status in('shown','accepted','rejected'))
